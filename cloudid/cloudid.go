@@ -35,8 +35,9 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/mitstack-eu/operator-kit/credrefresh"
 )
 
 // Identity is the CloudIdentity an operator receives in the signed webhook.
@@ -170,6 +171,12 @@ func Resolve(ctx context.Context, id Identity) (Credentials, error) {
 	if err := json.Unmarshal(out, &got); err != nil {
 		return Credentials{}, fmt.Errorf("cloudid: parse export-credentials output: %w", err)
 	}
+	if got.AccessKeyID == "" || got.SecretAccessKey == "" {
+		// A malformed or truncated CLI response could otherwise be cached and
+		// served as a usable credential by the Refresher for the full renewal
+		// window, rather than causing every call to re-resolve.
+		return Credentials{}, errors.New("cloudid: assume-role-with-web-identity returned an incomplete credential")
+	}
 
 	creds := Credentials{
 		AccessKeyID:     got.AccessKeyID,
@@ -200,7 +207,7 @@ func Env(c Credentials) []string {
 // RenewMargin is how long before expiry a Refresher renews. It is generous
 // because the failure it avoids — a credential that dies partway through a
 // provisioning run — is far more expensive than an early renewal.
-const RenewMargin = 10 * time.Minute
+const RenewMargin = credrefresh.DefaultRenewMargin
 
 // Refresher holds credentials for work that outlives a single webhook.
 //
@@ -214,19 +221,33 @@ const RenewMargin = 10 * time.Minute
 // reconcile loop acting on a dead credential does not merely error — it can
 // take a wrong or destructive action against a consumer's account, and "we
 // returned the last known good value" is exactly how that happens.
+//
+// It is a thin adapter over credrefresh, which owns the renewal mechanics —
+// this type only knows how to turn a Credentials value into the (value,
+// expiry, error) shape that package generalises over.
 type Refresher struct {
-	resolve func(context.Context) (Credentials, error)
-
 	// Now is injectable so the expiry behaviour is testable without sleeping.
 	Now func() time.Time
 
-	mu   sync.Mutex
-	held Credentials
+	inner *credrefresh.Refresher[Credentials]
 }
 
 // NewRefresher returns a Refresher that mints credentials through resolve.
 func NewRefresher(resolve func(context.Context) (Credentials, error)) *Refresher {
-	return &Refresher{resolve: resolve, Now: time.Now}
+	r := &Refresher{}
+	r.inner = credrefresh.New(func(ctx context.Context) (Credentials, time.Time, error) {
+		c, err := resolve(ctx)
+		return c, c.Expires, err
+	})
+	// r.Now is read through this closure on every inner Get call, so setting
+	// r.Now after construction — or between calls — still reaches it.
+	r.inner.Now = func() time.Time {
+		if r.Now != nil {
+			return r.Now()
+		}
+		return time.Now()
+	}
+	return r
 }
 
 // FromIdentity returns a Refresher that re-resolves the given identity. The
@@ -240,39 +261,11 @@ func FromIdentity(id Identity) *Refresher {
 // Get returns usable credentials, renewing when they are absent, inside the
 // renewal margin, or of unknown expiry. It never returns expired credentials.
 func (r *Refresher) Get(ctx context.Context) (Credentials, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	now := time.Now()
-	if r.Now != nil {
-		now = r.Now()
-	}
-
-	// A zero Expires means UNKNOWN. Treating unknown as "never expires" is the
-	// fail-open reading, and it is the one that lets a dead credential through.
-	if r.held.AccessKeyID != "" && !r.held.Expires.IsZero() && now.Before(r.held.Expires.Add(-RenewMargin)) {
-		return r.held, nil
-	}
-
-	fresh, err := r.resolve(ctx)
+	creds, err := r.inner.Get(ctx)
 	if err != nil {
-		r.held = Credentials{}
 		return Credentials{}, fmt.Errorf("cloudid: refreshing credentials (failing closed, no stale credential returned): %w", err)
 	}
-
-	// Failing closed means the caller never receives something unusable — which
-	// includes a credential the RESOLVER handed back already expired. That is
-	// not hypothetical: a cached STS response or a clock skew between the
-	// operator and the token issuer both produce it, and without this check it
-	// would sail straight through to the reconcile loop.
-	if !fresh.Expires.IsZero() && !now.Before(fresh.Expires) {
-		r.held = Credentials{}
-		return Credentials{}, fmt.Errorf("cloudid: refreshed credential is already expired (expires %s, now %s) — failing closed",
-			fresh.Expires.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
-	}
-
-	r.held = fresh
-	return fresh, nil
+	return creds, nil
 }
 
 // --- Typed failures ---------------------------------------------------------
