@@ -7,6 +7,9 @@ package handler_test
 // 400 undeclared-resource naming the resource and the type.
 
 import (
+	"bytes"
+	"fmt"
+	"log"
 	"net/http"
 	"reflect"
 	"strings"
@@ -246,5 +249,90 @@ func TestNew_RefusesATypesKeyThatIsNotAResourceTypeIdInTheCatalogueQuotingIt(t *
 	}
 	if strings.Contains(err.Error(), `"`+droppedType+`"`) {
 		t.Errorf("error = %q quotes %q, a key the catalogue knows", err.Error(), droppedType)
+	}
+}
+
+func TestDroppedResource_AnUnsubscribeServedByItsRecordedTypeScrubsTheInputsThatTypeMarksSecret(t *testing.T) {
+	b := newDroppedBlock(false)
+	app := &recordedResource{
+		name: "app", log: b.log,
+		FakeResource: &kittest.FakeResource{Count: 1, DeleteErr: fmt.Errorf("removing the container failed, upstream echoed %s", appDBPassword)},
+	}
+
+	var logBuf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(prevOut) })
+
+	status, raw, resp := serveDropped(t, b, map[string]handler.DeclaredResource{"host.container": app}, "unsubscribe", map[string]any{
+		"resource":     "app",
+		"resourceType": "host.container",
+		"resourceInputs": map[string]any{
+			"image": appImage,
+			"env":   map[string]any{"DATABASE_PASSWORD": appDBPassword},
+		},
+	})
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 from the failing delete; body %s", status, raw)
+	}
+	if app.DeleteCalls != 1 {
+		t.Fatalf("the host.container handler's Delete ran %d times, want 1", app.DeleteCalls)
+	}
+	if !strings.Contains(resp.Error, redactionMarker) {
+		t.Errorf("error = %q, want the quoted env value replaced by %s", resp.Error, redactionMarker)
+	}
+	kittest.AssertNoSecret(t, "response body", string(raw), appDBPassword)
+	kittest.AssertNoSecret(t, "log output", logBuf.String(), appDBPassword)
+}
+
+func TestNew_RefusesConfigTypesSetBesideConfigResource(t *testing.T) {
+	b := newDroppedBlock(false)
+	s := kittest.NewSigner(t, "kid-dropped-new-single", 37)
+	cfg := baseConfig(t, &kittest.FakeResource{}, s)
+	cfg.Types = map[string]handler.DeclaredResource{droppedType: b.firewall}
+
+	_, err := handler.New(cfg)
+	if err == nil {
+		t.Fatal("handler.New accepted Config.Types beside Config.Resource, want it refused: a block served as one resource declares none to drop")
+	}
+	if !strings.Contains(err.Error(), "Config.Types") || !strings.Contains(err.Error(), "Config.Resource") {
+		t.Errorf("error = %q, want it to name Config.Types and Config.Resource", err.Error())
+	}
+}
+
+func TestNew_RefusesANilHandlerUnderACataloguedTypesKeyQuotingIt(t *testing.T) {
+	b := newDroppedBlock(false)
+	s := kittest.NewSigner(t, "kid-dropped-new-nil", 41)
+	cfg := baseConfig(t, nil, s)
+	cfg.Manifest = []byte(twoResourceManifest)
+	cfg.Resources = declared(b.network, b.instance)
+	cfg.Types = map[string]handler.DeclaredResource{droppedType: nil}
+
+	_, err := handler.New(cfg)
+	if err == nil {
+		t.Fatal("handler.New accepted a nil handler under a Config.Types key, want it refused")
+	}
+	if !strings.Contains(err.Error(), `"`+droppedType+`"`) {
+		t.Errorf("error = %q, want it to quote the key %q", err.Error(), droppedType)
+	}
+}
+
+func TestNew_RefusesAnUnknownTypesKeyQuotingItEvenBesideANilHandlerUnderACataloguedKey(t *testing.T) {
+	b := newDroppedBlock(false)
+	s := kittest.NewSigner(t, "kid-dropped-new-both", 43)
+	cfg := baseConfig(t, nil, s)
+	cfg.Manifest = []byte(twoResourceManifest)
+	cfg.Resources = declared(b.network, b.instance)
+	cfg.Types = map[string]handler.DeclaredResource{
+		"aws.not-a-type": b.firewall,
+		droppedType:      nil,
+	}
+
+	_, err := handler.New(cfg)
+	if err == nil {
+		t.Fatal("handler.New accepted a Config.Types key that is not a resource-type id, want it refused")
+	}
+	if !strings.Contains(err.Error(), `"aws.not-a-type"`) {
+		t.Errorf("error = %q, want it to quote the key %q whatever order the map is read in", err.Error(), "aws.not-a-type")
 	}
 }

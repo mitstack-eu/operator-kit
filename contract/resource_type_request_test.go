@@ -1,11 +1,10 @@
 package contract_test
 
-// resource_type_request_test.go pins the request half of serving a resource
-// the manifest no longer declares: a request naming one resource may carry
-// its recorded type under "resourceType", a string, and Desired carries it
-// across to the block. A type with no resource to bind it to is refused by
-// DecodeRequest and by the envelope schema, which raises its version one
-// minor for the new field.
+// resource_type_request_test.go pins that a request naming one resource may
+// carry its recorded type under "resourceType", a string Desired carries
+// across to the block, and that DecodeRequest and the envelope schema, one
+// minor higher for the new field, refuse a type with no resource to bind it
+// to.
 
 import (
 	"encoding/json"
