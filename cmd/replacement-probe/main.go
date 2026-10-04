@@ -201,6 +201,9 @@ func baseline(resource string, rs resSchema) map[string]any {
 			base[name] = x
 		}
 	}
+	if resource == "aws_ebs_volume" {
+		base["size"] = 20
+	}
 	if resource == "aws_route53_record" {
 		base["type"] = "A"
 		base["records"] = []any{"203.0.113.1"}
@@ -240,6 +243,9 @@ func probe(bin, cache, dir string, rt contract.ResourceType, rs resSchema) resul
 		}
 		if res == "aws_route53_record" && name == "records" {
 			vb, va = []any{"203.0.113.1"}, []any{"203.0.113.2"}
+		}
+		if res == "aws_route53_record" && name == "type" {
+			vb, va = "A", "TXT"
 		}
 		pname := "p_" + name
 		probes[pname] = name
