@@ -1,0 +1,26 @@
+apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: postgres-db
+  name: Postgres Database
+spec:
+  version: 2.0.0
+  releaseClass: breaking
+  releaseNote: Postgres Database creates its database on any host that offers a block volume, through the shared host.postgres-database handler.
+  description: >
+    Runs one Postgres server for the app on the app's host, with its data
+    directory on the host's block volume.
+  requires:
+    - kind: host
+    - kind: block-volume
+  resources:
+    - name: database
+      type: host.postgres-database
+      on: requires.host
+      inputs:
+        dataVolume: requires.block-volume
+  provides: [database]
+  lifecycle:
+    endpoint: https://api.mitstack.dev/operators/postgres-db/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
