@@ -129,6 +129,37 @@ func declaredResources(cfg Config, declared manifestDeclarations) ([]namedResour
 	return out, nil
 }
 
+// typedResources copies Config.Types, refusing it on a block served over
+// Resource, a nil handler, and a key that is not a catalogued resource-type
+// id, quoting each such key.
+func typedResources(cfg Config) (map[string]DeclaredResource, error) {
+	if len(cfg.Types) == 0 {
+		return nil, nil
+	}
+	if cfg.Resource != nil {
+		return nil, errors.New("handler: Config.Types is set together with Config.Resource; only a block that declares its resources is served by resource type")
+	}
+
+	var unknown []string
+	out := make(map[string]DeclaredResource, len(cfg.Types))
+	for id, r := range cfg.Types {
+		if _, ok := contract.LookupResourceType(id); !ok {
+			unknown = append(unknown, strconv.Quote(id))
+			continue
+		}
+		if r == nil {
+			return nil, fmt.Errorf("handler: Config.Types holds no handler for resource type %q", id)
+		}
+		out[id] = r
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return nil, fmt.Errorf("handler: Config.Types has a handler for %s, which the resource-type catalogue does not hold",
+			strings.Join(unknown, ", "))
+	}
+	return out, nil
+}
+
 // validateHooks refuses a Config that would let a block override an
 // invariant through Hooks: a registration under a name that is not one of
 // the four HookXxx constants, a registration for a hook declared does not

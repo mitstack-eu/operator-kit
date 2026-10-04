@@ -3,7 +3,7 @@
   "$id": "https://mitstack.dev/schemas/lifecycle/envelope.schema.json",
   "title": "mitstack lifecycle webhook envelope",
   "description": "Versioned wire-shape contract for the JSON body mitstack's lifecycle engine POSTs to a block owner's registered webhook endpoint for each of the four alpha lifecycle verbs (subscribe/unsubscribe/upgrade/validate). Mirrors api/internal/lifecycle.Request byte-for-byte. Additive-friendly: additionalProperties is true at every level so a new optional Request field never breaks an existing operator or this contract test.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -16,12 +16,13 @@
   ],
   "dependentRequired": {
     "resourceInputs": ["resource"],
-    "resourceIdentity": ["resource"]
+    "resourceIdentity": ["resource"],
+    "resourceType": ["resource"]
   },
   "properties": {
     "resource": {
       "type": "string",
-      "description": "The name of the one resource the block's manifest declares that the verb runs on. Omitted, the verb runs on every declared resource, in creation order and in reverse for a teardown. A block served as one resource refuses any name."
+      "description": "The name of the one resource the verb runs on, one the block's manifest declares or, for unsubscribe and validate, one it no longer declares that resourceType gives the type of. Omitted, the verb runs on every declared resource, in creation order and in reverse for a teardown. A block served as one resource refuses any name."
     },
     "resourceInputs": {
       "type": "object",
@@ -32,6 +33,10 @@
       "type": "object",
       "description": "The identity the ensure of the resource named under resource stored, the values that address it where it lives, keyed by name. Present only with a non-empty resource.",
       "additionalProperties": {"type": "string"}
+    },
+    "resourceType": {
+      "type": "string",
+      "description": "The resource-type id recorded for the resource named under resource, by which a block unsubscribes or validates a resource its manifest no longer declares. Present only with a non-empty resource."
     },
     "operation": {
       "type": "string",

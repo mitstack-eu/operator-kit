@@ -446,9 +446,9 @@ func scrubResponse(resp contract.Response, secrets []string) contract.Response {
 // secretsFor collects every literal secret value a request carries —
 // secrets, secretInputs, appSecrets, the OBO token, the events callback
 // token, and each secret value in the resourceInputs of the declared
-// resource the request names (see secretResourceInputs) — so the handler
-// can scrub all of them out of anything it writes to the response body or
-// a log line.
+// resource the request names, or of the resource Config.Types serves by its
+// recorded type (see secretResourceInputs) — so the handler can scrub all
+// of them out of anything it writes to the response body or a log line.
 func (h *Handler) secretsFor(req contract.Request) []string {
 	var out []string
 	for _, group := range req.Secrets {
@@ -469,7 +469,11 @@ func (h *Handler) secretsFor(req contract.Request) []string {
 		out = append(out, req.EventsCallback.Token)
 	}
 	if req.Resource != "" {
-		if nr, ok := h.declaredResource(req.Resource); ok {
+		nr, ok := h.declaredResource(req.Resource)
+		if !ok {
+			nr, ok = h.typedResource(req.Resource, req.ResourceType)
+		}
+		if ok {
 			out = append(out, secretResourceInputs(nr.declaration, h.secretParams, req.ResourceInputs)...)
 		}
 	}

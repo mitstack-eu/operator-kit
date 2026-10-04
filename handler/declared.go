@@ -22,10 +22,12 @@ const classUndeclaredResource = "undeclared-resource"
 // alone, its calls handed a Desired carrying the name, the request's
 // resource inputs and the identity its ensure stored, and its answer
 // carries that resource's entry and outputs alone. A name the manifest does
-// not declare is refused with a 400 before any resource is reached. A
-// resource implementing ReportingResource is ensured through
-// EnsureWithReport, and its ensure entry carries the identity and outputs
-// it reported. A resource implementing RequestObserver is observed through
+// not declare runs an unsubscribe or validate on the Config.Types handler
+// for the request's resourceType, under that name, and is otherwise refused
+// with a 400 before any resource is reached. A resource implementing
+// ReportingResource is ensured through EnsureWithReport, and its ensure
+// entry carries the identity and outputs it reported. A resource
+// implementing RequestObserver is observed through
 // ObserveWithRequest and one implementing RequestDeleter is deleted through
 // DeleteWithRequest, each handed the verb's Desired whether or not the
 // request names a resource; any other is observed and deleted with the
@@ -41,8 +43,11 @@ func (h *Handler) dispatchDeclared(ctx context.Context, operation string, d cont
 	if d.Resource != "" {
 		nr, ok := h.declaredResource(d.Resource)
 		if !ok {
-			return h.errorResponse(Refuse(classUndeclaredResource,
-				"resource %q is not declared under the manifest's spec.resources", d.Resource), secrets)
+			var handled bool
+			nr, handled = h.typedResource(d.Resource, d.ResourceType)
+			if !handled || (operation != "unsubscribe" && operation != "validate") {
+				return h.errorResponse(undeclaredResource(operation, d, handled), secrets)
+			}
 		}
 		resources = []namedResource{nr}
 	}
@@ -69,6 +74,32 @@ func (h *Handler) declaredResource(name string) (namedResource, bool) {
 		}
 	}
 	return namedResource{}, false
+}
+
+// typedResource returns, under name, the Config.Types handler for
+// resourceType, the recorded type of a resource the manifest does not
+// declare, and whether there is one.
+func (h *Handler) typedResource(name, resourceType string) (namedResource, bool) {
+	r, ok := h.types[resourceType]
+	if !ok {
+		return namedResource{}, false
+	}
+	return namedResource{name: name, resource: r, declaration: contract.ManifestResource{Name: name, Type: resourceType}}, true
+}
+
+// undeclaredResource is the refusal of a request naming a resource the
+// manifest does not declare, saying why its recorded type did not serve it.
+func undeclaredResource(operation string, d contract.Desired, handled bool) error {
+	const notDeclared = "resource %q is not declared under the manifest's spec.resources"
+	switch {
+	case d.ResourceType == "":
+		return Refuse(classUndeclaredResource, notDeclared+", and the request sent no resourceType to unsubscribe or validate it by", d.Resource)
+	case handled:
+		return Refuse(classUndeclaredResource, notDeclared+", so %s is refused: a resource served by its recorded type %q is only unsubscribed or validated",
+			d.Resource, operation, d.ResourceType)
+	default:
+		return Refuse(classUndeclaredResource, notDeclared+", and Config.Types holds no handler for its recorded type %q", d.Resource, d.ResourceType)
+	}
 }
 
 // declaredRun is one verb's pass over the resources it runs on, in creation

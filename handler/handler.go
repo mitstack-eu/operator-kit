@@ -16,7 +16,9 @@
 // Handler then runs each verb resource by resource in the manifest's
 // creation order, tearing down in reverse, and reports each resource's
 // calls by name in the response's resources map. A request that names one
-// declared resource runs the verb on that resource alone.
+// declared resource runs the verb on that resource alone. A block that can
+// still tear down a resource its manifest no longer declares registers a
+// DeclaredResource for that resource's type under Config.Types.
 package handler
 
 import (
@@ -166,9 +168,11 @@ type Config struct {
 	// spec.resources. Every declared resource needs one, and a key the
 	// manifest does not declare is refused. Set it or Resource, never both;
 	// Manifest is required with it, and Hooks is refused with it. A request
-	// naming one of these resources runs the verb on it alone; a request
-	// naming a resource the manifest does not declare, or any resource when
-	// the block is served over Resource, is refused with a 400.
+	// naming one of these resources runs the verb on it alone. A request
+	// naming a resource the manifest does not declare is refused with a 400
+	// unless it is an unsubscribe or validate whose resourceType Types
+	// holds, and any named request is refused when the block is served over
+	// Resource.
 	Resources map[string]DeclaredResource
 
 	// Types holds a DeclaredResource for each resource type the block can
@@ -229,6 +233,9 @@ type Handler struct {
 	// declared holds the block's declared resources in creation order. It
 	// is nil for a block served over a single Resource.
 	declared []namedResource
+	// types holds Config.Types, the handlers for a resource the manifest no
+	// longer declares, keyed by resource-type id.
+	types map[string]DeclaredResource
 	// secretParams names the params the manifest marks secret, so a
 	// resource input bound to one is scrubbed like any request secret.
 	secretParams map[string]bool
@@ -258,7 +265,9 @@ type Handler struct {
 // Hooks set with no Manifest to check it against. A Config with Resources
 // is also refused when it sets Resource or Hooks too, when its manifest is
 // empty or not mitstack/v1beta, or when its keys and the manifest's
-// spec.resources disagree; see declaredResources.
+// spec.resources disagree; see declaredResources. Types is refused beside
+// Resource, with a nil handler, or under a key the resource-type catalogue
+// does not hold.
 func New(cfg Config) (*Handler, error) {
 	if cfg.Resource != nil && len(cfg.Resources) > 0 {
 		return nil, errResourceAndResources
@@ -282,6 +291,10 @@ func New(cfg Config) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	types, err := typedResources(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	hooks := cfg.Hooks
 	if hooks == nil {
@@ -292,6 +305,7 @@ func New(cfg Config) (*Handler, error) {
 		resource:             cfg.Resource,
 		hooks:                hooks,
 		declared:             resources,
+		types:                types,
 		secretParams:         declared.secretParams,
 		retainsOnUnsubscribe: declared.retainsOnUnsubscribe,
 		jwksURL:              cfg.JWKSURL,

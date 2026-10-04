@@ -394,13 +394,42 @@ present, unsubscribe deletes it and settles it absent, and validate
 observes it once. Its ensure receives a `Desired` whose `Resource`,
 `ResourceInputs` and `ResourceIdentity` are the request's. The answer's
 `resources` map holds that resource's entry alone, and the top-level
-`outputs` are its own. A name the manifest does not declare answers 400
-naming it, and no resource is reached. A block served over a single
-`Resource` answers any named request the same way. The idempotency cache
+`outputs` are its own. A block served over a single `Resource` answers any
+named request with a 400 and reaches no resource. The idempotency cache
 keys on the name too, so one idempotency key naming different resources
 runs each of them, and a repeat of the same named request replays.
-`contract.DecodeRequest` refuses `resourceInputs` or `resourceIdentity` sent
-without a `resource`.
+`contract.DecodeRequest` refuses `resourceInputs`, `resourceIdentity` or
+`resourceType` sent without a `resource`.
+
+A resource the block once created can outlive its place in the manifest, so
+the block still has to tear it down. The engine names such a resource with
+the type it recorded for it under `resourceType`, beside its stored
+identity:
+
+```json
+{
+  "operation": "unsubscribe",
+  "resource": "firewall",
+  "resourceType": "aws.security-group",
+  "resourceIdentity": {"groupId": "sg-0abc"}
+}
+```
+
+You register a `handler.DeclaredResource` for each such type in
+`Config.Types`, keyed by resource-type id, beside `Config.Resources`.
+`handler.New` refuses a key the resource-type catalogue does not hold,
+quoting it, and refuses `Types` beside a single `Resource`. An unsubscribe
+naming `firewall` deletes it through the `aws.security-group` handler and
+settles it absent, and a validate observes it once. The answer reports it
+under `firewall` in the `resources` map. Its calls receive a `Desired`
+whose `ResourceType` is the request's, so a `RequestDeleter` or
+`RequestObserver` can find the resource by type and identity. The Handler
+never ensures such a resource. Any other request naming a resource the
+manifest does not declare answers 400 with the `undeclared-resource` class
+and reaches no resource. That covers a subscribe or upgrade, a request with
+no `resourceType`, and a type `Config.Types` holds no handler for. The
+error quotes the name and the type, or says that no `resourceType` was
+sent.
 
 The Handler scrubs each secret input of the named resource from the answer,
 the event it emits for the verb and every log line it writes, as it scrubs
@@ -443,15 +472,18 @@ deletes each in reverse order and observes it absent. A resource the app
 supplies must be present before the first ensure and still present after the
 last delete, since a block never deletes what the app supplies. With
 `Resource` set, the check drives that one declared resource alone, under a
-`Desired` naming it, and a name the manifest does not declare is one
-problem. A resource that implements `handler.ReportingResource` is ensured
+`Desired` naming it. A resource that implements `handler.ReportingResource` is ensured
 through `EnsureWithReport`, and a second ensure that reports a different
 identity from the first is a problem. `ResourceInputs` and
 `ResourceIdentity`, when set, go on the `Desired` every call is made for, as
-the engine hands them on a later request. Either one set with no `Resource`
-named, on the input or on its `Desired`, is one problem naming the fields
-set, and nothing is driven, since the engine never sends such a request. A
-resource that implements `handler.RequestObserver` or
+the engine hands them on a later request, and so does `ResourceType`. Any
+of them set with no `Resource` named, on the input or on its `Desired`, is
+one problem naming the fields set, and nothing is driven, since the engine
+never sends such a request. With `Resource` naming a resource the manifest
+does not declare, the check deletes it through the `Types` handler for its
+`ResourceType` and observes it absent, and never ensures it. With no
+handler for that type, or with no `ResourceType`, it is one problem and
+nothing is driven. A resource that implements `handler.RequestObserver` or
 `handler.RequestDeleter` is observed or deleted through it with that
 `Desired`. Each problem about a resource names it. blockverify's resources
 suite requires a `TestDeclaredResources` test that calls

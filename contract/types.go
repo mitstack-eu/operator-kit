@@ -59,11 +59,12 @@ type BuildRequest struct {
 // Request is the typed form of a lifecycle webhook envelope, decoded from
 // the wire shape envelope.schema.json pins. Its JSON tags mirror the
 // engine's own request struct field for field. Resource names the one
-// declared resource the verb runs on, ResourceInputs carries that
-// resource's inputs, each a scalar or a mapping kept as raw JSON, and
-// ResourceIdentity carries the identity that resource's ensure stored; a
-// request naming no resource leaves all three empty and runs the verb on
-// every declared resource.
+// resource the verb runs on, ResourceInputs carries that resource's inputs,
+// each a scalar or a mapping kept as raw JSON, ResourceIdentity carries the
+// identity that resource's ensure stored, and ResourceType carries the type
+// recorded for it, by which a resource the manifest no longer declares is
+// still unsubscribed or validated; a request naming no resource leaves all
+// four empty and runs the verb on every declared resource.
 type Request struct {
 	Operation        string                         `json:"operation"`
 	SubscriptionID   string                         `json:"subscriptionId"`
@@ -89,6 +90,7 @@ type Request struct {
 	Resource         string                         `json:"resource,omitempty"`
 	ResourceInputs   map[string]json.RawMessage     `json:"resourceInputs,omitempty"`
 	ResourceIdentity map[string]string              `json:"resourceIdentity,omitempty"`
+	ResourceType     string                         `json:"resourceType,omitempty"`
 }
 
 // Response is the typed form of a lifecycle webhook response, mirroring the
@@ -167,10 +169,10 @@ type Identity struct {
 // desired for and where its resource lives, and adds the params, secrets
 // and bindings that describe the target state. The instances reach a block
 // through the embedded Identity, so d.Instances inside Ensure resolves to
-// the same map Delete and Observe are handed. Resource, ResourceInputs and
-// ResourceIdentity are the request's own: the declared resource it names,
-// that resource's inputs and the identity that resource's ensure stored,
-// all empty when the request names no resource.
+// the same map Delete and Observe are handed. Resource, ResourceInputs,
+// ResourceIdentity and ResourceType are the request's own: the resource it
+// names, that resource's inputs, the identity its ensure stored and its
+// recorded type, all empty when the request names no resource.
 type Desired struct {
 	Identity
 
@@ -296,6 +298,10 @@ func DecodeRequest(raw []byte) (Request, error) {
 		return Request{}, fmt.Errorf("contract: envelope field %q needs a non-empty %q naming the resource the identity is for",
 			"resourceIdentity", "resource")
 	}
+	if req.ResourceType != "" && req.Resource == "" {
+		return Request{}, fmt.Errorf("contract: envelope field %q needs a non-empty %q naming the resource the type is recorded for",
+			"resourceType", "resource")
+	}
 
 	return req, nil
 }
@@ -350,8 +356,9 @@ func (r Request) Identity() Identity {
 
 // Desired returns the subset of r describing what an operator should
 // converge its resource to, with the resource it names, that resource's
-// inputs and the identity its ensure stored. The instances arrive through
-// the embedded Identity, which is why no field here repeats them.
+// inputs, the identity its ensure stored and its recorded type. The
+// instances arrive through the embedded Identity, which is why no field
+// here repeats them.
 func (r Request) Desired() Desired {
 	return Desired{
 		Identity:         r.Identity(),
@@ -365,6 +372,7 @@ func (r Request) Desired() Desired {
 		Resource:         r.Resource,
 		ResourceInputs:   r.ResourceInputs,
 		ResourceIdentity: r.ResourceIdentity,
+		ResourceType:     r.ResourceType,
 	}
 }
 

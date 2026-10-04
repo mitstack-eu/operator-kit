@@ -81,20 +81,24 @@ type DeclaredResources struct {
 //
 // With DeclaredResources.Resource set, the creation pass and the teardown
 // drive that one resource alone, under a Desired naming it, as the engine
-// does for a request naming a resource; a name the manifest does not
-// declare is one problem, and nothing is driven. DeclaredResources'
-// ResourceInputs and ResourceIdentity, when set, go on the Desired every
-// call is made for. A Desired that carries either with no Resource named
-// is one problem naming the fields set, and nothing is driven, supplied
-// resources included, since the engine never sends such a request. A
-// resource implementing handler.ReportingResource is ensured through
-// EnsureWithReport, never Ensure, and a second ensure reporting a different
-// identity from the first is a problem, since it means the ensure created
-// another resource rather than converging the one it stored. A resource
-// implementing handler.RequestObserver is observed through
-// ObserveWithRequest, and one implementing handler.RequestDeleter is
-// deleted through DeleteWithRequest, each handed that Desired; any other is
-// observed and deleted with its Identity alone.
+// does for a request naming a resource. A name the manifest does not
+// declare is driven through the Types handler for the Desired's
+// ResourceType the way the Handler serves its unsubscribe: Delete, then
+// Observe, which must report absent, and never Ensure. With no such
+// handler it is one problem quoting the type, and nothing is driven.
+// DeclaredResources' ResourceInputs, ResourceIdentity and ResourceType,
+// when set, go on the Desired every call is made for. A Desired that
+// carries any of them with no Resource named is one problem naming the
+// fields set, and nothing is driven, supplied resources included, since the
+// engine never sends such a request. A resource implementing
+// handler.ReportingResource is ensured through EnsureWithReport, never
+// Ensure, and a second ensure reporting a different identity from the first
+// is a problem, since it means the ensure created another resource rather
+// than converging the one it stored. A resource implementing
+// handler.RequestObserver is observed through ObserveWithRequest, and one
+// implementing handler.RequestDeleter is deleted through DeleteWithRequest,
+// each handed that Desired; any other is observed and deleted with its
+// Identity alone.
 //
 // A resource that fails stops the creation pass there, and a resource not
 // proved absent stops the teardown there, so a resource created earlier is
@@ -117,12 +121,21 @@ func CheckDeclaredResources(in DeclaredResources) []string {
 	if in.ResourceIdentity != nil {
 		desired.ResourceIdentity = in.ResourceIdentity
 	}
+	if in.ResourceType != "" {
+		desired.ResourceType = in.ResourceType
+	}
+	var dropped handler.DeclaredResource
 	if in.Resource != "" {
-		if !slices.Contains(order, in.Resource) {
-			return []string{fmt.Sprintf("resource %q: the manifest's spec.resources does not declare it, so there is no resource to drive", in.Resource)}
-		}
-		order = []string{in.Resource}
 		desired.Resource = in.Resource
+		if slices.Contains(order, in.Resource) {
+			order = []string{in.Resource}
+		} else {
+			r, p := droppedResource(in, desired)
+			if p != "" {
+				return []string{p}
+			}
+			dropped, order = r, nil
+		}
 	}
 	if p := unboundResourceFields(desired); p != "" {
 		return []string{p}
@@ -134,6 +147,9 @@ func CheckDeclaredResources(in DeclaredResources) []string {
 		return c.problems
 	}
 
+	if dropped != nil {
+		c.deleteAndProveAbsent(desired.Resource, dropped)
+	}
 	ensured := 0
 	for _, name := range order {
 		ensured++
@@ -142,12 +158,27 @@ func CheckDeclaredResources(in DeclaredResources) []string {
 		}
 	}
 	for i := ensured - 1; i >= 0; i-- {
-		if !c.deleteAndProveAbsent(order[i]) {
+		if !c.deleteAndProveAbsent(order[i], in.Resources[order[i]]) {
 			break
 		}
 	}
 	c.suppliedStand(supplied, "after the last delete")
 	return c.problems
+}
+
+// droppedResource returns the Types handler for the recorded type of the
+// resource d names, which the manifest does not declare, or the problem
+// that leaves nothing to drive it by.
+func droppedResource(in DeclaredResources, d contract.Desired) (handler.DeclaredResource, string) {
+	const notDeclared = "resource %q: the manifest's spec.resources does not declare it"
+	if d.ResourceType == "" {
+		return nil, fmt.Sprintf(notDeclared+", and no ResourceType names the type to delete it by, so there is no resource to drive", d.Resource)
+	}
+	r := in.Types[d.ResourceType]
+	if r == nil {
+		return nil, fmt.Sprintf(notDeclared+", and Types has no handler for its recorded type %q, so there is no resource to drive", d.Resource, d.ResourceType)
+	}
+	return r, ""
 }
 
 // AssertDeclaredResources runs CheckDeclaredResources and fails tb with one
@@ -160,9 +191,10 @@ func AssertDeclaredResources(tb testing.TB, in DeclaredResources) {
 }
 
 // unboundResourceFields returns the problem for a Desired that carries
-// resource inputs or a resource identity but names no resource, naming only
-// the fields set, and "" when there is none. contract.DecodeRequest refuses
-// such a request, so the engine never sends one.
+// resource inputs, a resource identity or a resource type but names no
+// resource, naming only the fields set, and "" when there is none.
+// contract.DecodeRequest refuses such a request, so the engine never sends
+// one.
 func unboundResourceFields(d contract.Desired) string {
 	if d.Resource != "" {
 		return ""
@@ -173,6 +205,9 @@ func unboundResourceFields(d contract.Desired) string {
 	}
 	if len(d.ResourceIdentity) > 0 {
 		fields = append(fields, "ResourceIdentity")
+	}
+	if d.ResourceType != "" {
+		fields = append(fields, "ResourceType")
 	}
 	switch len(fields) {
 	case 0:
@@ -340,11 +375,10 @@ func (c *declaredCheck) delete(r handler.DeclaredResource) error {
 	return r.Delete(c.ctx, c.desired.Identity)
 }
 
-// deleteAndProveAbsent deletes one resource and observes it once, which
-// must report absent. It reports whether the absence was proved, so the
-// teardown may move on to the resource created before it.
-func (c *declaredCheck) deleteAndProveAbsent(name string) bool {
-	r := c.in.Resources[name]
+// deleteAndProveAbsent deletes the named resource through r and observes it
+// once, which must report absent. It reports whether the absence was
+// proved, so the teardown may move on to the resource created before it.
+func (c *declaredCheck) deleteAndProveAbsent(name string, r handler.DeclaredResource) bool {
 	if err := c.delete(r); err != nil {
 		c.resourceProblem(name, "Delete failed: %v", err)
 		return false
