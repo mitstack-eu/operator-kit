@@ -140,22 +140,27 @@ func typedResources(cfg Config) (map[string]DeclaredResource, error) {
 		return nil, errors.New("handler: Config.Types is set together with Config.Resource; only a block that declares its resources is served by resource type")
 	}
 
+	ids := make([]string, 0, len(cfg.Types))
 	var unknown []string
-	out := make(map[string]DeclaredResource, len(cfg.Types))
-	for id, r := range cfg.Types {
+	for id := range cfg.Types {
+		ids = append(ids, id)
 		if _, ok := contract.LookupResourceType(id); !ok {
 			unknown = append(unknown, strconv.Quote(id))
-			continue
 		}
-		if r == nil {
-			return nil, fmt.Errorf("handler: Config.Types holds no handler for resource type %q", id)
-		}
-		out[id] = r
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
 		return nil, fmt.Errorf("handler: Config.Types has a handler for %s, which the resource-type catalogue does not hold",
 			strings.Join(unknown, ", "))
+	}
+
+	sort.Strings(ids)
+	out := make(map[string]DeclaredResource, len(ids))
+	for _, id := range ids {
+		if cfg.Types[id] == nil {
+			return nil, fmt.Errorf("handler: Config.Types holds no handler for resource type %q", id)
+		}
+		out[id] = cfg.Types[id]
 	}
 	return out, nil
 }
