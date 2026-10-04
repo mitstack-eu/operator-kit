@@ -1,0 +1,16 @@
+apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: blockverify-dropped-fixture
+  name: blockverify dropped fixture
+  owner: blockverify-tests
+spec:
+  version: 1.1.0
+  description: A fixture block whose manifest no longer declares its firewall.
+  resources:
+    - name: network
+      type: aws.vpc
+  lifecycle:
+    endpoint: https://api.mitstack.dev/operators/blockverify-dropped-fixture/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1

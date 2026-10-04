@@ -56,6 +56,13 @@ type DeclaredResources struct {
 	// no Resource named, here or on Desired, it is one problem and nothing
 	// is driven.
 	ResourceIdentity map[string]string
+	// Types holds a handler for each resource type the block can still
+	// delete once its manifest stops declaring a resource of that type,
+	// keyed by resource-type id, exactly as handler.Config.Types does.
+	Types map[string]handler.DeclaredResource
+	// ResourceType is the recorded type of the resource Resource names when
+	// the manifest no longer declares it, set on Desired's ResourceType.
+	ResourceType string
 }
 
 // CheckDeclaredResources drives each declared resource through its

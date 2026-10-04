@@ -171,6 +171,11 @@ type Config struct {
 	// the block is served over Resource, is refused with a 400.
 	Resources map[string]DeclaredResource
 
+	// Types holds a DeclaredResource for each resource type the block can
+	// still unsubscribe or validate after its manifest stops declaring a
+	// resource of that type, keyed by resource-type id.
+	Types map[string]DeclaredResource
+
 	// Manifest is the block's manifest.yaml. Required when Hooks or
 	// Resources is non-empty, since a hook may only be registered if the
 	// manifest declares it under spec.lifecycle.hooks, and a declared

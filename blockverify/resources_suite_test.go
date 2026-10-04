@@ -13,6 +13,8 @@ package main
 // fixture_test.go does, with in-memory resources in its test file.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -248,4 +250,53 @@ func TestResourcesSuite_FailsNamingASuppliedResourceTheBlockDeletes(t *testing.T
 func TestResourcesSuite_PassesWhenTheBlockLeavesASuppliedResourceStanding(t *testing.T) {
 	dir := resourcesFixture(t, suppliedFixtureManifest, suppliedResourceTestGo("false"))
 	requireResourcesStatus(t, resourcesSuite(dir), "pass")
+}
+
+// --- a resource the manifest no longer declares -------------------------------
+
+// droppedByTypeFixtureDir holds a block whose manifest declares network
+// alone and whose resources test deletes firewall, which it no longer
+// declares, through the handler it registers for firewall's recorded type.
+const droppedByTypeFixtureDir = "testdata/resources-dropped-by-type"
+
+// droppedTypeHandler is the line registering that handler, and
+// noDroppedTypeHandler the same line registering none.
+const (
+	droppedTypeHandler   = `Types:     map[string]handler.DeclaredResource{"aws.security-group": firewall},`
+	noDroppedTypeHandler = `Types:     map[string]handler.DeclaredResource{},`
+)
+
+// droppedByTypeFixture writes the testdata block as a module with each old,
+// new pair of edits applied once to its resources test, failing the test
+// when an old text is not in it.
+func droppedByTypeFixture(t *testing.T, edits ...string) string {
+	t.Helper()
+	manifest, err := os.ReadFile(filepath.Join(droppedByTypeFixtureDir, manifestFile))
+	if err != nil {
+		t.Fatalf("reading the fixture manifest: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(droppedByTypeFixtureDir, "resources_test.go"))
+	if err != nil {
+		t.Fatalf("reading the fixture resources test: %v", err)
+	}
+	testGo := string(raw)
+	for i := 0; i+1 < len(edits); i += 2 {
+		if !strings.Contains(testGo, edits[i]) {
+			t.Fatalf("fixture edit: %q is not in %s/resources_test.go", edits[i], droppedByTypeFixtureDir)
+		}
+		testGo = strings.Replace(testGo, edits[i], edits[i+1], 1)
+	}
+	return resourcesFixture(t, string(manifest), testGo)
+}
+
+func TestResourcesSuite_PassesAgainstABlockThatDeletesADroppedResourceByItsTypeAndProvesItAbsent(t *testing.T) {
+	requireResourcesStatus(t, resourcesSuite(droppedByTypeFixture(t)), "pass")
+}
+
+func TestResourcesSuite_FailsNamingTheTypeWhenTheBlockHasNoHandlerForADroppedResourcesType(t *testing.T) {
+	got := resourcesSuite(droppedByTypeFixture(t, droppedTypeHandler, noDroppedTypeHandler))
+	requireResourcesFailNaming(t, got, `resource "firewall"`)
+	if !strings.Contains(got.Detail, `"aws.security-group"`) {
+		t.Errorf("resources detail = %q, want it to name the type %q no handler is registered for", got.Detail, "aws.security-group")
+	}
 }

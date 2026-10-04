@@ -185,6 +185,7 @@ type Desired struct {
 	Resource         string
 	ResourceInputs   map[string]json.RawMessage
 	ResourceIdentity map[string]string
+	ResourceType     string
 }
 
 // Observation is what an operator's validate/unsubscribe check found about
