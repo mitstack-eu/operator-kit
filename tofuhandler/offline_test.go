@@ -50,7 +50,8 @@ func TestOfflinePlan(t *testing.T) {
 	if bin == "" {
 		t.Skip("TOFU_BIN is unset")
 	}
-	e := &Engine{Bin: bin, Root: t.TempDir(), PluginCache: os.Getenv("TF_PLUGIN_CACHE_DIR"), Offline: true}
+	e := &Engine{Bin: bin, Root: t.TempDir(), PluginCache: os.Getenv("TF_PLUGIN_CACHE_DIR"), Offline: true,
+		StatePassphrase: "offline-plan-passphrase"}
 	ids := make([]string, 0, len(Specs))
 	for id := range Specs {
 		ids = append(ids, id)

@@ -106,12 +106,20 @@ func (e *Engine) run(ctx context.Context, dir string, args ...string) (string, e
 // encryptionConfig is the TF_ENCRYPTION value that encrypts state and plans
 // with AES-GCM under a key derived from passphrase.
 func encryptionConfig(passphrase string) string {
-	return fmt.Sprintf(`key_provider "pbkdf2" "k" { passphrase = %q }
-method "aes_gcm" "m" { keys = key_provider.pbkdf2.k }
-state { method = method.aes_gcm.m
-  enforced = true }
-plan { method = method.aes_gcm.m
-  enforced = true }`, passphrase)
+	return fmt.Sprintf(`key_provider "pbkdf2" "k" {
+  passphrase = %q
+}
+method "aes_gcm" "m" {
+  keys = key_provider.pbkdf2.k
+}
+state {
+  method   = method.aes_gcm.m
+  enforced = true
+}
+plan {
+  method   = method.aes_gcm.m
+  enforced = true
+}`, passphrase)
 }
 
 func lastLines(s string, n int) string {
