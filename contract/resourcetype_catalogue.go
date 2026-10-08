@@ -480,6 +480,7 @@ var resourceTypeCatalogue = withProviderInputs([]ResourceType{
 		Category: "compute", Languages: none, Lifecycle: "replaceable", Upgrade: "recreate", Scope: "org-wide",
 		Priced: true, PricingKey: "HetznerCloud",
 		Inputs: []Input{
+			{Name: "agentNodes", Accepts: "value", Replacement: "update"},
 			{Name: "clusterRepository", Required: true, Accepts: "output:git-repository/repo", Place: "capability:github", Replacement: "update"},
 			{Name: "location", Required: true, Accepts: "value", Replacement: "replace"},
 			{Name: "nodeDisk", Accepts: "value", Replacement: "replace"},
