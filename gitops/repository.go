@@ -76,8 +76,23 @@ func Revert(ctx context.Context, repo Repository, revision, message string) (str
 	return rev, err
 }
 
+// secretGroupKey names one key inside one group of a Desired's Secrets.
+type secretGroupKey struct {
+	group string
+	key   string
+}
+
+// secretGroupIdentifiers lists the keys in a secret group that hold an
+// identifier rather than a credential.
+var secretGroupIdentifiers = map[secretGroupKey]bool{
+	{group: "github", key: "owner"}: true,
+}
+
 // SecretValues returns every value in d's SecretInputs, AppSecrets and
-// Secrets, for CommitManifests to refuse.
+// Secrets except the identifiers in secretGroupIdentifiers, for CommitManifests
+// to refuse. An identifier such as the github owner legitimately appears in a
+// manifest, for example in a repository URL, so refusing it would block a
+// correct commit.
 func SecretValues(d contract.Desired) []string {
 	var values []string
 	for _, v := range d.SecretInputs {
@@ -86,8 +101,11 @@ func SecretValues(d contract.Desired) []string {
 	for _, v := range d.AppSecrets {
 		values = append(values, v)
 	}
-	for _, group := range d.Secrets {
-		for _, v := range group {
+	for groupName, group := range d.Secrets {
+		for key, v := range group {
+			if secretGroupIdentifiers[secretGroupKey{group: groupName, key: key}] {
+				continue
+			}
 			values = append(values, v)
 		}
 	}
