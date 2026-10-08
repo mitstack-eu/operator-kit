@@ -201,6 +201,9 @@
           },
           "type": "array"
         },
+        "receivesAppSecrets": {
+          "type": "boolean"
+        },
         "releaseClass": {
           "type": "string"
         },

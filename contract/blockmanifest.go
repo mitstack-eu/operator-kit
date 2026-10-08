@@ -158,9 +158,10 @@ type ManifestSpec struct {
 	Requires     []ManifestRequirement `json:"requires,omitempty"`
 	Resources    []ManifestResource    `json:"resources"`
 	// Provides names entries of Resources.
-	Provides      []string               `json:"provides,omitempty"`
-	Lifecycle     ManifestLifecycle      `json:"lifecycle"`
-	Observability *ManifestObservability `json:"observability,omitempty"`
+	Provides           []string               `json:"provides,omitempty"`
+	Lifecycle          ManifestLifecycle      `json:"lifecycle"`
+	Observability      *ManifestObservability `json:"observability,omitempty"`
+	ReceivesAppSecrets bool                   `json:"receivesAppSecrets,omitempty"`
 }
 
 // ManifestParam is one value a subscriber or the platform supplies.
