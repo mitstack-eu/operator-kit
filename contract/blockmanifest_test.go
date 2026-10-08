@@ -783,3 +783,57 @@ func TestParseManifest_RefusesAnUnknownOrMissingAPIVersionNamingBothKnownVersion
 		})
 	}
 }
+
+// specReceivesAppSecrets reads ManifestSpec.ReceivesAppSecrets by reflection,
+// so a missing field fails its own test instead of the whole package build.
+func specReceivesAppSecrets(t *testing.T, b *contract.BlockManifest) bool {
+	t.Helper()
+	f := reflect.ValueOf(b.Spec).FieldByName("ReceivesAppSecrets")
+	if !f.IsValid() {
+		t.Fatal("ManifestSpec has no ReceivesAppSecrets field")
+	}
+	if f.Kind() != reflect.Bool {
+		t.Fatalf("ManifestSpec.ReceivesAppSecrets kind = %v, want bool", f.Kind())
+	}
+	return f.Bool()
+}
+
+func TestParseManifest_V1BetaReadsReceivesAppSecretsAsAnOptionalFlag(t *testing.T) {
+	for _, tc := range []struct {
+		label, line string
+		want        bool
+	}{
+		{"absent reads false", "", false},
+		{"true reads true", "  receivesAppSecrets: true\n", true},
+		{"false reads false", "  receivesAppSecrets: false\n", false},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			b := parseBeta(t, editBeta(t, "  version: 1.0.0\n", "  version: 1.0.0\n"+tc.line))
+
+			if got := specReceivesAppSecrets(t, b); got != tc.want {
+				t.Errorf("spec.receivesAppSecrets after %q = %v, want %v", tc.line, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseManifest_V1BetaReceivesAppSecretsTakesTrueOrFalseOnly(t *testing.T) {
+	for _, value := range []string{"yes", "1", `"true"`, "sometimes", "null"} {
+		t.Run("refuses "+value, func(t *testing.T) {
+			raw := editBeta(t, "  version: 1.0.0\n", "  version: 1.0.0\n  receivesAppSecrets: "+value+"\n")
+
+			requireRefusedNaming(t, raw, "spec.receivesAppSecrets")
+		})
+	}
+}
+
+func TestManifestSpec_ReceivesAppSecretsMarshalsUnderItsOptionalKey(t *testing.T) {
+	f, ok := reflect.TypeOf(contract.ManifestSpec{}).FieldByName("ReceivesAppSecrets")
+	if !ok {
+		t.Fatal("ManifestSpec has no ReceivesAppSecrets field")
+	}
+
+	if got, want := f.Tag.Get("json"), "receivesAppSecrets,omitempty"; got != want {
+		t.Errorf("ManifestSpec.ReceivesAppSecrets json tag = %q, want %q", got, want)
+	}
+}

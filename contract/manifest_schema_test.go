@@ -195,3 +195,27 @@ func TestManifestSchema_RequirementAndResourceCarryExactlyTheirKeys(t *testing.T
 		}
 	}
 }
+
+func TestManifestSchema_SpecListsReceivesAppSecretsAsABoolean(t *testing.T) {
+	doc := schemaDoc(t)
+	generated, err := contract.GenerateManifestSchema()
+	if err != nil {
+		t.Fatalf("contract.GenerateManifestSchema(): %v", err)
+	}
+	var gen map[string]any
+	if err := json.Unmarshal(generated, &gen); err != nil {
+		t.Fatalf("generated schema is not a JSON object: %v", err)
+	}
+
+	for label, d := range map[string]map[string]any{"committed": doc, "generated": gen} {
+		props := schemaAt(t, d, d, "properties", "spec", "properties")
+		prop, ok := props["receivesAppSecrets"].(map[string]any)
+		if !ok {
+			t.Errorf("%s schema spec properties = %q, want receivesAppSecrets among them", label, sortedKeys(props))
+			continue
+		}
+		if prop["type"] != "boolean" {
+			t.Errorf("%s schema spec.receivesAppSecrets type = %v, want boolean", label, prop["type"])
+		}
+	}
+}
