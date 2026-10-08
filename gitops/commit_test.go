@@ -371,7 +371,7 @@ func TestSecretValues_CollectsTheCredentialsAndNeverTheGithubOwner(t *testing.T)
 	}
 	for _, want := range []string{sliceGithubToken, sliceClusterCred, slicePAT} {
 		if !has(want) {
-			t.Errorf("SecretValues has %d values, want it to contain the credential %q", len(got), want)
+			t.Errorf("SecretValues = %q, want it to contain the credential %q", got, want)
 		}
 	}
 	if has("mitstack-eu") {
