@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// State names what an operator observed about a resource.
 type State string
 
 // The three states an Observation can carry; Unknown means the question was not settled this call, for example an async delete still converging.
@@ -18,8 +17,6 @@ const (
 	Unknown State = "unknown"
 )
 
-// InstanceConfig is a resolved tool instance the engine hands to a block,
-// keyed by capability in Request.Instances.
 type InstanceConfig struct {
 	Name     string            `json:"name"`
 	Endpoint string            `json:"endpoint"`
@@ -34,7 +31,6 @@ type CloudIdentity struct {
 	AccountRef       string `json:"accountRef,omitempty"`
 }
 
-// EventsCallback tells a block where to report progress events.
 type EventsCallback struct {
 	URL   string `json:"url"`
 	Token string `json:"token"`
@@ -49,9 +45,7 @@ type BuildRequest struct {
 	Summary      json.RawMessage `json:"summary,omitempty"`
 }
 
-// Request is the typed lifecycle webhook envelope; its JSON tags mirror the engine's request struct field for field.
-//
-// A request naming no resource leaves Resource, ResourceInputs, ResourceIdentity and ResourceType empty and runs the verb on every declared resource.
+// Request's JSON tags mirror the engine's request struct field for field, and a request naming no resource leaves Resource, ResourceInputs, ResourceIdentity and ResourceType empty and runs the verb on every declared resource.
 type Request struct {
 	Operation      string                         `json:"operation"`
 	SubscriptionID string                         `json:"subscriptionId"`
@@ -75,8 +69,7 @@ type Request struct {
 	PriorOutputs   map[string]string              `json:"priorOutputs,omitempty"`
 	BuildRequest   *BuildRequest                  `json:"buildRequest,omitempty"`
 	Resource       string                         `json:"resource,omitempty"`
-	// Deprecated: a mitstack/v1beta resource carries no inputs; the next
-	// major release removes ResourceInputs.
+	// Deprecated: a mitstack/v1beta resource carries no inputs; the next major release removes ResourceInputs.
 	ResourceInputs   map[string]json.RawMessage `json:"resourceInputs,omitempty"`
 	ResourceIdentity map[string]string          `json:"resourceIdentity,omitempty"`
 
@@ -87,13 +80,11 @@ type Request struct {
 	SettlesAt *time.Time `json:"settlesAt,omitempty"`
 }
 
-// RecordedResource is what the engine recorded for one declared resource.
 type RecordedResource struct {
 	Type     string            `json:"type"`
 	Identity map[string]string `json:"identity,omitempty"`
 }
 
-// ResourceRef is what an observe of one declared resource is handed.
 type ResourceRef struct {
 	Name     string
 	Type     string
@@ -101,16 +92,13 @@ type ResourceRef struct {
 	Desired  Desired
 }
 
-// CreatedResource is what a block-level ensure reports for one resource it created.
 type CreatedResource struct {
 	Name     string
 	Type     string
 	Identity map[string]string
 }
 
-// Response is the typed lifecycle webhook response.
-//
-// Outputs has no omitempty because a nil map must still encode as JSON null, the shape the engine tolerates from a verb with nothing to return.
+// Response's Outputs has no omitempty because a nil map must still encode as JSON null, the shape the engine tolerates from a verb with nothing to return.
 type Response struct {
 	Outputs       map[string]string `json:"outputs"`
 	SecretOutputs map[string]string `json:"secretOutputs,omitempty"`
@@ -123,6 +111,8 @@ type Response struct {
 	Resources map[string]ResourceOutcome `json:"resources,omitempty"`
 	// Replaces names, on a validate, the resources an upgrade would replace rather than change in place.
 	Replaces []string `json:"replaces,omitempty"`
+	// ResourceSecretOutputs keeps each provided resource's secret outputs apart, since the merged SecretOutputs keeps one value of a key two resources share.
+	ResourceSecretOutputs map[string]map[string]string `json:"resourceSecretOutputs,omitempty"`
 }
 
 // ResourceOutcome is what a verb's calls did to one declared resource; a nil call did not run.
@@ -142,15 +132,12 @@ type CallOutcome struct {
 	Type         string            `json:"type,omitempty"`
 }
 
-// Ensured is what an ensure reports about the resource it converged.
 type Ensured struct {
 	Identity map[string]string
 	Outputs  map[string]string
 }
 
-// Identity is the subset of a Request that names which subscription an operation targets and where its resource lives.
-//
-// Instances is carried because a region-scoped block reads its region here, the only value Delete and Observe are handed.
+// Identity names which subscription an operation targets and where its resource lives, and carries Instances because a region-scoped block reads its region here, the only value Delete and Observe are handed.
 type Identity struct {
 	SubscriptionID string
 	BlockID        string
@@ -162,9 +149,7 @@ type Identity struct {
 	CloudIdentity  *CloudIdentity
 }
 
-// Desired is the subset of a Request describing what an operator should converge a subscription's resource to.
-//
-// Instances reach a block through the embedded Identity, so d.Instances in Ensure is the same map Delete and Observe are handed. VerbAt is the request's settlesAt when set, else its createdAt.
+// Desired's Instances reach a block through the embedded Identity, so d.Instances in Ensure is the same map Delete and Observe are handed. VerbAt is the request's settlesAt when set, else its createdAt.
 type Desired struct {
 	Identity
 
@@ -177,8 +162,7 @@ type Desired struct {
 	BuildRequest *BuildRequest
 
 	Resource string
-	// Deprecated: a mitstack/v1beta resource carries no inputs; the next
-	// major release removes ResourceInputs.
+	// Deprecated: a mitstack/v1beta resource carries no inputs; the next major release removes ResourceInputs.
 	ResourceInputs   map[string]json.RawMessage
 	ResourceIdentity map[string]string
 	ResourceType     string
@@ -188,7 +172,6 @@ type Desired struct {
 	VerbAt            time.Time
 }
 
-// Observation is what an operator's validate or unsubscribe check found about a resource.
 type Observation struct {
 	State         State
 	Outputs       map[string]string

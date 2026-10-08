@@ -128,7 +128,35 @@ func CheckResponse(raw []byte) []string {
 	checkString("statusDetail")
 	checkString("lastError")
 	problems = append(problems, checkResources(doc)...)
+	problems = append(problems, checkResourceSecretOutputs(doc)...)
 
+	return problems
+}
+
+func checkResourceSecretOutputs(doc map[string]any) []string {
+	v, present := doc["resourceSecretOutputs"]
+	if !present {
+		return nil
+	}
+	byResource, ok := v.(map[string]any)
+	if !ok {
+		return []string{fmt.Sprintf("%q must be an object of per-resource secret outputs, got %s", "resourceSecretOutputs", jsonKind(v))}
+	}
+
+	var problems []string
+	for _, name := range sortedKeys(byResource) {
+		path := fmt.Sprintf("%q.%q", "resourceSecretOutputs", name)
+		secrets, ok := byResource[name].(map[string]any)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("%s must be an object of string values, got %s", path, jsonKind(byResource[name])))
+			continue
+		}
+		for _, k := range sortedKeys(secrets) {
+			if _, ok := secrets[k].(string); !ok {
+				problems = append(problems, fmt.Sprintf("%s.%q must be a string value, got %s", path, k, jsonKind(secrets[k])))
+			}
+		}
+	}
 	return problems
 }
 

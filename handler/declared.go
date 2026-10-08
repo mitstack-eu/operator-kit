@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -75,10 +76,23 @@ type declaredRun struct {
 	outcomes  map[string]contract.ResourceOutcome
 	refs      map[string]contract.ResourceRef
 	provided  map[string]bool
+
+	resourceSecretOutputs map[string]map[string]string
 }
 
 func (r *declaredRun) answers(name string) bool {
 	return r.provided == nil || r.provided[name]
+}
+
+// keepSecretOutputs holds a resource's secret outputs apart from outcomes, which the engine records.
+func (r *declaredRun) keepSecretOutputs(name string, secretOutputs map[string]string) {
+	if len(secretOutputs) == 0 {
+		return
+	}
+	if r.resourceSecretOutputs == nil {
+		r.resourceSecretOutputs = map[string]map[string]string{}
+	}
+	r.resourceSecretOutputs[name] = maps.Clone(secretOutputs)
 }
 
 // ensureEach settles each resource present before the next, a later resource winning a key both produce, and ensures none on its own for a block-level block.
@@ -112,11 +126,13 @@ func (r *declaredRun) ensureEach(ctx context.Context) (int, contract.Response) {
 		if r.answers(nr.name) {
 			outputs = mergeOutputs(outputs, obs.Outputs)
 			secretOutputs = mergeOutputs(secretOutputs, obs.SecretOutputs)
+			r.keepSecretOutputs(nr.name, obs.SecretOutputs)
 		}
 	}
 
 	resp := contract.Observation{State: contract.Present, Outputs: outputs, SecretOutputs: secretOutputs}.Response()
 	resp.Resources = r.outcomes
+	resp.ResourceSecretOutputs = r.resourceSecretOutputs
 	return http.StatusOK, resp
 }
 
@@ -209,6 +225,7 @@ func (r *declaredRun) validateEach(ctx context.Context) (int, contract.Response)
 			if r.answers(nr.name) {
 				outputs = mergeOutputs(outputs, obs.Outputs)
 				secretOutputs = mergeOutputs(secretOutputs, obs.SecretOutputs)
+				r.keepSecretOutputs(nr.name, obs.SecretOutputs)
 			}
 		case contract.Absent:
 			absent++
@@ -220,6 +237,7 @@ func (r *declaredRun) validateEach(ctx context.Context) (int, contract.Response)
 	switch len(r.resources) {
 	case present:
 		resp = contract.Observation{State: contract.Present, Outputs: outputs, SecretOutputs: secretOutputs}.Response()
+		resp.ResourceSecretOutputs = r.resourceSecretOutputs
 	case absent:
 		resp = contract.Observation{State: contract.Absent}.Response()
 	default:

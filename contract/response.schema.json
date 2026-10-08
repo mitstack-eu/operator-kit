@@ -42,6 +42,14 @@
       "description": "The explicit teardown-verify marker (MIT-1125, AbsenceProber). A POINTER-shaped field: true/false means the operator explicitly reported whether the resource is gone; the field's absence (never present in the JSON at all) means the operator does not implement the marker and the engine fails open. Because JSON has no way to distinguish \"absent from the object\" from \"explicitly null\" once decoded into a nullable Go pointer, null is accepted here too and carries the same fail-open meaning as omitting the field.",
       "type": ["boolean", "null"]
     },
+    "resourceSecretOutputs": {
+      "description": "Each provided resource's secret outputs, keyed by the resource's name, so two resources reporting the same key each keep their own value. A resource reporting no secret output has no entry. Kept out of resources, which the engine records.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      }
+    },
     "resources": {
       "description": "The outcome of each call a verb ran for a resource the block's manifest declares, keyed by the resource's name. A resource the verb never reached has no entry, and within an entry a call that did not run has no key. A block served over a single resource reports none.",
       "type": "object",

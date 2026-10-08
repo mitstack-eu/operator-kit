@@ -408,8 +408,13 @@ like this:
 
 The answer's `resources` map holds an `observe` entry per resource with its
 state, outputs, identity and `type`. The top-level `outputs` and
-`secretOutputs` are the union of the resources `spec.provides` names. A
-resource not present within the verb budget answers `pending:true` naming it,
+`secretOutputs` are the union of the resources `spec.provides` names. That
+union keeps one value of a key two resources share, so `resourceSecretOutputs`
+also holds each provided resource's secret outputs under its name. Two
+`aws.iam-role` resources then each keep their own `roleArn`. A resource with
+no secret output has no entry there, and no secret output ever appears in
+`resources`, which the engine records. A resource not present within the verb
+budget answers `pending:true` naming it,
 and unsubscribe answers `absent:true` only when every resource observes absent.
 A request naming one resource is served for validate alone, observing that
 resource with the request's `resourceIdentity` and `resourceType`. A named
@@ -521,7 +526,9 @@ order is creation order and a later resource may depend on an earlier one.
 
 When every resource is present, subscribe and upgrade answer with the union
 of the resources' `outputs` and `secretOutputs`, and a later resource wins a
-key both produce. A resource that is still converging when the verb budget
+key both produce. Validate does the same when every resource is present, and
+both also answer `resourceSecretOutputs`, which keeps each resource's secret
+outputs under its name. A resource that is still converging when the verb budget
 runs out stops the verb there: subscribe and upgrade answer `pending:true`,
 and unsubscribe answers `absent:false`. An error from any call stops the
 verb the same way and is answered by its kind, as for a single `Resource`.
