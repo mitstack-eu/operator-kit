@@ -2,13 +2,6 @@
 // Observation, Desired, Identity — decoded from envelope.schema.json and
 // response.schema.json, alongside DecodeRequest/DecodeResponse and the
 // Request.Identity/Request.Desired/Observation.Response helpers.
-//
-// Every assertion here is against the exported surface the code-author must
-// build: none of contract.Request, contract.Response, contract.Observation,
-// contract.Desired, contract.Identity, contract.State (with contract.Present/
-// Absent/Unknown), contract.DecodeRequest or contract.DecodeResponse exists
-// yet, so every test below fails to compile until the typed layer is
-// written — that is the intended red.
 package contract_test
 
 import (
@@ -459,6 +452,10 @@ var wantInvalidResponseSubstr = map[string]string{
 	"invalid-outputs-not-strings":        "outputs",
 	"invalid-pending-not-bool":           "pending",
 	"invalid-secret-outputs-not-strings": "secretOutputs",
+
+	"invalid-resource-secret-outputs-not-object":       "resourceSecretOutputs",
+	"invalid-resource-secret-outputs-entry-not-object": "resourceSecretOutputs",
+	"invalid-resource-secret-outputs-value-not-string": "resourceSecretOutputs",
 }
 
 func TestDecodeResponse_RejectsInvalidGoldensNamingField(t *testing.T) {

@@ -14,6 +14,10 @@ var invalidGoldenField = map[string]string{
 	"invalid-pending-not-bool":           "pending",
 	"invalid-absent-not-bool":            "absent",
 	"invalid-secret-outputs-not-strings": "secretOutputs",
+
+	"invalid-resource-secret-outputs-not-object":       "resourceSecretOutputs",
+	"invalid-resource-secret-outputs-entry-not-object": "resourceSecretOutputs",
+	"invalid-resource-secret-outputs-value-not-string": "resourceSecretOutputs",
 }
 
 func TestCheckResponse_AcceptsEveryValidResponseGolden(t *testing.T) {
@@ -79,18 +83,14 @@ func TestResponseGoldens_BothHalvesArePresent(t *testing.T) {
 		}
 	}
 
-	// null-outputs is the fixture that keeps the contract additive: a Go nil
-	// map encodes to JSON null, several shipping operators emit exactly that,
-	// and the engine already tolerates it.
+	// null-outputs keeps the contract additive: shipping operators emit a nil map as JSON null.
 	if _, ok := valid["null-outputs"]; !ok {
 		t.Error("the valid set is missing null-outputs, the fixture that pins a null outputs map as legitimate")
 	}
 }
 
 func TestCheckResponse_AcceptsAValidResponseCarryingAnUnknownProperty(t *testing.T) {
-	// A contract that rejects properties it has not heard of cannot be
-	// extended without breaking every operator already in the field, so an
-	// unknown top-level property is accepted rather than flagged.
+	// An unknown top-level property is accepted so the contract can be extended.
 	const withUnknown = `{"outputs":{"url":"https://app.example.com"},"somethingTheEngineWillAddLater":{"nested":1}}`
 
 	if problems := CheckResponse([]byte(withUnknown)); len(problems) != 0 {

@@ -220,6 +220,9 @@ var wantResponseGoldenNames = []string{
 	"invalid-absent-not-bool", "invalid-outputs-not-object",
 	"invalid-outputs-not-strings", "invalid-pending-not-bool",
 	"invalid-secret-outputs-not-strings",
+	"invalid-resource-secret-outputs-not-object",
+	"invalid-resource-secret-outputs-entry-not-object",
+	"invalid-resource-secret-outputs-value-not-string",
 }
 
 func TestResponseGoldensDir_ListsExpectedFileNames(t *testing.T) {
@@ -315,6 +318,9 @@ func TestInvalidResponseGoldens_OnlyInvalidPrefixedAndIsNonEmpty(t *testing.T) {
 		"invalid-absent-not-bool", "invalid-outputs-not-object",
 		"invalid-outputs-not-strings", "invalid-pending-not-bool",
 		"invalid-secret-outputs-not-strings",
+		"invalid-resource-secret-outputs-not-object",
+		"invalid-resource-secret-outputs-entry-not-object",
+		"invalid-resource-secret-outputs-value-not-string",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("InvalidResponseGoldens() returned %d golden(s) %v, want exactly %v", len(got), keysOf(got), want)
