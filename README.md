@@ -408,14 +408,24 @@ like this:
 
 The answer's `resources` map holds an `observe` entry per resource with its
 state, outputs, identity and `type`. The top-level `outputs` and
-`secretOutputs` are the union of the resources `spec.provides` names. That
-union keeps one value of a key two resources share, so `resourceSecretOutputs`
-also holds each provided resource's secret outputs under its name. Two
-`aws.iam-role` resources then each keep their own `roleArn`. A resource with
-no secret output has no entry there, and no secret output ever appears in
-`resources`, which the engine records. A resource not present within the verb
-budget answers `pending:true` naming it,
-and unsubscribe answers `absent:true` only when every resource observes absent.
+`secretOutputs` are the union of the resources `spec.provides` names.
+
+In that union a later resource wins a key two resources share, so two
+`aws.iam-role` resources would lose one `roleArn`. The answer therefore also
+carries `resourceSecretOutputs`, which maps each provided resource's name to
+its own secret outputs:
+
+```json
+{"resourceSecretOutputs": {
+  "deploy-role": {"roleArn": "arn:aws:iam::111111111111:role/deploy"},
+  "ecr-push-role": {"roleArn": "arn:aws:iam::111111111111:role/ecr-push"}}}
+```
+
+A resource with no secret output has no entry there. No secret output ever
+appears in `resources`, because the engine records that map.
+
+A resource not present within the verb budget answers `pending:true` naming
+it, and unsubscribe answers `absent:true` only when every resource observes absent.
 A request naming one resource is served for validate alone, observing that
 resource with the request's `resourceIdentity` and `resourceType`. A named
 subscribe, upgrade or unsubscribe answers 400. The request's
@@ -526,9 +536,15 @@ order is creation order and a later resource may depend on an earlier one.
 
 When every resource is present, subscribe and upgrade answer with the union
 of the resources' `outputs` and `secretOutputs`, and a later resource wins a
-key both produce. Validate does the same when every resource is present, and
-both also answer `resourceSecretOutputs`, which keeps each resource's secret
-outputs under its name. A resource that is still converging when the verb budget
+key both produce. Validate answers the same union when every resource is
+present.
+
+That merge would leave two `aws.iam-role` resources with one `roleArn`
+between them. So subscribe and upgrade, and validate when every resource is
+present, also answer `resourceSecretOutputs`, which maps each resource's name
+to its own secret outputs.
+
+A resource that is still converging when the verb budget
 runs out stops the verb there: subscribe and upgrade answer `pending:true`,
 and unsubscribe answers `absent:false`. An error from any call stops the
 verb the same way and is answered by its kind, as for a single `Resource`.
