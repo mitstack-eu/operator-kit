@@ -32,7 +32,6 @@ func TestManifestSchema_IsWhatTheTypesGenerate(t *testing.T) {
 	}
 }
 
-// schemaDoc decodes contract.ManifestSchema.
 func schemaDoc(t *testing.T) map[string]any {
 	t.Helper()
 	var doc map[string]any
@@ -108,8 +107,6 @@ func TestManifestSchema_DeclaresDraft2020_12AndAnID(t *testing.T) {
 	}
 }
 
-// alternatives returns node's oneOf or anyOf alternatives, each with any
-// local $ref followed, or node itself when it has neither.
 func alternatives(t *testing.T, root, node map[string]any) []map[string]any {
 	t.Helper()
 	node = schemaAt(t, root, node)
@@ -128,7 +125,6 @@ func alternatives(t *testing.T, root, node map[string]any) []map[string]any {
 	return out
 }
 
-// alternativeOfType returns the alternative of node whose type is typ.
 func alternativeOfType(t *testing.T, root, node map[string]any, typ string) (map[string]any, bool) {
 	t.Helper()
 	for _, alt := range alternatives(t, root, node) {

@@ -5,15 +5,11 @@ import (
 	"strings"
 )
 
-// ManifestAPIVersionV1Alpha is the apiVersion of today's block manifest.
 const ManifestAPIVersionV1Alpha = "mitstack/v1alpha"
 
-// ManifestAPIVersion is the apiVersion of the current block manifest.
 const ManifestAPIVersion = "mitstack/v1beta"
 
 // ParseManifest reads raw strictly by its apiVersion, refusing an unknown key or an alias or merge key, which bring in text from elsewhere, and naming the path in each error.
-//
-// Whether the platform holds a type is CheckManifestTypes' question, so the parser needs no type snapshot.
 func ParseManifest(raw []byte) (Manifest, error) {
 	root, err := parseYAML(string(raw))
 	if err != nil {
@@ -82,7 +78,6 @@ type Manifest struct {
 	Warnings []ManifestWarning
 }
 
-// ManifestWarning is one retired key a parsed manifest carries, which never refuses the manifest.
 type ManifestWarning struct {
 	Path    string
 	Message string
@@ -99,7 +94,6 @@ func (m Manifest) ID() string {
 	return ""
 }
 
-// Version returns spec.version, trimmed.
 func (m Manifest) Version() string {
 	switch {
 	case m.Block != nil:
@@ -110,7 +104,6 @@ func (m Manifest) Version() string {
 	return ""
 }
 
-// ReleaseClass returns spec.releaseClass, trimmed.
 func (m Manifest) ReleaseClass() string {
 	switch {
 	case m.Block != nil:
@@ -121,7 +114,6 @@ func (m Manifest) ReleaseClass() string {
 	return ""
 }
 
-// ReleaseNote returns spec.releaseNote, trimmed, so a blank note reads as none.
 func (m Manifest) ReleaseNote() string {
 	switch {
 	case m.Block != nil:
@@ -141,14 +133,12 @@ type BlockManifest struct {
 	Spec     ManifestSpec     `json:"spec"`
 }
 
-// ManifestMetadata names a block and its owner.
 type ManifestMetadata struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Owner string `json:"owner,omitempty"`
 }
 
-// ManifestSpec is what a block declares.
 type ManifestSpec struct {
 	Version      string                `json:"version"`
 	ReleaseClass string                `json:"releaseClass,omitempty"`
@@ -164,7 +154,6 @@ type ManifestSpec struct {
 	ReceivesAppSecrets bool                   `json:"receivesAppSecrets,omitempty"`
 }
 
-// ManifestParam is one value a subscriber or the platform supplies.
 type ManifestParam struct {
 	Name        string `json:"name"`
 	Label       string `json:"label,omitempty"`
@@ -174,7 +163,6 @@ type ManifestParam struct {
 	Secret      bool   `json:"secret,omitempty"`
 }
 
-// ManifestRequirement is one thing a block needs, by exact type.
 type ManifestRequirement struct {
 	// Deprecated: ParseManifest leaves Kind empty; the next major release removes it.
 	Kind string `json:"kind,omitempty"`
@@ -187,7 +175,6 @@ type ManifestRequirement struct {
 	Types []string `json:"types,omitempty"`
 }
 
-// Reference returns the name a binding uses for the requirement: its Name when set, otherwise the one type id it lists.
 func (q ManifestRequirement) Reference() string {
 	if q.Name != "" {
 		return q.Name
@@ -198,7 +185,6 @@ func (q ManifestRequirement) Reference() string {
 	return q.Kind
 }
 
-// ManifestResource is one resource a block creates.
 type ManifestResource struct {
 	// Name is unique in the block and stable across versions.
 	Name string `json:"name"`
@@ -211,28 +197,23 @@ type ManifestResource struct {
 	On string `json:"on,omitempty"`
 }
 
-// InputValue is one input, a scalar kept as its YAML text or a mapping of named inputs, exactly one set.
-//
 // Deprecated: a mitstack/v1beta resource carries no inputs; the next major release removes it.
 type InputValue struct {
 	Scalar string
 	Map    map[string]InputValue
 }
 
-// ManifestLifecycle is the endpoint a block serves, the operations it answers and the contract version it speaks.
 type ManifestLifecycle struct {
 	Endpoint   string   `json:"endpoint"`
 	Operations []string `json:"operations"`
 	Contract   string   `json:"contract"`
 }
 
-// ManifestObservability is what only the block's operator knows to watch.
 type ManifestObservability struct {
 	Metrics []ManifestMetricGroup `json:"metrics,omitempty"`
 	Cost    *ManifestCost         `json:"cost,omitempty"`
 }
 
-// ManifestMetricGroup is the metrics of one resource, in one namespace.
 type ManifestMetricGroup struct {
 	Resource   string                 `json:"resource"`
 	Namespace  string                 `json:"namespace"`
@@ -241,7 +222,6 @@ type ManifestMetricGroup struct {
 	Series     []ManifestMetricSeries `json:"series"`
 }
 
-// ManifestMetricSeries is one metric series of a group.
 type ManifestMetricSeries struct {
 	Name   string `json:"name"`
 	Metric string `json:"metric"`
@@ -249,7 +229,6 @@ type ManifestMetricSeries struct {
 	Unit   string `json:"unit,omitempty"`
 }
 
-// ManifestCost says how the block's cost is grouped.
 type ManifestCost struct {
 	GroupBy []string `json:"groupBy,omitempty"`
 }

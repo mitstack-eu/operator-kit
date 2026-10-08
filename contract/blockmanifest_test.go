@@ -7,12 +7,6 @@ package contract_test
 // into V1AlphaManifest. The worked manifests of ADR 0085 and the data-model
 // page are read from the embedded manifest goldens and checked field by
 // field.
-//
-// Under mitstack/v1beta a requires entry is a type id, or a mapping of
-// type (one id or a list), name and many; a resources entry is a type id,
-// or a mapping of type and name. An entry listing types carries a name, an
-// unnamed resource is named by its type id, and the keys ADR 0085 retires
-// (inputs, kind, in and on) are refused naming the field and the entry.
 
 import (
 	"reflect"
@@ -23,7 +17,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/contract"
 )
 
-// readManifestGolden returns the embedded manifest golden called name.
 func readManifestGolden(t *testing.T, name string) []byte {
 	t.Helper()
 	raw, err := contract.ManifestGoldens.ReadFile(contract.ManifestGoldensDir + "/" + name)
@@ -63,7 +56,6 @@ type wantWorkedManifest struct {
 	resources []wantResource
 }
 
-// oneType is the Types of an entry listing the one type id.
 func oneType(id string) []string { return []string{id} }
 
 var workedManifests = []wantWorkedManifest{
@@ -148,8 +140,6 @@ var workedManifests = []wantWorkedManifest{
 	},
 }
 
-// requireRequirements checks got against want entry by entry, and that the
-// fields ADR 0085 retires stay empty after a parse.
 func requireRequirements(t *testing.T, got []contract.ManifestRequirement, want []wantRequirement) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -169,8 +159,6 @@ func requireRequirements(t *testing.T, got []contract.ManifestRequirement, want 
 	}
 }
 
-// requireResources checks got against want entry by entry, and that the
-// fields ADR 0085 retires stay empty after a parse.
 func requireResources(t *testing.T, got []contract.ManifestResource, want []wantResource) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -196,11 +184,6 @@ func TestManifestAPIVersions_AreV1AlphaAndV1Beta(t *testing.T) {
 	}
 }
 
-// TestParseManifest_ReadsTheWorkedV1BetaManifests reads ADR 0085's worked
-// aws-app-infra manifest and the data-model page's plain manifest: every
-// requirement's types, name, many and reference, every resource's name and
-// types in manifest order, and the params, provides and lifecycle beside
-// them.
 func TestParseManifest_ReadsTheWorkedV1BetaManifests(t *testing.T) {
 	for _, w := range workedManifests {
 		t.Run(w.file, func(t *testing.T) {
