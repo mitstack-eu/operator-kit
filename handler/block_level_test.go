@@ -2,6 +2,7 @@ package handler_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"reflect"
@@ -935,5 +936,108 @@ func TestBlockLevel_AnObserveErrorIsReportedUnderItsResource(t *testing.T) {
 	}
 	if o := resp.Resources["b"].Observe; o == nil || !strings.Contains(o.Error, "throttled") {
 		t.Errorf("b observe entry = %+v, want the observe error", o)
+	}
+}
+
+const roleBlockManifest = `apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: role-block
+  name: Role Block
+spec:
+  version: 1.0.0
+  resources:
+    - { name: deploy-role, type: aws.iam-role }
+    - { name: ecr-push-role, type: aws.iam-role }
+    - { name: audit-role, type: aws.iam-role }
+  provides: [deploy-role, ecr-push-role]
+  lifecycle:
+    endpoint: https://role-block.example/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
+`
+
+type secretObserver struct{ secrets map[string]string }
+
+func (o secretObserver) ObserveResource(ctx context.Context, r contract.ResourceRef) (contract.Observation, error) {
+	return contract.Observation{State: contract.Present, SecretOutputs: o.secrets}, nil
+}
+
+func serveRoleBlock(t *testing.T, operation string, arns map[string]map[string]string) (int, contract.Response) {
+	t.Helper()
+	s := kittest.NewSigner(t, "kid-role-block", 19)
+	cfg := baseConfig(t, &blockResource{cloud: newFakeCloud()}, s)
+	cfg.Manifest = []byte(roleBlockManifest)
+	cfg.Observers = map[string]handler.Observer{}
+	for name, secrets := range arns {
+		cfg.Observers[name] = secretObserver{secrets}
+	}
+	h, err := handler.New(cfg)
+	if err != nil {
+		t.Fatalf("handler.New: %v", err)
+	}
+	status, raw := postHook(t, h, s, envelope(t, s, "nonce-role-block-"+operation, map[string]any{"operation": operation}))
+	assertConforms(t, raw)
+	return status, decodeResponse(t, raw)
+}
+
+func roleArns() map[string]map[string]string {
+	return map[string]map[string]string{
+		"deploy-role":   {"roleArn": "arn:aws:iam::1:role/deploy"},
+		"ecr-push-role": {"roleArn": "arn:aws:iam::1:role/ecr-push"},
+		"audit-role":    {"roleArn": "arn:aws:iam::1:role/audit"},
+	}
+}
+
+func TestBlockLevel_AnswerKeysEachProvidedResourcesSecretOutputsByResourceName(t *testing.T) {
+	for _, op := range []string{"subscribe", "upgrade", "validate"} {
+		t.Run(op, func(t *testing.T) {
+			status, resp := serveRoleBlock(t, op, roleArns())
+
+			want := map[string]map[string]string{
+				"deploy-role":   {"roleArn": "arn:aws:iam::1:role/deploy"},
+				"ecr-push-role": {"roleArn": "arn:aws:iam::1:role/ecr-push"},
+			}
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response %+v", status, resp)
+			}
+			if !reflect.DeepEqual(resp.ResourceSecretOutputs, want) {
+				t.Errorf("ResourceSecretOutputs = %v, want %v: provided resources only, none for audit-role", resp.ResourceSecretOutputs, want)
+			}
+			if got := resp.SecretOutputs["roleArn"]; got != "arn:aws:iam::1:role/ecr-push" {
+				t.Errorf(`merged SecretOutputs["roleArn"] = %q, want the later provided resource's value, as before`, got)
+			}
+		})
+	}
+}
+
+func TestBlockLevel_NoSecretOutputValueAppearsInTheRecordedResourceOutcomes(t *testing.T) {
+	for _, op := range []string{"subscribe", "validate"} {
+		t.Run(op, func(t *testing.T) {
+			_, resp := serveRoleBlock(t, op, roleArns())
+
+			encoded, err := json.Marshal(resp.Resources)
+			if err != nil {
+				t.Fatalf("marshal Resources: %v", err)
+			}
+			if len(resp.Resources) != 3 {
+				t.Errorf("Resources has %d entries, want one per declared resource: %s", len(resp.Resources), encoded)
+			}
+			if strings.Contains(string(encoded), "arn:aws:iam") {
+				t.Errorf("Resources = %s, want no secret output value in the recorded outcome", encoded)
+			}
+		})
+	}
+}
+
+func TestBlockLevel_AProvidedResourceReportingNoSecretOutputHasNoEntryInTheAnswer(t *testing.T) {
+	arns := roleArns()
+	arns["ecr-push-role"] = nil
+
+	_, resp := serveRoleBlock(t, "subscribe", arns)
+
+	want := map[string]map[string]string{"deploy-role": {"roleArn": "arn:aws:iam::1:role/deploy"}}
+	if !reflect.DeepEqual(resp.ResourceSecretOutputs, want) {
+		t.Errorf("ResourceSecretOutputs = %v, want %v", resp.ResourceSecretOutputs, want)
 	}
 }

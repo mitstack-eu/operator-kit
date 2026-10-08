@@ -192,6 +192,36 @@ func TestResponseMarshal_OmitsResourcesWhenNoneAreReported(t *testing.T) {
 	}
 }
 
+func TestResponseMarshal_ResourceSecretOutputsRoundTripUnderTheirTagAndOmitWhenEmpty(t *testing.T) {
+	in := contract.Response{
+		ResourceSecretOutputs: map[string]map[string]string{"deploy-role": {"roleArn": "not-a-real-secret"}},
+	}
+
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("unmarshal fields: %v", err)
+	}
+	got, err := contract.DecodeResponse(raw)
+	if err != nil {
+		t.Fatalf("DecodeResponse(%s): %v", raw, err)
+	}
+	empty, _ := json.Marshal(contract.Response{})
+
+	if _, ok := fields["resourceSecretOutputs"]; !ok {
+		t.Errorf("encoded response %s has no resourceSecretOutputs key", raw)
+	}
+	if !reflect.DeepEqual(got.ResourceSecretOutputs, in.ResourceSecretOutputs) {
+		t.Errorf("decoded ResourceSecretOutputs = %v, want %v", got.ResourceSecretOutputs, in.ResourceSecretOutputs)
+	}
+	if strings.Contains(string(empty), "resourceSecretOutputs") {
+		t.Errorf("empty response encodes as %s, want resourceSecretOutputs omitted", empty)
+	}
+}
+
 func TestResponseMarshal_ResourcesRoundTripByName(t *testing.T) {
 	in := contract.Response{
 		Outputs: map[string]string{"vpcId": "vpc-0abc"},
