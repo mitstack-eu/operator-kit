@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -263,5 +264,117 @@ func TestSecretValues_CollectsEveryValueInSecretInputsAppSecretsAndSecrets(t *te
 	want := []string{"app-secret-1", "ghs_platformMintedToken", "hz-token", "secret-input-1", "ssh-key-material"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("SecretValues = %q, want %q (and never a param value)", got, want)
+	}
+}
+
+const (
+	sliceProjectPath = "cluster/app-s4168-c1-app-project.json"
+	sliceGithubToken = "ghs_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+	sliceClusterCred = "k3s-credential-Zm9vYmFyYmF6cXV4"
+	slicePAT         = "github_pat_fake0123456789"
+)
+
+func sliceRequest() contract.Desired {
+	return contract.Desired{
+		Params: map[string]string{
+			"appName":     "s4168-c1",
+			"repoUrl":     "https://github.com/mitstack-eu/k4168c",
+			"quotaCpu":    "1",
+			"quotaMemory": "1Gi",
+		},
+		Secrets: map[string]map[string]string{
+			"github":  {"token": sliceGithubToken, "owner": "mitstack-eu"},
+			"cluster": {"clusterCredential": sliceClusterCred},
+		},
+	}
+}
+
+func sliceProject(t *testing.T) map[string][]byte {
+	t.Helper()
+	body, err := os.ReadFile("testdata/slice-app-project/app-s4168-c1-app-project.json")
+	if err != nil {
+		t.Fatalf("reading the rendered AppProject: %v", err)
+	}
+	return map[string][]byte{sliceProjectPath: body}
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func TestCommitManifests_CommitsTheRenderedAppProjectOfAGithubOrgRepoUnderTheSliceRequest(t *testing.T) {
+	d := sliceRequest()
+	files := sliceProject(t)
+
+	_, _, err := gitops.CommitManifests(context.Background(), gitopstest.NewRepository(), files, "app-s4168-c1: project", gitops.SecretValues(d))
+
+	if err == nil {
+		return
+	}
+	t.Errorf("CommitManifests refused the AppProject: %v (ErrSecretInManifest: %v)", err, errors.Is(err, gitops.ErrSecretInManifest))
+	probe := func(where, value string) {
+		_, _, single := gitops.CommitManifests(context.Background(), gitopstest.NewRepository(), files, "probe", []string{value})
+		if single != nil {
+			t.Errorf("refused by %s = %q (ErrSecretInManifest: %v)", where, value, errors.Is(single, gitops.ErrSecretInManifest))
+		}
+	}
+	for _, k := range sortedKeys(d.SecretInputs) {
+		probe("SecretInputs["+k+"]", d.SecretInputs[k])
+	}
+	for _, k := range sortedKeys(d.AppSecrets) {
+		probe("AppSecrets["+k+"]", d.AppSecrets[k])
+	}
+	for _, g := range sortedKeys(d.Secrets) {
+		for _, k := range sortedKeys(d.Secrets[g]) {
+			probe(`Secrets["`+g+`"]["`+k+`"]`, d.Secrets[g][k])
+		}
+	}
+}
+
+func TestCommitManifests_RefusesAGithubOrClusterCredentialInAManifestEvenWhenAnOwnerIsPresent(t *testing.T) {
+	for _, tc := range []struct{ name, value string }{
+		{"the github token verbatim", sliceGithubToken},
+		{"the github token as standard base64", base64.StdEncoding.EncodeToString([]byte(sliceGithubToken))},
+		{"the cluster credential verbatim", sliceClusterCred},
+		{"the cluster credential as standard base64", base64.StdEncoding.EncodeToString([]byte(sliceClusterCred))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := map[string][]byte{"cluster/leak.json": []byte(`{"value":"` + tc.value + `"}`)}
+
+			_, _, err := gitops.CommitManifests(context.Background(), gitopstest.NewRepository(), files, "leak", gitops.SecretValues(sliceRequest()))
+
+			if !errors.Is(err, gitops.ErrSecretInManifest) {
+				t.Errorf("CommitManifests carrying %s: err = %v, want ErrSecretInManifest", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestSecretValues_CollectsTheCredentialsAndNeverTheGithubOwner(t *testing.T) {
+	d := sliceRequest()
+	d.Secrets["github"]["pat"] = slicePAT
+
+	got := gitops.SecretValues(d)
+
+	has := func(v string) bool {
+		for _, g := range got {
+			if g == v {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []string{sliceGithubToken, sliceClusterCred, slicePAT} {
+		if !has(want) {
+			t.Errorf("SecretValues has %d values, want it to contain the credential %q", len(got), want)
+		}
+	}
+	if has("mitstack-eu") {
+		t.Errorf("SecretValues contains the github owner %q, want it omitted", "mitstack-eu")
 	}
 }

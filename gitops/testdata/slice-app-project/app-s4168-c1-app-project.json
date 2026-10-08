@@ -1,0 +1,37 @@
+{
+  "apiVersion": "argoproj.io/v1alpha1",
+  "kind": "AppProject",
+  "metadata": {
+    "labels": {
+      "mitstack.dev/app": "s4168-c1",
+      "mitstack.dev/subscription": "sub_54812a3c56e0"
+    },
+    "name": "app-s4168-c1",
+    "namespace": "argocd"
+  },
+  "spec": {
+    "destinations": [
+      {
+        "namespace": "app-s4168-c1",
+        "server": "https://kubernetes.default.svc"
+      }
+    ],
+    "namespaceResourceBlacklist": [
+      {
+        "group": "networking.k8s.io",
+        "kind": "NetworkPolicy"
+      },
+      {
+        "group": "",
+        "kind": "ResourceQuota"
+      },
+      {
+        "group": "",
+        "kind": "LimitRange"
+      }
+    ],
+    "sourceRepos": [
+      "https://github.com/mitstack-eu/k4168c"
+    ]
+  }
+}
