@@ -11,18 +11,15 @@ import (
 	"github.com/mitstack-eu/operator-kit/contract"
 )
 
-// ErrStaleBase is wrapped by a Repository's Commit when parent is no longer
-// the tip.
+// ErrStaleBase is wrapped by a Repository's Commit when parent is no longer the tip.
 var ErrStaleBase = errors.New("gitops: the parent is no longer the tip")
 
-// ErrSecretInManifest is wrapped by CommitManifests, naming the path but
-// never the value, when a file carries a secret.
+// ErrSecretInManifest is wrapped by CommitManifests, naming the path but never the value.
 var ErrSecretInManifest = errors.New("gitops: a manifest carries a secret value")
 
 const maxCommitTries = 5
 
-// Repository is a GitOps repository read and written by revision, a commit
-// id, where "" names the empty repository.
+// Repository is a GitOps repository addressed by commit id, where "" names the empty repository.
 type Repository interface {
 	// Head returns the tip, or "" when there is no commit yet.
 	Head(ctx context.Context) (string, error)
@@ -30,23 +27,15 @@ type Repository interface {
 	// ReadFile returns path's content at revision and whether it exists.
 	ReadFile(ctx context.Context, revision, path string) ([]byte, bool, error)
 
-	// Commit lands changes on parent, a nil content deleting its path. When
-	// parent is not the tip it lands nothing and wraps ErrStaleBase.
+	// Commit lands changes on parent, nil deleting a path, and lands nothing but wraps ErrStaleBase when parent is not the tip.
 	Commit(ctx context.Context, parent string, changes map[string][]byte, message string) (string, error)
 
-	// Changed returns revision's parent, "" for the first commit, and the
-	// sorted paths it changed.
+	// Changed returns revision's parent, "" for the first commit, and the sorted paths it changed.
 	Changed(ctx context.Context, revision string) (string, []string, error)
 }
 
-// CommitManifests commits the files that differ from head, a nil content
-// removing its path, and returns the resulting revision and whether it
-// committed. It retries a moved tip a bounded number of times.
-//
-// It first refuses a file carrying any non-empty secret, wrapping
-// ErrSecretInManifest. The guard matches only a value verbatim or as that
-// value's own standard base64, so it misses a secret inside a larger encoded
-// value or in another encoding: a block must never render secret material.
+// CommitManifests refuses a file carrying a secret, then commits the files that differ from head, retrying a moved tip a bounded number of times.
+// The guard matches a value only verbatim or as its own standard base64, so a block must never render secret material in any form.
 func CommitManifests(ctx context.Context, repo Repository, files map[string][]byte, message string, secrets []string) (string, bool, error) {
 	if err := refuseSecrets(files, secrets); err != nil {
 		return "", false, err
@@ -54,8 +43,7 @@ func CommitManifests(ctx context.Context, repo Repository, files map[string][]by
 	return commitFiles(ctx, repo, files, message)
 }
 
-// Revert restores, on head, each path revision changed to its content at
-// revision's parent, and returns the revision holding the result.
+// Revert restores, on head, each path revision changed to its content at revision's parent.
 func Revert(ctx context.Context, repo Repository, revision, message string) (string, error) {
 	parent, paths, err := repo.Changed(ctx, revision)
 	if err != nil {
@@ -76,23 +64,17 @@ func Revert(ctx context.Context, repo Repository, revision, message string) (str
 	return rev, err
 }
 
-// secretGroupKey names one key inside one group of a Desired's Secrets.
 type secretGroupKey struct {
 	group string
 	key   string
 }
 
-// secretGroupIdentifiers lists the keys in a secret group that hold an
-// identifier rather than a credential.
+// secretGroupIdentifiers are identifiers, not credentials, so a manifest may carry them, as a repository URL carries the github owner.
 var secretGroupIdentifiers = map[secretGroupKey]bool{
 	{group: "github", key: "owner"}: true,
 }
 
-// SecretValues returns every value in d's SecretInputs, AppSecrets and
-// Secrets except the identifiers in secretGroupIdentifiers, for CommitManifests
-// to refuse. An identifier such as the github owner legitimately appears in a
-// manifest, for example in a repository URL, so refusing it would block a
-// correct commit.
+// SecretValues returns every value in d's SecretInputs, AppSecrets and Secrets except secretGroupIdentifiers, for CommitManifests to refuse.
 func SecretValues(d contract.Desired) []string {
 	var values []string
 	for _, v := range d.SecretInputs {
