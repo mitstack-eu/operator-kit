@@ -124,6 +124,8 @@ type fakeBlock struct {
 	created   map[string]contract.CreatedResource
 	size      string
 	container bool
+	// resources, when set, replaces the host block's resources by name and type.
+	resources map[string]string
 
 	extraTagged     bool
 	leaveOnDelete   string
@@ -137,6 +139,9 @@ func (b *fakeBlock) newID(prefix string) string {
 }
 
 func (b *fakeBlock) wanted(d contract.Desired) map[string]string {
+	if b.resources != nil {
+		return b.resources
+	}
 	if !b.container {
 		return map[string]string{"aws.ec2-instance": "aws.ec2-instance", "aws.ebs-volume": "aws.ebs-volume"}
 	}
@@ -446,6 +451,102 @@ func TestCheckBlock_FailsAProvidedResourceMissingARequiredOutput(t *testing.T) {
 	b, in := hostBlock(t)
 	in.Observers["aws.ec2-instance"] = providerObserver{p: b.p, drop: "hostId"}
 	wantProblemNaming(t, kittest.CheckBlock(in), `resource "aws.ec2-instance"`, "hostId")
+}
+
+const contributionBlockManifest = `apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: contribution-block
+  name: Contribution Block
+spec:
+  version: 1.0.0
+  resources:
+    - aws.ec2-instance
+    - github.scaffold-contribution
+  provides: [aws.ec2-instance]
+  lifecycle:
+    endpoint: https://contribution-block.example/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
+`
+
+// markedSnapshot is the platform's snapshot with each of ids marked endsWithSubscription.
+func markedSnapshot(t *testing.T, ids ...string) contract.TypeSnapshot {
+	t.Helper()
+	snap := typeSnapshot(t)
+	snap.Types = slices.Clone(snap.Types)
+	for i := range snap.Types {
+		if slices.Contains(ids, snap.Types[i].ID) {
+			snap.Types[i].EndsWithSubscription = true
+		}
+	}
+	return snap
+}
+
+// contributionBlock leaves its scaffold contribution in the provider on unsubscribe, as a contribution to an app repository the platform keeps does.
+func contributionBlock(t *testing.T) (*fakeBlock, kittest.Block) {
+	t.Helper()
+	p := newFakeProvider()
+	b := &fakeBlock{p: p, resources: map[string]string{
+		"aws.ec2-instance":             "aws.ec2-instance",
+		"github.scaffold-contribution": "github.scaffold-contribution",
+	}, leaveOnDelete: "github.scaffold-contribution"}
+	return b, kittest.Block{
+		Manifest: []byte(contributionBlockManifest),
+		Types:    markedSnapshot(t, "github.scaffold-contribution"),
+		Handler:  b,
+		Observers: map[string]handler.Observer{
+			"aws.ec2-instance":             providerObserver{p: p},
+			"github.scaffold-contribution": providerObserver{p: p},
+		},
+		Provider: p,
+		Desired:  blockDesired(""),
+	}
+}
+
+func TestCheckBlock_PassesAResourceOfAMarkedTypeLeftPresentAfterUnsubscribe(t *testing.T) {
+	_, in := contributionBlock(t)
+
+	problems := kittest.CheckBlock(in)
+
+	wantNoProblems(t, problems)
+}
+
+func TestCheckBlock_FailsAResourceOfAnUnmarkedTypeLeftPresentAfterUnsubscribe(t *testing.T) {
+	cases := []struct {
+		label, leave string
+		marked       []string
+	}{
+		{"an unmarked resource beside a marked one", "aws.ec2-instance", []string{"github.scaffold-contribution"}},
+		{"a contribution whose snapshot leaves its type unmarked", "github.scaffold-contribution", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			b, in := contributionBlock(t)
+			b.leaveOnDelete = tc.leave
+			in.Types = markedSnapshot(t, tc.marked...)
+
+			problems := kittest.CheckBlock(in)
+
+			wantProblemNaming(t, problems, `resource "`+tc.leave+`"`, "unsubscribe")
+		})
+	}
+}
+
+func TestAssertBlock_PassesAMarkedResourceLeftPresentAndFailsAnUnmarkedOne(t *testing.T) {
+	_, marked := contributionBlock(t)
+	b, unmarked := contributionBlock(t)
+	b.leaveOnDelete = "aws.ec2-instance"
+
+	passing := runAndCollect(func(tb testing.TB) { kittest.AssertBlock(tb, marked) })
+	failing := runAndCollect(func(tb testing.TB) { kittest.AssertBlock(tb, unmarked) })
+
+	if passing.failed {
+		t.Errorf("AssertBlock failed a block whose only resource left present is of a marked type: %q", passing.logs)
+	}
+	if !failing.failed {
+		t.Errorf("AssertBlock passed a block that leaves unmarked aws.ec2-instance present: %q", failing.logs)
+	}
 }
 
 func TestCheckBlock_PassesAProvidedResourceMissingOnlyAnOptionalOutput(t *testing.T) {

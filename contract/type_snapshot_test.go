@@ -97,3 +97,45 @@ func TestParseTypeSnapshot_RefusesASnapshotItCannotUse(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTypeSnapshot_ReadsATypesEndsWithSubscriptionMark(t *testing.T) {
+	cases := []struct {
+		label, field string
+		want         bool
+	}{
+		{"a type without the field reads as unmarked", ``, false},
+		{"a type marked false reads as unmarked", `, "endsWithSubscription": false`, false},
+		{"a type marked true reads as marked", `, "endsWithSubscription": true`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			raw := `{"version": 2, "types": [{"id": "github.scaffold-contribution", "capability": "github",` +
+				` "kind": "scaffold-contribution", "scope": "per-app", "version": 1` + tc.field + `}]}`
+
+			snap, err := contract.ParseTypeSnapshot([]byte(raw))
+
+			if err != nil {
+				t.Fatalf("ParseTypeSnapshot(%s): %v", raw, err)
+			}
+			typ, _ := snap.Lookup("github.scaffold-contribution")
+			if typ.EndsWithSubscription != tc.want {
+				t.Errorf("ParseTypeSnapshot(%s) EndsWithSubscription = %v; want %v", raw, typ.EndsWithSubscription, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseTypeSnapshot_ThePlatformsSnapshotWithoutTheFieldMarksNoType(t *testing.T) {
+	snap := platformSnapshot(t)
+
+	var marked []string
+	for _, typ := range snap.Types {
+		if typ.EndsWithSubscription {
+			marked = append(marked, typ.ID)
+		}
+	}
+
+	if len(marked) != 0 {
+		t.Errorf("types marked endsWithSubscription = %q; want none, since the fixture carries no such field", marked)
+	}
+}

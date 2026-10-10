@@ -382,6 +382,35 @@ func TestDeclaredResources_UnsubscribeDeleteErrorIsReportedUnderItsResource(t *t
 	}
 }
 
+func TestDeclaredResources_UnsubscribeCountsAResourceOfAMarkedTypeAbsentOnceItsDeleteSucceeds(t *testing.T) {
+	present := contract.Present
+	contribution := &kittest.FakeResource{Count: 1, ObserveState: &present}
+	s := kittest.NewSigner(t, "kid-declared-marked", 13)
+	h := newHandler(t, nil, s, func(c *handler.Config) {
+		c.Manifest = []byte(contributionManifest(contributionType))
+		c.Resources = map[string]handler.DeclaredResource{contributionType: contribution}
+		c.Types = contributionSnapshot(t)
+	})
+
+	status, raw := postHook(t, h, s, envelope(t, s, "nonce-declared-marked", map[string]any{"operation": "unsubscribe"}))
+
+	assertConforms(t, raw)
+	resp := decodeResponse(t, raw)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response %+v", status, resp)
+	}
+	if resp.Absent == nil || !*resp.Absent {
+		t.Errorf("absent = %v, want true: the resource's type ends with its subscription; detail %q", resp.Absent, resp.StatusDetail)
+	}
+	if contribution.DeleteCalls != 1 || contribution.ObserveCalls != 0 {
+		t.Errorf("Delete, Observe calls = %d, %d; want one Delete and no Observe", contribution.DeleteCalls, contribution.ObserveCalls)
+	}
+	o := outcomeOf(t, resp, contributionType)
+	if o.Observe != nil || o.Delete == nil || o.Delete.State != contract.Absent || o.Delete.Type != contributionType {
+		t.Errorf("resource %q outcome = %+v, want a delete of state absent and type %s with no observe", contributionType, o, contributionType)
+	}
+}
+
 func TestDeclaredResources_ValidateObservesEachResourceOnce(t *testing.T) {
 	cases := []struct {
 		name                        string

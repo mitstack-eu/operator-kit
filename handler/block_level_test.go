@@ -1041,3 +1041,171 @@ func TestBlockLevel_AProvidedResourceReportingNoSecretOutputHasNoEntryInTheAnswe
 		t.Errorf("ResourceSecretOutputs = %v, want %v", resp.ResourceSecretOutputs, want)
 	}
 }
+
+const contributionType = "github.scaffold-contribution"
+
+func contributionManifest(resources ...string) string {
+	return `apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: contribution-block
+  name: Contribution Block
+spec:
+  version: 1.0.0
+  resources:
+    - ` + strings.Join(resources, "\n    - ") + `
+  lifecycle:
+    endpoint: https://contribution-block.example/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
+`
+}
+
+// contributionSnapshot marks the scaffold contribution and leaves aws.ec2-instance unmarked.
+func contributionSnapshot(t *testing.T) contract.TypeSnapshot {
+	t.Helper()
+	snap, err := contract.ParseTypeSnapshot([]byte(`{"version": 2, "types": [
+  {"id": "github.scaffold-contribution", "capability": "github", "kind": "scaffold-contribution", "scope": "per-app", "endsWithSubscription": true, "version": 1},
+  {"id": "aws.ec2-instance", "capability": "aws", "kind": "host", "scope": "per-app", "version": 1}]}`))
+	if err != nil {
+		t.Fatalf("ParseTypeSnapshot: %v", err)
+	}
+	return snap
+}
+
+func recordedContribution() map[string]any {
+	return map[string]any{"recordedResources": map[string]any{
+		contributionType:   map[string]any{"type": contributionType, "identity": map[string]any{"repository": "acme/weather"}},
+		"aws.ec2-instance": map[string]any{"type": "aws.ec2-instance", "identity": map[string]any{"instanceId": "i-0abc"}},
+	}}
+}
+
+// standingObserver answers present on every call, as files left in a repository the platform keeps do.
+type standingObserver struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (o *standingObserver) ObserveResource(ctx context.Context, r contract.ResourceRef) (contract.Observation, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.calls++
+	return contract.Observation{State: contract.Present}, nil
+}
+
+func (o *standingObserver) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.calls
+}
+
+type failingDeleteBlock struct{ *blockResource }
+
+func (b failingDeleteBlock) Delete(ctx context.Context, id contract.Identity) error {
+	b.deleteCalls++
+	return errors.New("the GitHub API answered 502")
+}
+
+func contributionConfig(manifest string, obs map[string]handler.Observer, types contract.TypeSnapshot) func(*handler.Config) {
+	return func(c *handler.Config) {
+		c.Manifest = []byte(manifest)
+		c.Observers = obs
+		c.Types = types
+	}
+}
+
+func TestBlockLevel_UnsubscribeCountsAResourceOfAMarkedTypeAbsentOnceTheBlocksDeleteSucceeds(t *testing.T) {
+	block := &blockResource{cloud: newFakeCloud()}
+	contribution := &standingObserver{}
+	obs := map[string]handler.Observer{contributionType: contribution}
+
+	status, resp := serveBlockLevel(t, block, nil, "unsubscribe", recordedContribution(),
+		contributionConfig(contributionManifest(contributionType), obs, contributionSnapshot(t)))
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response %+v", status, resp)
+	}
+	if block.deleteCalls != 1 {
+		t.Errorf("block Delete calls = %d, want 1", block.deleteCalls)
+	}
+	if resp.Absent == nil || !*resp.Absent {
+		t.Errorf("absent = %v, want true: the contribution's type ends with its subscription; detail %q", resp.Absent, resp.StatusDetail)
+	}
+	o := resp.Resources[contributionType]
+	if o.Observe != nil {
+		t.Errorf("resource %q observe = %+v, want none: its absence is not observed", contributionType, *o.Observe)
+	}
+	if o.Delete == nil || o.Delete.State != contract.Absent || o.Delete.Type != contributionType || o.Delete.Error != "" {
+		t.Errorf("resource %q delete = %+v, want state absent, type %s and no error", contributionType, o.Delete, contributionType)
+	}
+	if n := contribution.count(); n != 0 {
+		t.Errorf("contribution observer called %d times on unsubscribe, want 0", n)
+	}
+}
+
+func TestBlockLevel_UnsubscribeStillAnswersAbsentFalseNamingAnUnmarkedResourceObservedPresent(t *testing.T) {
+	obs := map[string]handler.Observer{contributionType: &standingObserver{}, "aws.ec2-instance": &standingObserver{}}
+
+	status, resp := serveBlockLevel(t, &blockResource{cloud: newFakeCloud()}, nil, "unsubscribe", recordedContribution(),
+		contributionConfig(contributionManifest("aws.ec2-instance", contributionType), obs, contributionSnapshot(t)))
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response %+v", status, resp)
+	}
+	if resp.Absent == nil || *resp.Absent {
+		t.Errorf("absent = %v, want false: aws.ec2-instance is unmarked and still observed present", resp.Absent)
+	}
+	if !strings.Contains(resp.StatusDetail, `"aws.ec2-instance"`) {
+		t.Errorf("statusDetail = %q, want it to name resource \"aws.ec2-instance\"", resp.StatusDetail)
+	}
+	if o := resp.Resources["aws.ec2-instance"].Observe; o == nil || o.State != contract.Present {
+		t.Errorf("resource \"aws.ec2-instance\" observe = %+v, want state present", o)
+	}
+	if d := resp.Resources[contributionType].Delete; d == nil || d.State != contract.Absent {
+		t.Errorf("resource %q delete = %+v, want state absent", contributionType, d)
+	}
+}
+
+func TestBlockLevel_UnsubscribeObservesAContributionWhoseSnapshotDoesNotMarkItsType(t *testing.T) {
+	cases := []struct {
+		label string
+		types contract.TypeSnapshot
+	}{
+		{"no snapshot", contract.TypeSnapshot{}},
+		{"a snapshot leaving the type unmarked", contract.TypeSnapshot{Version: 1, Types: []contract.SnapshotType{{ID: contributionType}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			contribution := &standingObserver{}
+			obs := map[string]handler.Observer{contributionType: contribution}
+
+			_, resp := serveBlockLevel(t, &blockResource{cloud: newFakeCloud()}, nil, "unsubscribe", recordedContribution(),
+				contributionConfig(contributionManifest(contributionType), obs, tc.types))
+
+			if resp.Absent == nil || *resp.Absent {
+				t.Errorf("absent = %v, want false: nothing marks %s, so its absence must be observed", resp.Absent, contributionType)
+			}
+			if contribution.count() == 0 {
+				t.Errorf("contribution observer never called, want its absence observed")
+			}
+		})
+	}
+}
+
+func TestBlockLevel_UnsubscribeCountsNoMarkedResourceAbsentWhenTheBlocksDeleteFails(t *testing.T) {
+	block := failingDeleteBlock{&blockResource{cloud: newFakeCloud()}}
+	obs := map[string]handler.Observer{contributionType: &standingObserver{}}
+
+	status, resp := serveBlockLevel(t, block, nil, "unsubscribe", recordedContribution(),
+		contributionConfig(contributionManifest(contributionType), obs, contributionSnapshot(t)))
+
+	if status == http.StatusOK {
+		t.Errorf("status = 200, want the delete's failure answered as an error; response %+v", resp)
+	}
+	if resp.Absent != nil && *resp.Absent {
+		t.Errorf("absent = true, want no absence claimed when the block's delete failed")
+	}
+	if d := resp.Resources[contributionType].Delete; d != nil && d.State == contract.Absent {
+		t.Errorf("resource %q delete = %+v, want it not counted absent", contributionType, *d)
+	}
+}
