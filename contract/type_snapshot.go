@@ -15,26 +15,27 @@ type TypeSnapshot struct {
 
 // SnapshotType is one resource type of a snapshot.
 type SnapshotType struct {
-	ID           string            `json:"id"`
-	Capability   string            `json:"capability"`
-	Kind         string            `json:"kind"`
-	Scope        string            `json:"scope"`
-	Stateful     bool              `json:"stateful"`
-	Pricing      SnapshotPricing   `json:"pricing"`
-	Category     string            `json:"category"`
-	Languages    []string          `json:"languages,omitempty"`
-	ArtifactType string            `json:"artifactType,omitempty"`
-	ReliesOn     []string          `json:"reliesOn,omitempty"`
-	Hosts        string            `json:"hosts,omitempty"`
-	Outputs      []SnapshotOutput  `json:"outputs"`
-	Observe      string            `json:"observe,omitempty"`
-	Absence      string            `json:"absence,omitempty"`
-	TimeBudgets  map[string]string `json:"timeBudgets,omitempty"`
-	Failures     []SnapshotFailure `json:"failures,omitempty"`
-	Version      int               `json:"version"`
+	ID         string `json:"id"`
+	Capability string `json:"capability"`
+	Kind       string `json:"kind"`
+	Scope      string `json:"scope"`
+	Stateful   bool   `json:"stateful"`
+	// EndsWithSubscription marks a type whose resource ends with the block's unsubscribe, since its absence cannot be observed.
+	EndsWithSubscription bool              `json:"endsWithSubscription,omitempty"`
+	Pricing              SnapshotPricing   `json:"pricing"`
+	Category             string            `json:"category"`
+	Languages            []string          `json:"languages,omitempty"`
+	ArtifactType         string            `json:"artifactType,omitempty"`
+	ReliesOn             []string          `json:"reliesOn,omitempty"`
+	Hosts                string            `json:"hosts,omitempty"`
+	Outputs              []SnapshotOutput  `json:"outputs"`
+	Observe              string            `json:"observe,omitempty"`
+	Absence              string            `json:"absence,omitempty"`
+	TimeBudgets          map[string]string `json:"timeBudgets,omitempty"`
+	Failures             []SnapshotFailure `json:"failures,omitempty"`
+	Version              int               `json:"version"`
 }
 
-// SnapshotOutput is one output a resource of the type publishes.
 type SnapshotOutput struct {
 	Name     string `json:"name"`
 	Secret   bool   `json:"secret"`
@@ -47,7 +48,6 @@ type SnapshotPricing struct {
 	Key    string `json:"key,omitempty"`
 }
 
-// SnapshotFailure is one failure a resource of the type can meet.
 type SnapshotFailure struct {
 	Class string `json:"class"`
 	Cause string `json:"cause"`
@@ -72,7 +72,6 @@ func ParseTypeSnapshot(raw []byte) (TypeSnapshot, error) {
 	return snap, nil
 }
 
-// Lookup returns the snapshot's type whose id is id.
 func (s TypeSnapshot) Lookup(id string) (SnapshotType, bool) {
 	i := slices.IndexFunc(s.Types, func(t SnapshotType) bool { return t.ID == id })
 	if i < 0 {
@@ -81,7 +80,6 @@ func (s TypeSnapshot) Lookup(id string) (SnapshotType, bool) {
 	return s.Types[i], true
 }
 
-// Output returns the output the type declares under name.
 func (t SnapshotType) Output(name string) (SnapshotOutput, bool) {
 	i := slices.IndexFunc(t.Outputs, func(o SnapshotOutput) bool { return o.Name == name })
 	if i < 0 {

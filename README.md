@@ -118,6 +118,12 @@ refuses an entry listing a type the snapshot does not hold.
 refuses a reference the block lacks, and an output that any listed type does
 not declare in the snapshot. Neither reads the kit's own catalogue.
 
+A snapshot type may carry `"endsWithSubscription": true`, read into
+`SnapshotType.EndsWithSubscription`, and a type without the field is
+unmarked. The mark is for a resource whose absence cannot be observed, such
+as a scaffold contribution's files in an app repository the platform keeps.
+Such a resource ends when the block's unsubscribe succeeds.
+
 `ManifestRequirement.Types` and `ManifestResource.Types` hold the listed ids,
 and `ManifestResource.Type` holds the one id of an entry that lists one.
 `ManifestRequirement.Kind` and `In`, `ManifestResource.Inputs` and `On`, and
@@ -359,7 +365,7 @@ is known, and the verb's `Desired`.
 | Verb | What the Handler does |
 |---|---|
 | subscribe, upgrade | Runs one `Ensure`, then observes each declared resource in manifest order until it reports `Present` |
-| unsubscribe | Runs one `Delete`, or `DeleteWithRequest` for a `handler.RequestDeleter`, then observes each declared resource in reverse order until it reports `Absent` |
+| unsubscribe | Runs one `Delete`, or `DeleteWithRequest` for a `handler.RequestDeleter`, then observes each declared resource in reverse order until it reports `Absent`, skipping one whose type `Config.Types` marks `endsWithSubscription` |
 | validate | Observes each declared resource once, and names the resources an upgrade would replace |
 
 A block-level handler that implements `handler.ResourceReporter` reports
@@ -426,6 +432,21 @@ appears in `resources`, because the engine records that map.
 
 A resource not present within the verb budget answers `pending:true` naming
 it, and unsubscribe answers `absent:true` only when every resource observes absent.
+The exception is a resource whose type `Config.Types` marks
+`endsWithSubscription`. The Handler counts it absent once the delete
+succeeds and never observes it, so its entry carries a `delete` outcome of
+state `absent` and no `observe`:
+
+```json
+{"absent": true,
+ "resources": {"github.scaffold-contribution": {"delete": {"state": "absent", "type": "github.scaffold-contribution",
+   "statusDetail": "type github.scaffold-contribution ends with its subscription, so the resource is absent once the delete succeeds, unobserved"}}}}
+```
+
+A failed delete still answers the ordinary error, and a block given no
+`Config.Types`, or a snapshot leaving the type unmarked, observes the
+resource as any other. A block passes `Config.Types` the snapshot its
+manifest is judged against.
 A request naming one resource is served for validate alone, observing that
 resource with the request's `resourceIdentity` and `resourceType`. A named
 subscribe, upgrade or unsubscribe answers 400. The request's
@@ -499,7 +520,9 @@ resource the provider loses must then observe not present. With `Upgrade`
 set, a resource the upgrade replaces must be named in the `replaces` of the
 validate before it, and the problem says so when its type is stateful.
 `Upgrade` nil while a declared type is stateful is a problem. After
-unsubscribe every declared resource must observe absent. A requirement
+unsubscribe every declared resource must observe absent, except one whose
+type the snapshot marks `endsWithSubscription`, since the check serves the
+handler with `Config.Types` set to that snapshot. A requirement
 listing more than one type runs the check once per listed type, with
 `Requirements` giving each type's outputs, and each problem names the type.
 `AssertBlock` logs which guards ran. blockverify's resources suite requires

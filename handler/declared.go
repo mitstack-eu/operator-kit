@@ -159,7 +159,7 @@ func (r *declaredRun) ensure(ctx context.Context, nr namedResource) (*contract.C
 	return &contract.CallOutcome{Identity: report.Identity, Outputs: report.Outputs}, nil
 }
 
-// deleteEach settles each resource absent in reverse creation order so one created earlier outlives every one created after it, and deletes none on its own for a block-level block.
+// deleteEach settles each resource absent in reverse creation order so one created earlier outlives every one created after it, deletes none on its own for a block-level block, and observes none whose type ends with its subscription.
 func (r *declaredRun) deleteEach(ctx context.Context) (int, contract.Response) {
 	var outputs map[string]string
 	for i := len(r.resources) - 1; i >= 0; i-- {
@@ -174,6 +174,11 @@ func (r *declaredRun) deleteEach(ctx context.Context) (int, contract.Response) {
 				return r.fail(nr.name, &entry, &entry.Delete, err)
 			}
 			entry.Delete = &contract.CallOutcome{}
+		}
+		if ended, ok := r.endedWithSubscription(nr); ok {
+			entry.Delete = ended
+			r.outcomes[nr.name] = entry
+			continue
 		}
 
 		obs, attempts, err := r.settle(ctx, nr, contract.Absent, &entry)
@@ -196,6 +201,21 @@ func (r *declaredRun) deleteEach(ctx context.Context) (int, contract.Response) {
 
 	absent := true
 	return http.StatusOK, contract.Response{Absent: &absent, Outputs: outputs, Resources: r.outcomes}
+}
+
+// endedWithSubscription records nr absent by its delete, not by an observe, when Config.Types marks its type EndsWithSubscription.
+func (r *declaredRun) endedWithSubscription(nr namedResource) (*contract.CallOutcome, bool) {
+	ref := r.refFor(nr, r.refs[nr.name].Type, r.refs[nr.name].Identity)
+	t, ok := r.h.types.Lookup(ref.Type)
+	if !ok || !t.EndsWithSubscription {
+		return nil, false
+	}
+	return &contract.CallOutcome{
+		State:        contract.Absent,
+		Type:         ref.Type,
+		Identity:     ref.Identity,
+		StatusDetail: fmt.Sprintf("type %s ends with its subscription, so the resource is absent once the delete succeeds, unobserved", ref.Type),
+	}, true
 }
 
 // validateEach never polls, and an Observe error is classified, never folded into pending, and stops the probe there.

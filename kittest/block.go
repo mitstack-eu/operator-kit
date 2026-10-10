@@ -125,6 +125,7 @@ func newBlockServer(in Block) (*blockServer, error) {
 		Resource:     in.Handler,
 		Manifest:     in.Manifest,
 		Observers:    in.Observers,
+		Types:        in.Types,
 		JWKSURL:      "https://kittest.invalid/jwks",
 		PublicKey:    func(string) (ed25519.PublicKey, error) { return pub, nil },
 		VerbBudget:   3,

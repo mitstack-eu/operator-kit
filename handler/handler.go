@@ -16,12 +16,10 @@ import (
 // maxHookBodyBytes bounds the read so a hostile caller cannot exhaust memory before the trust boundary runs.
 const maxHookBodyBytes = 1 << 20 // 1 MiB
 
-// defaultVerbBudget is how many times Observe is polled before answering pending or a definite absent:false.
 const defaultVerbBudget = 20
 
 const defaultPollInterval = 500 * time.Millisecond
 
-// Resource is everything a block author implements, around which the Handler owns every lifecycle invariant.
 type Resource interface {
 	// Ensure may be called more than once for the same subscription and must converge rather than duplicate.
 	Ensure(ctx context.Context, d contract.Desired) error
@@ -48,34 +46,23 @@ type ReplacementPlanner interface {
 	PlanReplacements(ctx context.Context, d contract.Desired) ([]string, error)
 }
 
-// DeclaredResource is what a block implements once for each resource its manifest declares, ensured in creation order and deleted in reverse.
-//
-// Deprecated: a block serves its declared resources through its block-level
-// Resource and an Observer for each, under Config.Observers; the next major
-// release removes DeclaredResource and Config.Resources.
+// Deprecated: a block serves its declared resources through its block-level Resource and an Observer for each, and the next major release removes DeclaredResource.
 type DeclaredResource interface {
 	Ensure(ctx context.Context, d contract.Desired) error
 
 	Observe(ctx context.Context, id contract.Identity) (contract.Observation, error)
 
-	// Delete must not error when the resource was never created.
 	Delete(ctx context.Context, id contract.Identity) error
 }
 
-// ReportingResource replaces Ensure with EnsureWithReport, and an identity or output value equal to a request secret is refused as secret-in-output.
-//
-// Deprecated: it serves a DeclaredResource alone; a block-level Resource
-// reports what it created through ResourceReporter. The next major release
-// removes it.
+// Deprecated: a block-level Resource reports what it created through ResourceReporter, and the next major release removes ReportingResource.
 type ReportingResource interface {
 	EnsureWithReport(ctx context.Context, d contract.Desired) (contract.Ensured, error)
 }
 
 // RequestDeleter replaces Delete with a call carrying the verb's Desired, for a resource reachable only through recorded inputs and identity.
-//
 // A declared resource asserts var _ handler.RequestDeleter = (*T)(nil) because HandoverResource declares a DeleteWithRequest with a different signature, which would otherwise be silently deleted through Delete.
 type RequestDeleter interface {
-	// DeleteWithRequest must not error when the resource was never created.
 	DeleteWithRequest(ctx context.Context, d contract.Desired) error
 }
 
@@ -85,16 +72,13 @@ type Hook func(ctx context.Context, d contract.Desired) error
 // The closed set of hook points the Handler calls; New refuses a hook registered under any other name.
 const (
 	HookBeforeEnsure = "beforeEnsure"
-	// HookAfterEnsure runs after Ensure succeeds, before the settle loop.
 	HookAfterEnsure  = "afterEnsure"
 	HookBeforeDelete = "beforeDelete"
-	// HookAfterDelete runs after Delete succeeds, before the settle loop.
-	HookAfterDelete = "afterDelete"
+	HookAfterDelete  = "afterDelete"
 )
 
-// Config wires a Handler; only JWKSURL and exactly one of Resource and Resources are required.
+// Config wires a Handler; only JWKSURL and exactly one of Resource and Resources are required, and every other field has a working zero value.
 type Config struct {
-	// Resource is set instead of Resources, never both.
 	Resource Resource
 
 	// Observers needs one Observer for each declared resource, and is refused with Resources or without a mitstack/v1beta manifest.
@@ -103,12 +87,7 @@ type Config struct {
 	// TypeObservers is keyed by resource-type id and serves a validate naming a resource the manifest no longer declares; refused with Resources or without a mitstack/v1beta manifest.
 	TypeObservers map[string]Observer
 
-	// Resources needs Manifest, refuses Hooks, and is set instead of Resource, never both.
-	//
-	// Deprecated: serve the block over Resource with an Observer for each
-	// declared resource under Observers; the next major release removes
-	// Resources, and with it a request running ensure or delete on one
-	// named resource.
+	// Deprecated: serve the block over Resource with an Observer for each declared resource, and the next major release removes Resources.
 	Resources map[string]DeclaredResource
 
 	// Manifest is required when Hooks or Resources is non-empty, since a hook or declared resource is registered only if the manifest declares it.
@@ -116,27 +95,24 @@ type Config struct {
 
 	Hooks map[string]Hook
 
+	// Types is the type snapshot the manifest names its types from, and a declared resource of a type it marks EndsWithSubscription is counted absent once the unsubscribe's delete succeeds, unobserved.
+	Types contract.TypeSnapshot
+
 	JWKSURL string
 
 	// PublicKey defaults to a kit KeyCache over JWKSURL and is no alternative to it, since webhook.AuthenticateHook rejects every request when JWKSURL is empty.
 	PublicKey func(kid string) (ed25519.PublicKey, error)
 
-	// Replay defaults to webhook.NewReplay().
 	Replay *webhook.Replay
 
-	// Logs serves GET /logs when set, and GET /logs answers 404 otherwise.
 	Logs *webhook.LogBuffer
 
-	// VerbBudget defaults to 20.
 	VerbBudget int
 
-	// PollInterval defaults to 500ms.
 	PollInterval time.Duration
 
-	// Sleep lets a test supply a no-op so it never waits on wall-clock time.
 	Sleep func(ctx context.Context, d time.Duration)
 
-	// Now defaults to time.Now.
 	Now func() time.Time
 }
 
@@ -145,16 +121,14 @@ type Handler struct {
 	resource Resource
 	hooks    map[string]Hook
 
-	// declared is nil for a block served over a single Resource.
 	declared      []namedResource
 	blockLevel    bool
 	typeObservers map[string]Observer
-	// provided names the resources spec.provides offers, whose outputs a block-level answer carries.
-	provided map[string]bool
-	// secretParams are scrubbed like any request secret when a resource input binds one.
-	secretParams map[string]bool
+	provided      map[string]bool
+	secretParams  map[string]bool
 
 	retainsOnUnsubscribe bool
+	types                contract.TypeSnapshot
 
 	jwksURL   string
 	publicKey func(kid string) (ed25519.PublicKey, error)
@@ -169,7 +143,7 @@ type Handler struct {
 	idempotency *idempotencyCache
 }
 
-// New builds a Handler from cfg and refuses a configuration that would let a block override an invariant; see declaredResources and observedResources.
+// New refuses a configuration that would let a block override an invariant.
 func New(cfg Config) (*Handler, error) {
 	if cfg.Resource != nil && len(cfg.Resources) > 0 {
 		return nil, errResourceAndResources
@@ -224,6 +198,7 @@ func New(cfg Config) (*Handler, error) {
 		provided:             declared.provided,
 		secretParams:         declared.secretParams,
 		retainsOnUnsubscribe: declared.retainsOnUnsubscribe,
+		types:                cfg.Types,
 		jwksURL:              cfg.JWKSURL,
 		publicKey:            cfg.PublicKey,
 		replay:               cfg.Replay,
@@ -270,7 +245,6 @@ func defaultSleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-// Serve routes POST /hook and GET /logs, answering 404 for any other path and 405 for the wrong method.
 func (h *Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/hook":
@@ -290,7 +264,6 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ServeHTTP makes Handler an http.Handler by calling Serve.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.Serve(w, r) }
 
 func (h *Handler) webhookDeps() webhook.Deps {
@@ -302,7 +275,6 @@ func (h *Handler) webhookDeps() webhook.Deps {
 	}
 }
 
-// serveLogs delegates to webhook.ServeLogs so the reviewed trust boundary, not a second copy, guards the log output.
 func (h *Handler) serveLogs(w http.ResponseWriter, r *http.Request) {
 	if h.logs == nil {
 		http.NotFound(w, r)
@@ -311,7 +283,6 @@ func (h *Handler) serveLogs(w http.ResponseWriter, r *http.Request) {
 	webhook.ServeLogs(h.webhookDeps(), h.logs, w, r)
 }
 
-// serveHook runs its checks in order so a request failing any earlier one never reaches the Resource.
 func (h *Handler) serveHook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxHookBodyBytes+1))
 	if err != nil {
