@@ -15,25 +15,26 @@ type TypeSnapshot struct {
 
 // SnapshotType is one resource type of a snapshot.
 type SnapshotType struct {
-	ID         string `json:"id"`
-	Capability string `json:"capability"`
-	Kind       string `json:"kind"`
-	Scope      string `json:"scope"`
-	Stateful   bool   `json:"stateful"`
+	ID           string            `json:"id"`
+	Capability   string            `json:"capability"`
+	Kind         string            `json:"kind"`
+	Scope        string            `json:"scope"`
+	Stateful     bool              `json:"stateful"`
+	Pricing      SnapshotPricing   `json:"pricing"`
+	Category     string            `json:"category"`
+	Languages    []string          `json:"languages,omitempty"`
+	ArtifactType string            `json:"artifactType,omitempty"`
+	ReliesOn     []string          `json:"reliesOn,omitempty"`
+	Hosts        string            `json:"hosts,omitempty"`
+	Outputs      []SnapshotOutput  `json:"outputs"`
+	Observe      string            `json:"observe,omitempty"`
+	Absence      string            `json:"absence,omitempty"`
+	TimeBudgets  map[string]string `json:"timeBudgets,omitempty"`
+	Failures     []SnapshotFailure `json:"failures,omitempty"`
+	Version      int               `json:"version"`
+
 	// EndsWithSubscription marks a type whose resource ends with the block's unsubscribe, since its absence cannot be observed.
-	EndsWithSubscription bool              `json:"endsWithSubscription,omitempty"`
-	Pricing              SnapshotPricing   `json:"pricing"`
-	Category             string            `json:"category"`
-	Languages            []string          `json:"languages,omitempty"`
-	ArtifactType         string            `json:"artifactType,omitempty"`
-	ReliesOn             []string          `json:"reliesOn,omitempty"`
-	Hosts                string            `json:"hosts,omitempty"`
-	Outputs              []SnapshotOutput  `json:"outputs"`
-	Observe              string            `json:"observe,omitempty"`
-	Absence              string            `json:"absence,omitempty"`
-	TimeBudgets          map[string]string `json:"timeBudgets,omitempty"`
-	Failures             []SnapshotFailure `json:"failures,omitempty"`
-	Version              int               `json:"version"`
+	EndsWithSubscription bool `json:"endsWithSubscription,omitempty"`
 }
 
 type SnapshotOutput struct {

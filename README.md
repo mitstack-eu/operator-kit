@@ -440,6 +440,7 @@ state `absent` and no `observe`:
 ```json
 {"absent": true,
  "resources": {"github.scaffold-contribution": {"delete": {"state": "absent", "type": "github.scaffold-contribution",
+   "identity": {"repository": "acme/weather"},
    "statusDetail": "type github.scaffold-contribution ends with its subscription, so the resource is absent once the delete succeeds, unobserved"}}}}
 ```
 

@@ -63,6 +63,7 @@ type ReportingResource interface {
 // RequestDeleter replaces Delete with a call carrying the verb's Desired, for a resource reachable only through recorded inputs and identity.
 // A declared resource asserts var _ handler.RequestDeleter = (*T)(nil) because HandoverResource declares a DeleteWithRequest with a different signature, which would otherwise be silently deleted through Delete.
 type RequestDeleter interface {
+	// DeleteWithRequest must not error when the resource was never created.
 	DeleteWithRequest(ctx context.Context, d contract.Desired) error
 }
 
@@ -77,7 +78,7 @@ const (
 	HookAfterDelete  = "afterDelete"
 )
 
-// Config wires a Handler; only JWKSURL and exactly one of Resource and Resources are required, and every other field has a working zero value.
+// Config wires a Handler; only JWKSURL and exactly one of Resource and Resources are required, VerbBudget defaults to 20, PollInterval to 500ms, and a nil Logs answers GET /logs with 404.
 type Config struct {
 	Resource Resource
 
@@ -116,7 +117,6 @@ type Config struct {
 	Now func() time.Time
 }
 
-// Handler serves the four lifecycle verbs over a Resource, with every field unexported so a caller cannot adjust its invariants after New.
 type Handler struct {
 	resource Resource
 	hooks    map[string]Hook
