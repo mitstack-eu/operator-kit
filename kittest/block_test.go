@@ -652,7 +652,7 @@ func TestCheckBlock_FailsATaggedObjectBeyondTheRoomItsDeclaredResourcesAndTheirP
 	}
 }
 
-// cfnBlockManifest is aws-app-infra-cfn 2.0.0's resources without deploy-role and ecr-push-role, which become parts of the instance and the repository.
+// cfnBlockManifest declares aws-app-infra-cfn's resources with its deploy and push roles left to the instance's and the repository's parts.
 const cfnBlockManifest = `apiVersion: mitstack/v1beta
 type: block
 metadata:
