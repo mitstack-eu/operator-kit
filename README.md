@@ -538,7 +538,10 @@ to the Handler's own rules. After subscribe, every declared resource must
 observe present with an identity, and every provided one with the outputs
 its type marks required. Everything the provider lists under the
 subscription's id must match, by type and count, a declared resource or a
-part that a declared resource's type lists in the snapshot. A
+part that a declared resource's type lists in the snapshot. The check pools
+the room per kind: it adds up every recorded resource's parts of a kind,
+summing two entries of one kind in a type, and does not tie a part to the
+resource that owns it. A
 resource the provider loses must then observe not present. With `Upgrade`
 set, a resource the upgrade replaces must be named in the `replaces` of the
 validate before it, and the problem says so when its type is stateful.
