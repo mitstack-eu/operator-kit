@@ -885,6 +885,32 @@ is `AlreadyExistsException`, which the SDK's typed exception satisfies. An
 update with nothing to change succeeds, and so does deleting a stack that does
 not exist.
 
+### Writing an app's hostname record
+
+An AWS host operator points the app's name in the platform's apps zone at the
+box's Elastic IP, and deletes that record when the app unsubscribes. The
+`appsdns` package holds this one record for every such operator. You build an
+`appsdns.Zone` from the zone's name, its hosted zone ID and a client, and the
+operator writes a short adapter from its AWS SDK Route 53 client to
+`appsdns.Client`, as it does for `cfnstack`.
+
+`Zone.Hostname("myapp")` returns `myapp.apps.mitstack.dev` for the zone
+`apps.mitstack.dev`, and an empty string when the zone, its ID or the app name
+is missing. `Zone.Publish` upserts the A record with a TTL of 60 seconds,
+because a replaced box gets a new address and a stale answer would point at
+the old one.
+
+`Zone.Retire` reads the record and deletes it with the TTL and values it
+holds, since Route 53 refuses a delete that does not match them exactly. A
+refused delete returns the client's error, so a teardown fails instead of
+leaving a name that points at a released address. A record that is already
+gone, before the delete or by the time it runs, counts as deleted.
+
+`Zone` is also the observer for the `mitstack.app-hostname` resource. It reads
+only Route 53 and reports the record present with its `appHostname`, `address`
+and `appUrl` outputs, absent when the zone holds no such record, and unknown
+when the zone is not configured or the read fails.
+
 ## Testing
 
 ```
