@@ -4,6 +4,7 @@ package main
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,18 +35,33 @@ func TestRun_PassesTheManifestSuiteOnABlockThatNeedsCredentialRefresh(t *testing
 	}
 }
 
-func TestRun_PassesBlockverifyOnAFixtureThatNeedsCredentialRefresh(t *testing.T) {
-	files := goldenFixtureFiles(t)
-	files["manifest.yaml"] = requireNeedsCredentialRefreshFixture(t)
-
-	stdout, exit := runBlockverify(t, "--json", "--standalone", newFixtureFrom(t, files))
-	r := decodeReport(t, stdout)
-	if exit != 0 || r.Verdict != "pass" {
-		t.Errorf("exit %d, verdict %q; want 0 and pass\nstdout:\n%s", exit, r.Verdict, stdout)
+// The golden handler predates kit/v1, so a v1beta manifest fails suites the field never reaches; comparing with the same manifest unset isolates the field.
+func TestRun_NeedsCredentialRefreshChangesNoSuiteStatus(t *testing.T) {
+	const line = "    needsCredentialRefresh: true\n"
+	set := requireNeedsCredentialRefreshFixture(t)
+	statuses := func(manifest string) (map[string]string, report) {
+		files := goldenFixtureFiles(t)
+		files["manifest.yaml"] = manifest
+		stdout, _ := runBlockverify(t, "--json", "--standalone", newFixtureFrom(t, files))
+		r := decodeReport(t, stdout)
+		out := make(map[string]string, len(r.Suites))
+		for _, s := range r.Suites {
+			out[s.Name] = s.Status
+		}
+		return out, r
 	}
-	for _, name := range []string{"trust-plumbing", "contract", "manifest", "naming"} {
-		if s := suiteByName(t, r, name); s.Status != "pass" {
-			t.Errorf("%s status = %q, want %q; detail: %s", name, s.Status, "pass", s.Detail)
+
+	withField, r := statuses(set)
+	without, _ := statuses(strings.Replace(set, line, "", 1))
+	if !reflect.DeepEqual(withField, without) {
+		t.Errorf("suite statuses with the field = %v, without it = %v; want the field to change none", withField, without)
+	}
+	if m := suiteByName(t, r, "manifest"); m.Status != "pass" {
+		t.Errorf("manifest status = %q, want %q; detail: %s", m.Status, "pass", m.Detail)
+	}
+	for _, s := range r.Suites {
+		if strings.Contains(s.Detail, "needsCredentialRefresh") {
+			t.Errorf("%s detail names the field: %s", s.Name, s.Detail)
 		}
 	}
 }
