@@ -1,0 +1,18 @@
+apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: crossplane-app-infra
+  name: Crossplane App Infrastructure
+spec:
+  version: 1.0.0
+  description: >
+    Creates the app's network and security group in the consumer's own AWS
+    account through Crossplane, whose web-identity credential the platform
+    refreshes before it expires.
+  resources: [aws.vpc, aws.security-group]
+  provides: [aws.security-group]
+  lifecycle:
+    endpoint: https://api.mitstack.dev/operators/crossplane-app-infra/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
+    needsCredentialRefresh: true

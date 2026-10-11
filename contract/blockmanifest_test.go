@@ -820,3 +820,62 @@ func TestManifestSpec_ReceivesAppSecretsMarshalsUnderItsOptionalKey(t *testing.T
 		t.Errorf("ManifestSpec.ReceivesAppSecrets json tag = %q, want %q", got, want)
 	}
 }
+
+// lifecycleNeedsCredentialRefresh reads the field by reflection, so a missing field fails its own test instead of the package build.
+func lifecycleNeedsCredentialRefresh(t *testing.T, b *contract.BlockManifest) bool {
+	t.Helper()
+	f := reflect.ValueOf(b.Spec.Lifecycle).FieldByName("NeedsCredentialRefresh")
+	if !f.IsValid() {
+		t.Fatal("ManifestLifecycle has no NeedsCredentialRefresh field")
+	}
+	if f.Kind() != reflect.Bool {
+		t.Fatalf("ManifestLifecycle.NeedsCredentialRefresh kind = %v, want bool", f.Kind())
+	}
+	return f.Bool()
+}
+
+func TestParseManifest_V1BetaReadsNeedsCredentialRefreshAsAnOptionalLifecycleFlag(t *testing.T) {
+	for _, tc := range []struct {
+		label, line string
+		want        bool
+	}{
+		{"absent reads false", "", false},
+		{"true reads true", "    needsCredentialRefresh: true\n", true},
+		{"false reads false", "    needsCredentialRefresh: false\n", false},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			b := parseBeta(t, editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n"+tc.line))
+
+			if got := lifecycleNeedsCredentialRefresh(t, b); got != tc.want {
+				t.Errorf("spec.lifecycle.needsCredentialRefresh after %q = %v, want %v", tc.line, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseManifest_V1BetaNeedsCredentialRefreshTakesTrueOrFalseOnly(t *testing.T) {
+	for _, value := range []string{"yes", "1", `"true"`, "sometimes", "null"} {
+		t.Run("refuses "+value, func(t *testing.T) {
+			raw := editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    needsCredentialRefresh: "+value+"\n")
+
+			requireRefusedNaming(t, raw, "spec.lifecycle.needsCredentialRefresh")
+		})
+	}
+}
+
+func TestParseManifest_V1BetaRefusesAnUnknownLifecycleKeyBesideNeedsCredentialRefresh(t *testing.T) {
+	raw := editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    needsCredentialRefresh: true\n    bogus: 1\n")
+
+	requireRefusedNaming(t, raw, "spec.lifecycle.bogus")
+}
+
+func TestManifestLifecycle_NeedsCredentialRefreshMarshalsUnderItsOptionalKey(t *testing.T) {
+	f, ok := reflect.TypeOf(contract.ManifestLifecycle{}).FieldByName("NeedsCredentialRefresh")
+	if !ok {
+		t.Fatal("ManifestLifecycle has no NeedsCredentialRefresh field")
+	}
+
+	if got, want := f.Tag.Get("json"), "needsCredentialRefresh,omitempty"; got != want {
+		t.Errorf("ManifestLifecycle.NeedsCredentialRefresh json tag = %q, want %q", got, want)
+	}
+}

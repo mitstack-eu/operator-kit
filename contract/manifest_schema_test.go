@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -212,6 +213,37 @@ func TestManifestSchema_SpecListsReceivesAppSecretsAsABoolean(t *testing.T) {
 		}
 		if prop["type"] != "boolean" {
 			t.Errorf("%s schema spec.receivesAppSecrets type = %v, want boolean", label, prop["type"])
+		}
+	}
+}
+
+func TestManifestSchema_LifecycleListsNeedsCredentialRefreshAsAnOptionalBoolean(t *testing.T) {
+	doc := schemaDoc(t)
+	generated, err := contract.GenerateManifestSchema()
+	if err != nil {
+		t.Fatalf("contract.GenerateManifestSchema(): %v", err)
+	}
+	var gen map[string]any
+	if err := json.Unmarshal(generated, &gen); err != nil {
+		t.Fatalf("generated schema is not a JSON object: %v", err)
+	}
+
+	for label, d := range map[string]map[string]any{"committed": doc, "generated": gen} {
+		lifecycle := schemaAt(t, d, d, "properties", "spec", "properties", "lifecycle")
+		props, _ := lifecycle["properties"].(map[string]any)
+		prop, ok := props["needsCredentialRefresh"].(map[string]any)
+		if !ok {
+			t.Errorf("%s schema spec.lifecycle properties = %q, want needsCredentialRefresh among them", label, sortedKeys(props))
+			continue
+		}
+		if prop["type"] != "boolean" {
+			t.Errorf("%s schema spec.lifecycle.needsCredentialRefresh type = %v, want boolean", label, prop["type"])
+		}
+		if required := sortedStrings(lifecycle["required"]); slices.Contains(required, "needsCredentialRefresh") {
+			t.Errorf("%s schema spec.lifecycle requires %q, want needsCredentialRefresh optional", label, required)
+		}
+		if lifecycle["additionalProperties"] != false {
+			t.Errorf("%s schema spec.lifecycle additionalProperties = %v, want false", label, lifecycle["additionalProperties"])
 		}
 	}
 }
