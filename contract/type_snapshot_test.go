@@ -82,6 +82,14 @@ func TestParseTypeSnapshot_RefusesASnapshotItCannotUse(t *testing.T) {
 			`{"version": 1, "types": [{"id": "aws.vpc", "capability": "aws", "kind": "network", "scope": "per-app", "version": 1},` +
 				` {"id": "aws.vpc", "capability": "aws", "kind": "network", "scope": "per-app", "version": 2}]}`,
 			[]string{"aws.vpc"}},
+		{"a part whose count is below one",
+			`{"version": 1, "types": [{"id": "aws.ec2-instance", "capability": "aws", "kind": "host", "scope": "per-app", "version": 1,` +
+				` "parts": [{"kind": "aws.iam-role", "count": 0}]}]}`,
+			[]string{"aws.ec2-instance", "aws.iam-role", "count"}},
+		{"a part with no kind",
+			`{"version": 1, "types": [{"id": "aws.ec2-instance", "capability": "aws", "kind": "host", "scope": "per-app", "version": 1,` +
+				` "parts": [{"count": 1}]}]}`,
+			[]string{"aws.ec2-instance", "kind"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -137,5 +145,40 @@ func TestParseTypeSnapshot_ThePlatformsSnapshotWithoutTheFieldMarksNoType(t *tes
 
 	if len(marked) != 0 {
 		t.Errorf("types marked endsWithSubscription = %q; want none, since the fixture carries no such field", marked)
+	}
+}
+
+func TestParseTypeSnapshot_ReadsEachPartKindAndCountOfAType(t *testing.T) {
+	raw := `{"version": 3, "types": [{"id": "aws.ec2-instance", "capability": "aws", "kind": "host", "scope": "per-app", "version": 2,` +
+		` "parts": [{"kind": "aws.iam-role", "count": 2}, {"kind": "aws.iam-instance-profile", "count": 1}, {"kind": "aws.elastic-ip", "count": 1}]}]}`
+
+	snap, err := contract.ParseTypeSnapshot([]byte(raw))
+
+	if err != nil {
+		t.Fatalf("ParseTypeSnapshot(%s): %v", raw, err)
+	}
+	instance, _ := snap.Lookup("aws.ec2-instance")
+	want := []contract.SnapshotPart{
+		{Kind: "aws.iam-role", Count: 2},
+		{Kind: "aws.iam-instance-profile", Count: 1},
+		{Kind: "aws.elastic-ip", Count: 1},
+	}
+	if !slices.Equal(instance.Parts, want) {
+		t.Errorf("ParseTypeSnapshot(%s) aws.ec2-instance Parts = %+v; want %+v", raw, instance.Parts, want)
+	}
+}
+
+func TestParseTypeSnapshot_ThePlatformsSnapshotWithoutTheFieldGivesNoTypeParts(t *testing.T) {
+	snap := platformSnapshot(t)
+
+	var withParts []string
+	for _, typ := range snap.Types {
+		if len(typ.Parts) != 0 {
+			withParts = append(withParts, typ.ID)
+		}
+	}
+
+	if len(withParts) != 0 {
+		t.Errorf("types with parts = %q; want none, since the fixture carries no parts field", withParts)
 	}
 }

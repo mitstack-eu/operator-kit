@@ -126,6 +126,8 @@ type fakeBlock struct {
 	container bool
 	// resources, when set, replaces the host block's resources by name and type.
 	resources map[string]string
+	// parts are tagged beside the declared resources on every ensure and removed on delete.
+	parts []observe.Tagged
 
 	extraTagged     bool
 	leaveOnDelete   string
@@ -177,6 +179,9 @@ func (b *fakeBlock) EnsureResources(ctx context.Context, d contract.Desired) ([]
 		out = append(out, r)
 	}
 	b.size = d.Params["volumeSize"]
+	for _, part := range b.parts {
+		b.p.put(part.ID, part.Type, d.SubscriptionID)
+	}
 	if b.extraTagged {
 		b.p.put("state-bucket", "aws.s3-bucket", d.SubscriptionID)
 	}
@@ -215,6 +220,9 @@ func (b *fakeBlock) DeleteWithRequest(ctx context.Context, d contract.Desired) e
 		b.p.remove(r.Identity["id"])
 		delete(b.created, name)
 	}
+	for _, part := range b.parts {
+		b.p.remove(part.ID)
+	}
 	b.p.remove("state-bucket")
 	return nil
 }
@@ -242,12 +250,17 @@ func (o providerObserver) ObserveResource(_ context.Context, r contract.Resource
 }
 
 func (o providerObserver) outputs(typ, id string) map[string]string {
-	if typ != "aws.ec2-instance" {
-		return nil
+	switch typ {
+	case "aws.ecr-repository":
+		return map[string]string{"registryHost": "123456789012.dkr.ecr.eu-central-1.amazonaws.com"}
+	case "mitstack.app-hostname":
+		return map[string]string{"appHostname": "myapp.apps.mitstack.dev", "address": "203.0.113.7", "appUrl": "https://myapp.apps.mitstack.dev"}
+	case "aws.ec2-instance":
+		out := map[string]string{"hostId": id, "execKind": "ssm", "execTarget": id, "publicIp": "203.0.113.7"}
+		delete(out, o.drop)
+		return out
 	}
-	out := map[string]string{"hostId": id, "execKind": "ssm", "execTarget": id, "publicIp": "203.0.113.7"}
-	delete(out, o.drop)
-	return out
+	return nil
 }
 
 // byTypeObserver needs no identity, so a block reporting none still observes present.
@@ -553,4 +566,180 @@ func TestCheckBlock_PassesAProvidedResourceMissingOnlyAnOptionalOutput(t *testin
 	b, in := hostBlock(t)
 	in.Observers["aws.ec2-instance"] = providerObserver{p: b.p, drop: "publicIp"}
 	wantNoProblems(t, kittest.CheckBlock(in))
+}
+
+// platformParts is the parts list each AWS type of the platform catalogue declares.
+var platformParts = map[string][]contract.SnapshotPart{
+	"aws.ec2-instance": {
+		{Kind: "aws.iam-role", Count: 2},
+		{Kind: "aws.iam-instance-profile", Count: 1},
+		{Kind: "aws.elastic-ip", Count: 1},
+	},
+	"aws.ecr-repository": {{Kind: "aws.iam-role", Count: 1}},
+	"aws.ebs-volume": {
+		{Kind: "aws.iam-role", Count: 1},
+		{Kind: "aws.dlm-lifecycle-policy", Count: 1},
+	},
+	"aws.ssm-association": {{Kind: "aws.ssm-document", Count: 1}},
+	"aws.egress-proxy": {
+		{Kind: "aws.ec2-instance", Count: 1},
+		{Kind: "aws.security-group", Count: 1},
+		{Kind: "aws.security-group-rule", Count: 1},
+		{Kind: "aws.iam-role", Count: 1},
+		{Kind: "aws.iam-instance-profile", Count: 1},
+		{Kind: "aws.ssm-document", Count: 1},
+	},
+}
+
+// partsSnapshot is the platform's snapshot with each type carrying the parts platformParts gives it.
+func partsSnapshot(t *testing.T) contract.TypeSnapshot {
+	t.Helper()
+	snap := typeSnapshot(t)
+	snap.Types = slices.Clone(snap.Types)
+	for i := range snap.Types {
+		snap.Types[i].Parts = platformParts[snap.Types[i].ID]
+	}
+	return snap
+}
+
+// hostParts are the objects the host block's instance and volume hold, each tagged with the subscription's id.
+func hostParts() []observe.Tagged {
+	return []observe.Tagged{
+		{Type: "aws.iam-role", ID: "mitstack-app-myapp-instance"},
+		{Type: "aws.iam-role", ID: "mitstack-app-myapp-deploy"},
+		{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile"},
+		{Type: "aws.elastic-ip", ID: "eipalloc-0host"},
+		{Type: "aws.iam-role", ID: "mitstack-app-myapp-dlm"},
+		{Type: "aws.dlm-lifecycle-policy", ID: "policy-0data"},
+	}
+}
+
+func TestCheckBlock_PassesATaggedPartOfAKindTheRecordedResourcesTypeLists(t *testing.T) {
+	b, in := hostBlock(t)
+	b.parts = hostParts()
+	in.Types = partsSnapshot(t)
+
+	problems := kittest.CheckBlock(in)
+
+	wantNoProblems(t, problems)
+}
+
+func TestCheckBlock_FailsEveryTaggedPartWhenTheSnapshotListsNoParts(t *testing.T) {
+	b, in := hostBlock(t)
+	b.parts = hostParts()
+
+	problems := kittest.CheckBlock(in)
+
+	for _, part := range hostParts() {
+		wantProblemNaming(t, problems, `resource "`+part.ID+`"`, part.Type)
+	}
+}
+
+func TestCheckBlock_FailsATaggedObjectBeyondTheRoomItsDeclaredResourcesAndTheirPartsGive(t *testing.T) {
+	b, in := hostBlock(t)
+	b.parts = append(hostParts(),
+		observe.Tagged{Type: "aws.vpc", ID: "vpc-0stray"},
+		observe.Tagged{Type: "aws.iam-role", ID: "mitstack-app-myapp-stray"},
+	)
+	in.Types = partsSnapshot(t)
+
+	problems := kittest.CheckBlock(in)
+
+	wantProblemNaming(t, problems, `resource "vpc-0stray"`, "aws.vpc")
+	wantProblemNaming(t, problems, `resource "mitstack-app-myapp-stray"`, "aws.iam-role")
+	if len(problems) != 2 {
+		t.Errorf("CheckBlock problems = %q; want exactly the stray VPC and the role beyond the parts' room", problems)
+	}
+}
+
+// cfnBlockManifest is aws-app-infra-cfn 2.0.0's resources without deploy-role and ecr-push-role, which become parts of the instance and the repository.
+const cfnBlockManifest = `apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: aws-app-infra-cfn
+  name: AWS App Infrastructure (CloudFormation)
+spec:
+  version: 3.0.0
+  requires: [github.repository]
+  resources:
+    - aws.security-group
+    - { name: instance-role, type: aws.iam-role }
+    - aws.ec2-instance
+    - aws.ebs-volume
+    - aws.ecr-repository
+    - { name: dlm-role, type: aws.iam-role }
+    - { name: edge-config, type: aws.ssm-association }
+    - { name: app-env, type: aws.ssm-association }
+    - { name: data-volume, type: aws.ssm-association }
+    - mitstack.app-hostname
+  provides: [aws.ec2-instance, aws.ebs-volume, aws.ecr-repository, mitstack.app-hostname]
+  lifecycle:
+    endpoint: https://api.mitstack.dev/operators/aws-app-infra-cfn/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
+`
+
+// appHostnameType is the platform's mitstack.app-hostname, which the snapshot fixture predates.
+var appHostnameType = contract.SnapshotType{
+	ID: "mitstack.app-hostname", Capability: "mitstack", Kind: "app-address", Scope: "per-app", Category: "network", Version: 1,
+	Outputs: []contract.SnapshotOutput{
+		{Name: "appHostname", Required: true},
+		{Name: "address", Required: true},
+		{Name: "appUrl", Required: true},
+	},
+}
+
+// cfnBlock tags its declared instance and DLM roles itself and holds its deploy and push roles, instance profile, Elastic IP, DLM policy and SSM documents as parts.
+func cfnBlock(t *testing.T) kittest.Block {
+	t.Helper()
+	p := newFakeProvider()
+	resources := map[string]string{
+		"aws.security-group":    "aws.security-group",
+		"instance-role":         "aws.iam-role",
+		"aws.ec2-instance":      "aws.ec2-instance",
+		"aws.ebs-volume":        "aws.ebs-volume",
+		"aws.ecr-repository":    "aws.ecr-repository",
+		"dlm-role":              "aws.iam-role",
+		"edge-config":           "aws.ssm-association",
+		"app-env":               "aws.ssm-association",
+		"data-volume":           "aws.ssm-association",
+		"mitstack.app-hostname": "mitstack.app-hostname",
+	}
+	b := &fakeBlock{p: p, resources: resources, parts: []observe.Tagged{
+		{Type: "aws.iam-role", ID: "mitstack-app-myapp-deploy"},
+		{Type: "aws.iam-role", ID: "mitstack-app-myapp-ecr-push"},
+		{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile"},
+		{Type: "aws.elastic-ip", ID: "eipalloc-0host"},
+		{Type: "aws.dlm-lifecycle-policy", ID: "policy-0data"},
+		{Type: "aws.ssm-document", ID: "mitstack-app-myapp-edge-config"},
+		{Type: "aws.ssm-document", ID: "mitstack-app-myapp-app-env"},
+		{Type: "aws.ssm-document", ID: "mitstack-app-myapp-data-volume"},
+	}}
+	observers := map[string]handler.Observer{}
+	for name := range resources {
+		observers[name] = providerObserver{p: p}
+	}
+	snap := partsSnapshot(t)
+	snap.Types = append(snap.Types, appHostnameType)
+	upgrade := blockDesired("20")
+	return kittest.Block{
+		Manifest:  []byte(cfnBlockManifest),
+		Types:     snap,
+		Handler:   b,
+		Observers: observers,
+		Provider:  p,
+		Desired:   blockDesired("10"),
+		Upgrade:   &upgrade,
+		Requirements: map[string]map[string]map[string]string{
+			"github.repository": {"github.repository": {"repo": "acme/myapp"}},
+		},
+	}
+}
+
+func TestCheckBlock_PassesTheCfnBlockWhoseDeployAndPushRolesAreParts(t *testing.T) {
+	in := cfnBlock(t)
+
+	problems := kittest.CheckBlock(in)
+
+	wantNoProblems(t, problems)
 }

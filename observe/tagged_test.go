@@ -69,6 +69,32 @@ func TestAWSTagged_ListsEachTaggedARNAsItsType(t *testing.T) {
 	}
 }
 
+func TestAWSTagged_ListsEachPartARNAsItsPartKind(t *testing.T) {
+	api := &fakeTagging{arns: []string{
+		"arn:aws:iam::123456789012:instance-profile/mitstack/mitstack-app-myapp-profile",
+		"arn:aws:ec2:eu-central-1:123456789012:elastic-ip/eipalloc-0abc",
+		"arn:aws:ec2:eu-central-1:123456789012:security-group-rule/sgr-0abc",
+		"arn:aws:dlm:eu-central-1:123456789012:policy/policy-0abc",
+		"arn:aws:ssm:eu-central-1:123456789012:document/mitstack-app-myapp-edge-config",
+	}}
+
+	got, err := observe.AWSTagged{API: api}.ListTagged(context.Background(), contract.Desired{}, "sub-1")
+
+	if err != nil {
+		t.Fatalf("ListTagged: %v", err)
+	}
+	want := []observe.Tagged{
+		{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile"},
+		{Type: "aws.elastic-ip", ID: "eipalloc-0abc"},
+		{Type: "aws.security-group-rule", ID: "sgr-0abc"},
+		{Type: "aws.dlm-lifecycle-policy", ID: "policy-0abc"},
+		{Type: "aws.ssm-document", ID: "mitstack-app-myapp-edge-config"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ListTagged(%q) =\n%+v\nwant\n%+v", api.arns, got, want)
+	}
+}
+
 func TestAWSTagged_ReturnsTheAPIsError(t *testing.T) {
 	boom := errors.New("tagging: throttled")
 	_, err := observe.AWSTagged{API: &fakeTagging{err: boom}}.ListTagged(context.Background(), contract.Desired{}, "sub-1")
