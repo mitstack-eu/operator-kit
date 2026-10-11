@@ -2,6 +2,40 @@
   "version": 1,
   "types": [
     {
+      "id": "aws.dlm-lifecycle-policy",
+      "capability": "aws",
+      "kind": "snapshot-policy",
+      "scope": "per-app",
+      "stateful": false,
+      "pricing": {
+        "priced": false
+      },
+      "category": "storage",
+      "outputs": [],
+      "observe": "GetLifecyclePolicy returns the policy in state ENABLED",
+      "absence": "GetLifecyclePolicy answers ResourceNotFoundException for the policy id",
+      "timeBudgets": {
+        "delete": "2m",
+        "ensure": "2m",
+        "observe": "30s"
+      },
+      "failures": [
+        {
+          "class": "transient",
+          "cause": "the AWS API throttled the call or answered a server error"
+        },
+        {
+          "class": "permanent",
+          "cause": "the connected AWS role lacks permission for the call"
+        },
+        {
+          "class": "permanent",
+          "cause": "the account lifecycle policy quota for the region is reached"
+        }
+      ],
+      "version": 1
+    },
+    {
       "id": "aws.ebs-volume",
       "capability": "aws",
       "kind": "block-volume",
@@ -47,7 +81,17 @@
           "cause": "the KMS key the volume is encrypted with is disabled or not granted to the role"
         }
       ],
-      "version": 1
+      "version": 1,
+      "parts": [
+        {
+          "type": "aws.iam-role",
+          "count": 1
+        },
+        {
+          "type": "aws.dlm-lifecycle-policy",
+          "count": 1
+        }
+      ]
     },
     {
       "id": "aws.ec2-configuration",
@@ -197,7 +241,21 @@
           "cause": "the account's vCPU quota for the instance family is reached"
         }
       ],
-      "version": 1
+      "version": 1,
+      "parts": [
+        {
+          "type": "aws.iam-role",
+          "count": 2
+        },
+        {
+          "type": "aws.iam-instance-profile",
+          "count": 1
+        },
+        {
+          "type": "aws.elastic-ip",
+          "count": 1
+        }
+      ]
     },
     {
       "id": "aws.ec2-postgres-database",
@@ -349,7 +407,13 @@
           "cause": "delete is refused because the repository still holds images and force_delete is off"
         }
       ],
-      "version": 1
+      "version": 1,
+      "parts": [
+        {
+          "type": "aws.iam-role",
+          "count": 1
+        }
+      ]
     },
     {
       "id": "aws.egress-proxy",
@@ -386,6 +450,106 @@
         {
           "class": "permanent",
           "cause": "the account's vCPU quota for the instance family is reached"
+        }
+      ],
+      "version": 1,
+      "parts": [
+        {
+          "type": "aws.ec2-instance",
+          "count": 1
+        },
+        {
+          "type": "aws.security-group",
+          "count": 1
+        },
+        {
+          "type": "aws.security-group-rule",
+          "count": 1
+        },
+        {
+          "type": "aws.iam-role",
+          "count": 1
+        },
+        {
+          "type": "aws.iam-instance-profile",
+          "count": 1
+        },
+        {
+          "type": "aws.ssm-document",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "aws.elastic-ip",
+      "capability": "aws",
+      "kind": "ip-address",
+      "scope": "per-app",
+      "stateful": false,
+      "pricing": {
+        "priced": true
+      },
+      "category": "network",
+      "outputs": [
+        {
+          "name": "publicIp",
+          "secret": false,
+          "required": true
+        }
+      ],
+      "observe": "DescribeAddresses returns the address for the allocation id",
+      "absence": "DescribeAddresses answers InvalidAllocationID.NotFound for the allocation id",
+      "timeBudgets": {
+        "delete": "2m",
+        "ensure": "2m",
+        "observe": "30s"
+      },
+      "failures": [
+        {
+          "class": "transient",
+          "cause": "the AWS API throttled the call or answered a server error"
+        },
+        {
+          "class": "permanent",
+          "cause": "the connected AWS role lacks permission for the call"
+        },
+        {
+          "class": "permanent",
+          "cause": "the account Elastic IP address quota for the region is reached"
+        }
+      ],
+      "version": 1
+    },
+    {
+      "id": "aws.iam-instance-profile",
+      "capability": "aws",
+      "kind": "instance-profile",
+      "scope": "per-app",
+      "stateful": false,
+      "pricing": {
+        "priced": false
+      },
+      "category": "identity-and-access",
+      "outputs": [],
+      "observe": "GetInstanceProfile returns the instance profile with its role",
+      "absence": "GetInstanceProfile answers NoSuchEntity for the profile name",
+      "timeBudgets": {
+        "delete": "2m",
+        "ensure": "2m",
+        "observe": "30s"
+      },
+      "failures": [
+        {
+          "class": "transient",
+          "cause": "the AWS API throttled the call or answered a server error"
+        },
+        {
+          "class": "permanent",
+          "cause": "the connected AWS role lacks permission for the call"
+        },
+        {
+          "class": "permanent",
+          "cause": "the instance profile name is taken in the account"
         }
       ],
       "version": 1
@@ -592,6 +756,40 @@
       "version": 1
     },
     {
+      "id": "aws.security-group-rule",
+      "capability": "aws",
+      "kind": "firewall",
+      "scope": "per-app",
+      "stateful": false,
+      "pricing": {
+        "priced": false
+      },
+      "category": "network",
+      "outputs": [],
+      "observe": "DescribeSecurityGroupRules returns the rule in its security group",
+      "absence": "DescribeSecurityGroupRules answers InvalidSecurityGroupRuleId.NotFound for the rule id",
+      "timeBudgets": {
+        "delete": "2m",
+        "ensure": "2m",
+        "observe": "30s"
+      },
+      "failures": [
+        {
+          "class": "transient",
+          "cause": "the AWS API throttled the call or answered a server error"
+        },
+        {
+          "class": "permanent",
+          "cause": "the connected AWS role lacks permission for the call"
+        },
+        {
+          "class": "permanent",
+          "cause": "the security group rule quota is reached"
+        }
+      ],
+      "version": 1
+    },
+    {
       "id": "aws.ssm-association",
       "capability": "aws",
       "kind": "host-configuration",
@@ -629,6 +827,46 @@
         {
           "class": "permanent",
           "cause": "the document's run on the target exits with a failure"
+        }
+      ],
+      "version": 1,
+      "parts": [
+        {
+          "type": "aws.ssm-document",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "aws.ssm-document",
+      "capability": "aws",
+      "kind": "host-configuration",
+      "scope": "per-app",
+      "stateful": false,
+      "pricing": {
+        "priced": false
+      },
+      "category": "compute",
+      "outputs": [],
+      "observe": "DescribeDocument returns the document in status Active",
+      "absence": "DescribeDocument answers InvalidDocument for the document name",
+      "timeBudgets": {
+        "delete": "2m",
+        "ensure": "2m",
+        "observe": "30s"
+      },
+      "failures": [
+        {
+          "class": "transient",
+          "cause": "the AWS API throttled the call or answered a server error"
+        },
+        {
+          "class": "permanent",
+          "cause": "the connected AWS role lacks permission for the call"
+        },
+        {
+          "class": "permanent",
+          "cause": "the document content is malformed"
         }
       ],
       "version": 1

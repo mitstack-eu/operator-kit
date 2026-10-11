@@ -568,36 +568,13 @@ func TestCheckBlock_PassesAProvidedResourceMissingOnlyAnOptionalOutput(t *testin
 	wantNoProblems(t, kittest.CheckBlock(in))
 }
 
-// platformParts is the parts list each AWS type of the platform catalogue declares.
-var platformParts = map[string][]contract.SnapshotPart{
-	"aws.ec2-instance": {
-		{Kind: "aws.iam-role", Count: 2},
-		{Kind: "aws.iam-instance-profile", Count: 1},
-		{Kind: "aws.elastic-ip", Count: 1},
-	},
-	"aws.ecr-repository": {{Kind: "aws.iam-role", Count: 1}},
-	"aws.ebs-volume": {
-		{Kind: "aws.iam-role", Count: 1},
-		{Kind: "aws.dlm-lifecycle-policy", Count: 1},
-	},
-	"aws.ssm-association": {{Kind: "aws.ssm-document", Count: 1}},
-	"aws.egress-proxy": {
-		{Kind: "aws.ec2-instance", Count: 1},
-		{Kind: "aws.security-group", Count: 1},
-		{Kind: "aws.security-group-rule", Count: 1},
-		{Kind: "aws.iam-role", Count: 1},
-		{Kind: "aws.iam-instance-profile", Count: 1},
-		{Kind: "aws.ssm-document", Count: 1},
-	},
-}
-
-// partsSnapshot is the platform's snapshot with each type carrying the parts platformParts gives it.
-func partsSnapshot(t *testing.T) contract.TypeSnapshot {
+// partlessSnapshot is the platform's snapshot with every type's parts removed.
+func partlessSnapshot(t *testing.T) contract.TypeSnapshot {
 	t.Helper()
 	snap := typeSnapshot(t)
 	snap.Types = slices.Clone(snap.Types)
 	for i := range snap.Types {
-		snap.Types[i].Parts = platformParts[snap.Types[i].ID]
+		snap.Types[i].Parts = nil
 	}
 	return snap
 }
@@ -614,19 +591,43 @@ func hostParts() []observe.Tagged {
 	}
 }
 
-func TestCheckBlock_PassesATaggedPartOfAKindTheRecordedResourcesTypeLists(t *testing.T) {
+func TestCheckBlock_PassesATaggedPartOfATypeTheRecordedResourcesTypeLists(t *testing.T) {
 	b, in := hostBlock(t)
 	b.parts = hostParts()
-	in.Types = partsSnapshot(t)
 
 	problems := kittest.CheckBlock(in)
 
 	wantNoProblems(t, problems)
 }
 
+func TestCheckBlock_PassesATaggedInstanceProfileTheRecordedInstancesTypeListsAsAPart(t *testing.T) {
+	b, in := hostBlock(t)
+	b.parts = []observe.Tagged{{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile"}}
+
+	problems := kittest.CheckBlock(in)
+
+	wantNoProblems(t, problems)
+}
+
+func TestCheckBlock_FailsASecondTaggedInstanceProfileBeyondTheInstancesPartRoom(t *testing.T) {
+	b, in := hostBlock(t)
+	b.parts = []observe.Tagged{
+		{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile"},
+		{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile-stray"},
+	}
+
+	problems := kittest.CheckBlock(in)
+
+	wantProblemNaming(t, problems, `resource "mitstack-app-myapp-profile-stray"`, "aws.iam-instance-profile")
+	if len(problems) != 1 {
+		t.Errorf("CheckBlock problems = %q; want exactly the instance profile beyond the one the instance's type lists", problems)
+	}
+}
+
 func TestCheckBlock_FailsEveryTaggedPartWhenTheSnapshotListsNoParts(t *testing.T) {
 	b, in := hostBlock(t)
 	b.parts = hostParts()
+	in.Types = partlessSnapshot(t)
 
 	problems := kittest.CheckBlock(in)
 
@@ -641,7 +642,6 @@ func TestCheckBlock_FailsATaggedObjectBeyondTheRoomItsDeclaredResourcesAndTheirP
 		observe.Tagged{Type: "aws.vpc", ID: "vpc-0stray"},
 		observe.Tagged{Type: "aws.iam-role", ID: "mitstack-app-myapp-stray"},
 	)
-	in.Types = partsSnapshot(t)
 
 	problems := kittest.CheckBlock(in)
 
@@ -719,7 +719,7 @@ func cfnBlock(t *testing.T) kittest.Block {
 	for name := range resources {
 		observers[name] = providerObserver{p: p}
 	}
-	snap := partsSnapshot(t)
+	snap := typeSnapshot(t)
 	snap.Types = append(snap.Types, appHostnameType)
 	upgrade := blockDesired("20")
 	return kittest.Block{

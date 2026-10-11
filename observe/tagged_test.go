@@ -69,7 +69,7 @@ func TestAWSTagged_ListsEachTaggedARNAsItsType(t *testing.T) {
 	}
 }
 
-func TestAWSTagged_ListsEachPartARNAsItsPartKind(t *testing.T) {
+func TestAWSTagged_ListsEachPartARNAsItsCatalogueType(t *testing.T) {
 	api := &fakeTagging{arns: []string{
 		"arn:aws:iam::123456789012:instance-profile/mitstack/mitstack-app-myapp-profile",
 		"arn:aws:ec2:eu-central-1:123456789012:elastic-ip/eipalloc-0abc",

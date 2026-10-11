@@ -1,10 +1,6 @@
 package contract_test
 
-// type_snapshot_test.go pins contract.ParseTypeSnapshot, which reads the
-// versioned snapshot of resource types the platform serves at
-// GET /v1/resource-types/snapshots/{version}, the shape the fixture under
-// testdata holds: a snapshot of the platform's 51 type files. A snapshot is
-// refused when it is not JSON, holds no type, or holds one type id twice.
+// type_snapshot_test.go pins contract.ParseTypeSnapshot, which reads the snapshot the platform serves at GET /v1/resource-types/snapshots/{version}, as the 56-type fixture under testdata holds it.
 
 import (
 	"slices"
@@ -19,8 +15,8 @@ func TestParseTypeSnapshot_ReadsThePlatformsSnapshot(t *testing.T) {
 	if snap.Version != 1 {
 		t.Errorf("Version = %d, want 1", snap.Version)
 	}
-	if len(snap.Types) != 51 {
-		t.Errorf("Types holds %d types, want the platform's 51", len(snap.Types))
+	if len(snap.Types) != 56 {
+		t.Errorf("Types holds %d types, want the platform's 56", len(snap.Types))
 	}
 
 	instance, ok := snap.Lookup("aws.ec2-instance")
@@ -84,12 +80,20 @@ func TestParseTypeSnapshot_RefusesASnapshotItCannotUse(t *testing.T) {
 			[]string{"aws.vpc"}},
 		{"a part whose count is below one",
 			`{"version": 1, "types": [{"id": "aws.ec2-instance", "capability": "aws", "kind": "host", "scope": "per-app", "version": 1,` +
-				` "parts": [{"kind": "aws.iam-role", "count": 0}]}]}`,
+				` "parts": [{"type": "aws.iam-role", "count": 0}]}, ` + iamRoleType + `]}`,
 			[]string{"aws.ec2-instance", "aws.iam-role", "count"}},
-		{"a part with no kind",
+		{"a part with no type",
 			`{"version": 1, "types": [{"id": "aws.ec2-instance", "capability": "aws", "kind": "host", "scope": "per-app", "version": 1,` +
 				` "parts": [{"count": 1}]}]}`,
-			[]string{"aws.ec2-instance", "kind"}},
+			[]string{"aws.ec2-instance", "type"}},
+		{"a part keyed kind alone",
+			`{"version": 1, "types": [{"id": "aws.ec2-instance", "capability": "aws", "kind": "host", "scope": "per-app", "version": 1,` +
+				` "parts": [{"kind": "aws.iam-role", "count": 1}]}, ` + iamRoleType + `]}`,
+			[]string{"aws.ec2-instance", "type"}},
+		{"a part whose type the snapshot does not hold",
+			`{"version": 1, "types": [{"id": "aws.ec2-instance", "capability": "aws", "kind": "host", "scope": "per-app", "version": 1,` +
+				` "parts": [{"type": "aws.iam-instance-profile", "count": 1}]}, ` + iamRoleType + `]}`,
+			[]string{"aws.ec2-instance", "aws.iam-instance-profile"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -148,9 +152,15 @@ func TestParseTypeSnapshot_ThePlatformsSnapshotWithoutTheFieldMarksNoType(t *tes
 	}
 }
 
-func TestParseTypeSnapshot_ReadsEachPartKindAndCountOfAType(t *testing.T) {
+// iamRoleType is a snapshot type a part may name.
+const iamRoleType = `{"id": "aws.iam-role", "capability": "aws", "kind": "iam-role", "scope": "per-app", "version": 1}`
+
+func TestParseTypeSnapshot_ReadsEachPartTypeAndCountOfAType(t *testing.T) {
 	raw := `{"version": 3, "types": [{"id": "aws.ec2-instance", "capability": "aws", "kind": "host", "scope": "per-app", "version": 2,` +
-		` "parts": [{"kind": "aws.iam-role", "count": 2}, {"kind": "aws.iam-instance-profile", "count": 1}, {"kind": "aws.elastic-ip", "count": 1}]}]}`
+		` "parts": [{"type": "aws.iam-role", "count": 2}, {"type": "aws.iam-instance-profile", "count": 1}, {"type": "aws.elastic-ip", "count": 1}]},` +
+		` ` + iamRoleType + `,` +
+		` {"id": "aws.iam-instance-profile", "capability": "aws", "kind": "instance-profile", "scope": "per-app", "version": 1},` +
+		` {"id": "aws.elastic-ip", "capability": "aws", "kind": "ip-address", "scope": "per-app", "version": 1}]}`
 
 	snap, err := contract.ParseTypeSnapshot([]byte(raw))
 
@@ -159,26 +169,33 @@ func TestParseTypeSnapshot_ReadsEachPartKindAndCountOfAType(t *testing.T) {
 	}
 	instance, _ := snap.Lookup("aws.ec2-instance")
 	want := []contract.SnapshotPart{
-		{Kind: "aws.iam-role", Count: 2},
-		{Kind: "aws.iam-instance-profile", Count: 1},
-		{Kind: "aws.elastic-ip", Count: 1},
+		{Type: "aws.iam-role", Count: 2},
+		{Type: "aws.iam-instance-profile", Count: 1},
+		{Type: "aws.elastic-ip", Count: 1},
 	}
 	if !slices.Equal(instance.Parts, want) {
 		t.Errorf("ParseTypeSnapshot(%s) aws.ec2-instance Parts = %+v; want %+v", raw, instance.Parts, want)
 	}
 }
 
-func TestParseTypeSnapshot_ThePlatformsSnapshotWithoutTheFieldGivesNoTypeParts(t *testing.T) {
+func TestParseTypeSnapshot_ThePlatformsSnapshotListsEachPartByATypeItHolds(t *testing.T) {
 	snap := platformSnapshot(t)
 
-	var withParts []string
-	for _, typ := range snap.Types {
-		if len(typ.Parts) != 0 {
-			withParts = append(withParts, typ.ID)
-		}
-	}
+	instance, _ := snap.Lookup("aws.ec2-instance")
 
-	if len(withParts) != 0 {
-		t.Errorf("types with parts = %q; want none, since the fixture carries no parts field", withParts)
+	want := []contract.SnapshotPart{
+		{Type: "aws.iam-role", Count: 2},
+		{Type: "aws.iam-instance-profile", Count: 1},
+		{Type: "aws.elastic-ip", Count: 1},
+	}
+	if !slices.Equal(instance.Parts, want) {
+		t.Errorf("aws.ec2-instance Parts = %+v; want %+v", instance.Parts, want)
+	}
+	for _, typ := range snap.Types {
+		for _, part := range typ.Parts {
+			if _, ok := snap.Lookup(part.Type); !ok {
+				t.Errorf("type %s lists part %q, which the snapshot does not hold", typ.ID, part.Type)
+			}
+		}
 	}
 }
