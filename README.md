@@ -542,9 +542,10 @@ subscription's id must match, by type and count, a declared resource or a
 part that a declared resource's type lists in the snapshot. The check pools
 the room per part type: it adds up the parts of one type across every
 recorded resource, including two entries naming that type in one list, and
-does not tie a part to the resource that owns it. A resource the provider loses must then observe not present. With `Upgrade`
-set, a resource the upgrade replaces must be named in the `replaces` of the
-validate before it, and the problem says so when its type is stateful.
+does not tie a part to the resource that owns it. A resource the provider
+loses must then observe not present. With `Upgrade` set, a resource the
+upgrade replaces must be named in the `replaces` of the validate before it, and
+the problem says so when its type is stateful.
 `Upgrade` nil while a declared type is stateful is a problem. After
 unsubscribe every declared resource must observe absent, except one whose
 type the snapshot marks `endsWithSubscription`, since the check serves the
