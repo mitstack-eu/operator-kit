@@ -40,9 +40,9 @@ type SnapshotType struct {
 	Parts []SnapshotPart `json:"parts,omitempty"`
 }
 
-// SnapshotPart is one kind of part a resource of the type holds, as the provider's tag lister names it, and the most of that kind one resource holds.
+// SnapshotPart names a type the snapshot holds whose objects serve one resource of the owning type, and the most of them one resource holds.
 type SnapshotPart struct {
-	Kind  string `json:"kind"`
+	Type  string `json:"type"`
 	Count int    `json:"count"`
 }
 
@@ -63,7 +63,7 @@ type SnapshotFailure struct {
 	Cause string `json:"cause"`
 }
 
-// ParseTypeSnapshot reads raw as a type snapshot, refusing one holding no type, a type id twice, or a part with no kind or a count below one.
+// ParseTypeSnapshot reads raw as a type snapshot, refusing one holding no type, a type id twice, or a part checkParts refuses.
 func ParseTypeSnapshot(raw []byte) (TypeSnapshot, error) {
 	var snap TypeSnapshot
 	if err := json.Unmarshal(raw, &snap); err != nil {
@@ -72,27 +72,32 @@ func ParseTypeSnapshot(raw []byte) (TypeSnapshot, error) {
 	if len(snap.Types) == 0 {
 		return TypeSnapshot{}, errors.New("contract: the type snapshot holds no type")
 	}
-	seen := make(map[string]bool, len(snap.Types))
+	held := make(map[string]bool, len(snap.Types))
 	for _, t := range snap.Types {
-		if seen[t.ID] {
+		if held[t.ID] {
 			return TypeSnapshot{}, fmt.Errorf("contract: the type snapshot holds type %q twice", t.ID)
 		}
-		seen[t.ID] = true
-		if err := checkParts(t); err != nil {
+		held[t.ID] = true
+	}
+	for _, t := range snap.Types {
+		if err := checkParts(t, held); err != nil {
 			return TypeSnapshot{}, err
 		}
 	}
 	return snap, nil
 }
 
-// checkParts refuses a part with no kind, or with a count below one, which would give the tag guard no room or take room away.
-func checkParts(t SnapshotType) error {
+// checkParts refuses a part with no type, a type the snapshot does not hold, or a count below one, since the tag guard gives room by part type.
+func checkParts(t SnapshotType, held map[string]bool) error {
 	for _, p := range t.Parts {
-		if p.Kind == "" {
-			return fmt.Errorf("contract: type %q lists a part with no kind", t.ID)
+		if p.Type == "" {
+			return fmt.Errorf("contract: type %q lists a part with no type", t.ID)
+		}
+		if !held[p.Type] {
+			return fmt.Errorf("contract: type %q lists part type %q, which the snapshot does not hold", t.ID, p.Type)
 		}
 		if p.Count < 1 {
-			return fmt.Errorf("contract: type %q lists part %q with count %d, but a part's count is at least one", t.ID, p.Kind, p.Count)
+			return fmt.Errorf("contract: type %q lists part type %q with count %d, but a part's count is at least one", t.ID, p.Type, p.Count)
 		}
 	}
 	return nil

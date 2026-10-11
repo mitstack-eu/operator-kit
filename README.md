@@ -132,13 +132,14 @@ Such a resource ends when the block's unsubscribe succeeds.
 
 A snapshot type may also list `parts`, read into `SnapshotType.Parts`. A
 part is an object that exists only to serve one resource of the type, such
-as the push role of an ECR repository. Each entry names the part's `kind`, as
-the provider's tag lister names it, and the `count`, the most of that kind
-one resource holds. `contract.ParseTypeSnapshot` refuses a part with no kind
-or a count below one, and a type without the field has no parts.
+as the push role of an ECR repository. Each entry names the part's `type`,
+a type id the same snapshot holds, and the `count`, the most objects of that
+type one resource holds. `contract.ParseTypeSnapshot` refuses a part with no
+type, a part whose type the snapshot does not hold, and a count below one. A
+type without the field has no parts.
 
 ```json
-{"id": "aws.ec2-instance", "parts": [{"kind": "aws.iam-role", "count": 2}, {"kind": "aws.elastic-ip", "count": 1}]}
+{"id": "aws.ec2-instance", "parts": [{"type": "aws.iam-role", "count": 2}, {"type": "aws.iam-instance-profile", "count": 1}, {"type": "aws.elastic-ip", "count": 1}]}
 ```
 
 `ManifestRequirement.Types` and `ManifestResource.Types` hold the listed ids,
@@ -525,10 +526,10 @@ does not list is absent only when the report carries a `madeAt` after
 subscription's id, under the AWS tag `mitstack:subscription`
 (`observe.AWSSubscriptionTag`) or the Hetzner label
 `mitstack.dev/subscription` (`observe.HetznerSubscriptionLabel`).
-`observe.AWSTagged` names an instance profile, an Elastic IP, a security
-group rule, a DLM lifecycle policy and an SSM document by the part kinds
-`aws.iam-instance-profile`, `aws.elastic-ip`, `aws.security-group-rule`,
-`aws.dlm-lifecycle-policy` and `aws.ssm-document`.
+`observe.AWSTagged` names each object by its catalogue type id. An instance
+profile, an Elastic IP, a security group rule, a DLM lifecycle policy and an
+SSM document read as `aws.iam-instance-profile`, `aws.elastic-ip`,
+`aws.security-group-rule`, `aws.dlm-lifecycle-policy` and `aws.ssm-document`.
 
 A block proves its guards in its own tests with `kittest.AssertBlock`. It
 takes a `kittest.Block`: the manifest, the type snapshot, the block-level
@@ -539,10 +540,9 @@ observe present with an identity, and every provided one with the outputs
 its type marks required. Everything the provider lists under the
 subscription's id must match, by type and count, a declared resource or a
 part that a declared resource's type lists in the snapshot. The check pools
-the room per kind: it adds up every recorded resource's parts of a kind,
-summing two entries of one kind in a type, and does not tie a part to the
-resource that owns it. A
-resource the provider loses must then observe not present. With `Upgrade`
+the room per part type: it adds up the parts of one type across every
+recorded resource, including two entries naming that type in one list, and
+does not tie a part to the resource that owns it. A resource the provider loses must then observe not present. With `Upgrade`
 set, a resource the upgrade replaces must be named in the `replaces` of the
 validate before it, and the problem says so when its type is stateful.
 `Upgrade` nil while a declared type is stateful is a problem. After

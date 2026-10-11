@@ -358,7 +358,7 @@ func (c *blockCheck) taggedRoom() map[string]int {
 			continue
 		}
 		for _, part := range t.Parts {
-			room[part.Kind] += part.Count
+			room[part.Type] += part.Count
 		}
 	}
 	return room

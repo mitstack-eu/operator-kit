@@ -33,7 +33,7 @@ type AWSTagged struct {
 	API AWSTaggingAPI
 }
 
-// awsResourceTypes maps an ARN's service and resource type to a type id, or to a part kind a catalogue type lists.
+// awsResourceTypes maps an ARN's service and resource type to the catalogue type id the platform serves for it.
 var awsResourceTypes = map[string]string{
 	"ec2/instance":            "aws.ec2-instance",
 	"ec2/vpc":                 "aws.vpc",
