@@ -8,17 +8,12 @@ import (
 	"github.com/mitstack-eu/operator-kit/contract"
 )
 
-// AWSSubscriptionTag is the tag key aws-app-infra writes a subscription's id
-// under, which the platform's operator trust boundary requires.
+// AWSSubscriptionTag is the tag key the platform's operator trust boundary requires on every object a subscription creates.
 const AWSSubscriptionTag = "mitstack:subscription"
 
-// HetznerSubscriptionLabel is the label key a Hetzner object carries its
-// subscription's id under.
 const HetznerSubscriptionLabel = "mitstack.dev/subscription"
 
-// Tagged is one object found carrying a subscription's id, as the type it
-// is. Type is empty for an object the lister cannot type, whose ID then
-// names it in full.
+// Tagged has an empty Type for an object the lister cannot type, and its ID then names the object in full.
 type Tagged struct {
 	Type string
 	ID   string
@@ -29,28 +24,33 @@ type TaggedLister interface {
 	ListTagged(ctx context.Context, d contract.Desired, subscriptionID string) ([]Tagged, error)
 }
 
-// AWSTaggingAPI lists the ARNs of the resources carrying a tag.
 type AWSTaggingAPI interface {
 	ResourceARNs(ctx context.Context, d contract.Desired, tagKey, tagValue string) ([]string, error)
 }
 
-// AWSTagged lists the AWS resources tagged with a subscription's id under
-// AWSSubscriptionTag.
+// AWSTagged lists the AWS resources carrying a subscription's id under AWSSubscriptionTag.
 type AWSTagged struct {
 	API AWSTaggingAPI
 }
 
-// awsResourceTypes maps an ARN's service and resource type to a type id.
+// awsResourceTypes maps an ARN's service and resource type to a type id, or to a part kind a catalogue type lists.
 var awsResourceTypes = map[string]string{
-	"ec2/instance":       "aws.ec2-instance",
-	"ec2/vpc":            "aws.vpc",
-	"ec2/security-group": "aws.security-group",
-	"ec2/volume":         "aws.ebs-volume",
-	"iam/role":           "aws.iam-role",
-	"ecr/repository":     "aws.ecr-repository",
+	"ec2/instance":            "aws.ec2-instance",
+	"ec2/vpc":                 "aws.vpc",
+	"ec2/security-group":      "aws.security-group",
+	"ec2/volume":              "aws.ebs-volume",
+	"iam/role":                "aws.iam-role",
+	"ecr/repository":          "aws.ecr-repository",
+	"iam/instance-profile":    "aws.iam-instance-profile",
+	"ec2/elastic-ip":          "aws.elastic-ip",
+	"ec2/security-group-rule": "aws.security-group-rule",
+	"dlm/policy":              "aws.dlm-lifecycle-policy",
+	"ssm/document":            "aws.ssm-document",
 }
 
-// ListTagged implements TaggedLister.
+// awsPathedTypes are the IAM types whose ARN carries a path before the name.
+var awsPathedTypes = map[string]bool{"aws.iam-role": true, "aws.iam-instance-profile": true}
+
 func (l AWSTagged) ListTagged(ctx context.Context, d contract.Desired, subscriptionID string) ([]Tagged, error) {
 	arns, err := l.API.ResourceARNs(ctx, d, AWSSubscriptionTag, subscriptionID)
 	if err != nil {
@@ -78,31 +78,26 @@ func taggedARN(arn string) Tagged {
 	if !ok || typ == "" {
 		return Tagged{ID: arn}
 	}
-	if typ == "aws.iam-role" {
+	if awsPathedTypes[typ] {
 		id = path.Base(id)
 	}
 	return Tagged{Type: typ, ID: id}
 }
 
-// HetznerObject is one object the Hetzner Cloud API lists, by its kind, as
-// the API names it, and its id.
+// HetznerObject carries its Kind as the Hetzner Cloud API names it.
 type HetznerObject struct {
 	Kind string
 	ID   string
 }
 
-// HetznerLabelAPI lists the objects matching a label selector.
 type HetznerLabelAPI interface {
 	ListByLabel(ctx context.Context, d contract.Desired, selector string) ([]HetznerObject, error)
 }
 
-// HetznerLabelled lists the Hetzner objects labelled with a subscription's
-// id under HetznerSubscriptionLabel.
 type HetznerLabelled struct {
 	API HetznerLabelAPI
 }
 
-// hetznerTypes maps a Hetzner object kind to a type id.
 var hetznerTypes = map[string]string{
 	"server":     "hetzner.server",
 	"primary_ip": "hetzner.primary-ip",
@@ -112,7 +107,6 @@ var hetznerTypes = map[string]string{
 	"network":    "hetzner.network",
 }
 
-// ListTagged implements TaggedLister.
 func (l HetznerLabelled) ListTagged(ctx context.Context, d contract.Desired, subscriptionID string) ([]Tagged, error) {
 	objects, err := l.API.ListByLabel(ctx, d, HetznerSubscriptionLabel+"="+subscriptionID)
 	if err != nil {

@@ -35,6 +35,15 @@ type SnapshotType struct {
 
 	// EndsWithSubscription marks a type whose resource ends with the block's unsubscribe, since its absence cannot be observed.
 	EndsWithSubscription bool `json:"endsWithSubscription,omitempty"`
+
+	// Parts are the objects that exist only to serve one resource of the type, which the tag guard accounts to that resource.
+	Parts []SnapshotPart `json:"parts,omitempty"`
+}
+
+// SnapshotPart is one kind of part a resource of the type holds, as the provider's tag lister names it, and the most of that kind one resource holds.
+type SnapshotPart struct {
+	Kind  string `json:"kind"`
+	Count int    `json:"count"`
 }
 
 type SnapshotOutput struct {
@@ -54,7 +63,7 @@ type SnapshotFailure struct {
 	Cause string `json:"cause"`
 }
 
-// ParseTypeSnapshot reads raw as a type snapshot, refusing one holding no type or a type id twice.
+// ParseTypeSnapshot reads raw as a type snapshot, refusing one holding no type, a type id twice, or a part with no kind or a count below one.
 func ParseTypeSnapshot(raw []byte) (TypeSnapshot, error) {
 	var snap TypeSnapshot
 	if err := json.Unmarshal(raw, &snap); err != nil {
@@ -69,8 +78,24 @@ func ParseTypeSnapshot(raw []byte) (TypeSnapshot, error) {
 			return TypeSnapshot{}, fmt.Errorf("contract: the type snapshot holds type %q twice", t.ID)
 		}
 		seen[t.ID] = true
+		if err := checkParts(t); err != nil {
+			return TypeSnapshot{}, err
+		}
 	}
 	return snap, nil
+}
+
+// checkParts refuses a part with no kind, or with a count below one, which would give the tag guard no room or take room away.
+func checkParts(t SnapshotType) error {
+	for _, p := range t.Parts {
+		if p.Kind == "" {
+			return fmt.Errorf("contract: type %q lists a part with no kind", t.ID)
+		}
+		if p.Count < 1 {
+			return fmt.Errorf("contract: type %q lists part %q with count %d, but a part's count is at least one", t.ID, p.Kind, p.Count)
+		}
+	}
+	return nil
 }
 
 func (s TypeSnapshot) Lookup(id string) (SnapshotType, bool) {

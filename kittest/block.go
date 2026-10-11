@@ -334,21 +334,34 @@ func (c *blockCheck) taggedMatchDeclared() {
 		return
 	}
 	c.ran[guardTagging] = true
-	room := map[string]int{}
-	for _, r := range c.desired.RecordedResources {
-		room[r.Type]++
-	}
+	room := c.taggedRoom()
 	slices.SortFunc(tagged, func(a, b observe.Tagged) int { return strings.Compare(a.ID, b.ID) })
 	for _, t := range tagged {
 		switch {
 		case t.Type == "":
 			c.resourceProblem(t.ID, "it carries the subscription's id, but is of no type the provider's lister knows, so no declared resource matches it")
 		case room[t.Type] == 0:
-			c.resourceProblem(t.ID, "it carries the subscription's id as type %s, but the manifest declares no further resource of that type", t.Type)
+			c.resourceProblem(t.ID, "it carries the subscription's id as type %s, but neither the manifest's resources nor the parts their types list account for another of that type", t.Type)
 		default:
 			room[t.Type]--
 		}
 	}
+}
+
+// taggedRoom counts, per type, how many tagged objects the recorded resources account for: each resource itself, and the parts its type lists.
+func (c *blockCheck) taggedRoom() map[string]int {
+	room := map[string]int{}
+	for _, r := range c.desired.RecordedResources {
+		room[r.Type]++
+		t, ok := c.in.Types.Lookup(r.Type)
+		if !ok {
+			continue
+		}
+		for _, part := range t.Parts {
+			room[part.Kind] += part.Count
+		}
+	}
+	return room
 }
 
 // upgrade flags a stateful declared type when Upgrade is nil, since its replacement cannot be proved.
