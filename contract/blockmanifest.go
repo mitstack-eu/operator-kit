@@ -204,9 +204,10 @@ type InputValue struct {
 }
 
 type ManifestLifecycle struct {
-	Endpoint   string   `json:"endpoint"`
-	Operations []string `json:"operations"`
-	Contract   string   `json:"contract"`
+	Endpoint               string   `json:"endpoint"`
+	Operations             []string `json:"operations"`
+	Contract               string   `json:"contract"`
+	NeedsCredentialRefresh bool     `json:"needsCredentialRefresh,omitempty"`
 }
 
 type ManifestObservability struct {

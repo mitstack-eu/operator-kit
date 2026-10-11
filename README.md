@@ -103,6 +103,12 @@ provides: [app-container, deploy-role]
 `provides` lists the names of the resources the block offers to the rest of
 the app. It replaces the capability slugs that older manifests list.
 
+A block whose cloud credential is short-lived sets
+`spec.lifecycle.needsCredentialRefresh: true`, read into
+`ManifestLifecycle.NeedsCredentialRefresh`, to ask the platform to refresh
+that credential before it expires. The field is optional and takes `true` or
+`false` only, and a manifest without it reads as `false`.
+
 An unnamed resource is named by its type id, and an unnamed requirement is
 referenced by it. An entry that lists more than one type needs a name, and
 two entries that would share a name or a reference are refused. The parser

@@ -70,6 +70,9 @@
               "minLength": 1,
               "type": "string"
             },
+            "needsCredentialRefresh": {
+              "type": "boolean"
+            },
             "operations": {
               "items": {
                 "type": "string"
