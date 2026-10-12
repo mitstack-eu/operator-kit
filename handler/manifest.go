@@ -111,6 +111,9 @@ func validateTypeObservers(observers map[string]Observer) error {
 		if _, _, _, err := contract.ParseResourceTypeID(typ); err != nil {
 			return fmt.Errorf("handler: Config.TypeObservers has an observer under %q, which is not a resource type id: %w", typ, err)
 		}
+		if observers[typ] == nil {
+			return fmt.Errorf("handler: Config.TypeObservers has a nil observer under %q, so a resource of that type could never be observed", typ)
+		}
 	}
 	return nil
 }
