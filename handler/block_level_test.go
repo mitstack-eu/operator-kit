@@ -809,6 +809,9 @@ func TestNew_RefusesATypeObserversConfigTheBlockCannotBack(t *testing.T) {
 		{"a key that is not a resource type id", func(cfg *handler.Config) {
 			cfg.TypeObservers["Not A Type"] = &typeObserver{}
 		}, []string{`"Not A Type"`, "Config.TypeObservers"}},
+		{"a nil observer under a resource type id", func(cfg *handler.Config) {
+			cfg.TypeObservers["aws.vpc"] = nil
+		}, []string{`"aws.vpc"`, "Config.TypeObservers"}},
 		{"type observers beside per-resource handlers", func(cfg *handler.Config) {
 			cfg.Observers = nil
 			cfg.Resource = nil
