@@ -79,6 +79,10 @@
               },
               "minItems": 1,
               "type": "array"
+            },
+            "settleBudget": {
+              "description": "A positive Go duration, such as 75m.",
+              "type": "string"
             }
           },
           "required": [

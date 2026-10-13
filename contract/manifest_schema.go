@@ -68,6 +68,8 @@ func typeSchema(t reflect.Type, required bool) (map[string]any, error) {
 		return entrySchema("A requirement: a type id, or an object of its type, its name and many.", true), nil
 	case resourceType:
 		return entrySchema("A resource the block creates: a type id, or an object of its type and its name.", false), nil
+	case durationType:
+		return map[string]any{"description": "A positive Go duration, such as 75m.", "type": "string"}, nil
 	}
 	switch t.Kind() {
 	case reflect.String:

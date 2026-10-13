@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // manifestDecoder reads a node tree by struct tags: a field whose tag has no omitempty is required, a fold tag names a second key whose value must agree, and a field named _ takes a key's value and keeps none of it.
@@ -32,6 +33,9 @@ var yaml11Booleans = map[string]bool{
 	"y": true, "Y": true, "yes": true, "Yes": true, "YES": true, "on": true, "On": true, "ON": true,
 	"n": false, "N": false, "no": false, "No": false, "NO": false, "off": false, "Off": false, "OFF": false,
 }
+
+// durationType is read from a Go duration such as 75m, and a manifest takes only a positive one.
+var durationType = reflect.TypeOf(time.Duration(0))
 
 func isNull(n *yamlNode) bool {
 	return n.kind == yamlNull || n.kind == yamlScalar && !n.str && plainNull.MatchString(n.value)
@@ -115,6 +119,10 @@ func (d manifestDecoder) decode(n *yamlNode, v reflect.Value, path string) error
 		r, err := d.resource(n, path)
 		v.Set(reflect.ValueOf(r))
 		return err
+	case durationType:
+		dur, err := positiveDuration(n, path)
+		v.Set(reflect.ValueOf(dur))
+		return err
 	}
 	switch v.Kind() {
 	case reflect.String:
@@ -170,6 +178,20 @@ func (d manifestDecoder) boolean(n *yamlNode) (value, ok bool) {
 		value, ok = yaml11Booleans[n.value]
 	}
 	return value, ok
+}
+
+func positiveDuration(n *yamlNode, path string) (time.Duration, error) {
+	if n.kind != yamlScalar {
+		return 0, fmt.Errorf("%s must be one value, not a mapping or a list", path)
+	}
+	dur, err := time.ParseDuration(n.value)
+	if err != nil {
+		return 0, fmt.Errorf("%s takes a positive duration such as 75m: %w", path, err)
+	}
+	if dur <= 0 {
+		return 0, fmt.Errorf("%s is %s, but it takes a positive duration such as 75m", path, n.value)
+	}
+	return dur, nil
 }
 
 // plainInteger reads a plain scalar as yaml.v3 does for a Go int; a quoted scalar is a string, which an int does not take.

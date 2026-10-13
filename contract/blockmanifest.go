@@ -3,6 +3,7 @@ package contract
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 const ManifestAPIVersionV1Alpha = "mitstack/v1alpha"
@@ -204,10 +205,11 @@ type InputValue struct {
 }
 
 type ManifestLifecycle struct {
-	Endpoint               string   `json:"endpoint"`
-	Operations             []string `json:"operations"`
-	Contract               string   `json:"contract"`
-	NeedsCredentialRefresh bool     `json:"needsCredentialRefresh,omitempty"`
+	Endpoint               string        `json:"endpoint"`
+	Operations             []string      `json:"operations"`
+	Contract               string        `json:"contract"`
+	NeedsCredentialRefresh bool          `json:"needsCredentialRefresh,omitempty"`
+	SettleBudget           time.Duration `json:"settleBudget,omitempty"`
 }
 
 type ManifestObservability struct {

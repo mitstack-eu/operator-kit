@@ -109,6 +109,13 @@ A block whose cloud credential is short-lived sets
 that credential before it expires. The field is optional and takes `true` or
 `false` only, and a manifest without it reads as `false`.
 
+A block whose install can outlast the platform's default settle wait sets
+`spec.lifecycle.settleBudget`, read into `ManifestLifecycle.SettleBudget`, to
+say how long the platform waits for it to settle. The field is optional and
+takes a positive Go duration such as `75m`. The parser refuses zero, a
+negative value or anything that is not a duration, naming the key, and a
+manifest without it reads as zero.
+
 An unnamed resource is named by its type id, and an unnamed requirement is
 referenced by it. An entry that lists more than one type needs a name, and
 two entries that would share a name or a reference are refused. The parser
