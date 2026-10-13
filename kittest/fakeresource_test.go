@@ -1,8 +1,4 @@
-// fakeresource_test.go pins kittest.FakeResource, the Resource whose
-// behaviour a test dictates. Its method set matches handler.Resource
-// structurally rather than by declaration, so neither this file nor the
-// FakeResource it exercises imports the handler package, and kittest stays
-// importable from a handler test without a cycle.
+// FakeResource matches handler.Resource structurally, so kittest stays importable from a handler test without a cycle.
 package kittest_test
 
 import (
@@ -22,10 +18,6 @@ func testDesired() contract.Desired {
 	return contract.Desired{Identity: testIdentity()}
 }
 
-// TestFakeResource_ObserveReflectsCountByDefault pins the documented
-// default: Observe reports Present when Count > 0 and Absent when
-// Count == 0, driven by Ensure/Delete converging Count, unless
-// ObserveState overrides it.
 func TestFakeResource_ObserveReflectsCountByDefault(t *testing.T) {
 	f := &kittest.FakeResource{}
 	ctx := context.Background()
@@ -61,8 +53,6 @@ func TestFakeResource_ObserveReflectsCountByDefault(t *testing.T) {
 	}
 }
 
-// TestFakeResource_ObserveStateOverridesCount pins that a set ObserveState
-// is reported regardless of Count.
 func TestFakeResource_ObserveStateOverridesCount(t *testing.T) {
 	unknown := contract.Unknown
 	f := &kittest.FakeResource{Count: 1, ObserveState: &unknown}
@@ -92,8 +82,6 @@ func TestFakeResource_DeadReportedPendingReportsUnknownEvenWithObserveErrSet(t *
 	}
 }
 
-// TestFakeResource_ObserveReportsOutputsAndStatusDetail pins that Observe
-// surfaces the fake's own Outputs/StatusDetail fields verbatim.
 func TestFakeResource_ObserveReportsOutputsAndStatusDetail(t *testing.T) {
 	f := &kittest.FakeResource{
 		Outputs:      map[string]string{"url": "https://example.test"},
@@ -112,8 +100,6 @@ func TestFakeResource_ObserveReportsOutputsAndStatusDetail(t *testing.T) {
 	}
 }
 
-// TestFakeResource_EnsureObserveDeleteReturnTheirConfiguredErrors pins that
-// each method returns the matching *Err field when set.
 func TestFakeResource_EnsureObserveDeleteReturnTheirConfiguredErrors(t *testing.T) {
 	ensureErr := errors.New("ensure failed")
 	observeErr := errors.New("observe failed")
@@ -132,9 +118,6 @@ func TestFakeResource_EnsureObserveDeleteReturnTheirConfiguredErrors(t *testing.
 	}
 }
 
-// TestFakeResource_DuplicateOnEnsureAddsARresourceEveryCall pins the
-// harness-breaking behaviour: with DuplicateOnEnsure, a second Ensure call
-// increases Count again instead of converging.
 func TestFakeResource_DuplicateOnEnsureAddsAResourceEveryCall(t *testing.T) {
 	f := &kittest.FakeResource{DuplicateOnEnsure: true}
 	ctx := context.Background()
@@ -151,8 +134,6 @@ func TestFakeResource_DuplicateOnEnsureAddsAResourceEveryCall(t *testing.T) {
 	}
 }
 
-// TestFakeResource_LeakOnDeleteLeavesOneResourceBehind pins that Delete
-// under LeakOnDelete does not bring Count to zero.
 func TestFakeResource_LeakOnDeleteLeavesOneResourceBehind(t *testing.T) {
 	f := &kittest.FakeResource{LeakOnDelete: true}
 	ctx := context.Background()
@@ -168,8 +149,6 @@ func TestFakeResource_LeakOnDeleteLeavesOneResourceBehind(t *testing.T) {
 	}
 }
 
-// TestFakeResource_ErrorWhenAlreadyAbsentFailsDeleteOnNothingProvisioned
-// pins that Delete on an already-absent resource errors under this flag.
 func TestFakeResource_ErrorWhenAlreadyAbsentFailsDeleteOnNothingProvisioned(t *testing.T) {
 	f := &kittest.FakeResource{ErrorWhenAlreadyAbsent: true}
 
@@ -178,9 +157,6 @@ func TestFakeResource_ErrorWhenAlreadyAbsentFailsDeleteOnNothingProvisioned(t *t
 	}
 }
 
-// TestFakeResource_ClobberOnUpgradeDropsPriorOutputsOnASecondEnsure pins
-// the destructive-upgrade fake: a second Ensure call must drop whatever
-// Outputs the first one left in place.
 func TestFakeResource_ClobberOnUpgradeDropsPriorOutputsOnASecondEnsure(t *testing.T) {
 	f := &kittest.FakeResource{
 		Outputs:          map[string]string{"url": "https://example.test"},
@@ -211,8 +187,6 @@ func TestFakeResource_ClobberOnUpgradeDropsPriorOutputsOnASecondEnsure(t *testin
 	}
 }
 
-// TestFakeResource_CallCountersRecordEveryCall pins EnsureCalls/
-// ObserveCalls/DeleteCalls as counts of calls made, not of successes.
 func TestFakeResource_CallCountersRecordEveryCall(t *testing.T) {
 	f := &kittest.FakeResource{EnsureErr: errors.New("boom")}
 	ctx := context.Background()

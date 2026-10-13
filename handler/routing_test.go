@@ -8,8 +8,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// TestServe_UnknownPathIs404 pins that Serve routes only POST /hook and
-// GET /logs — anything else is 404.
 func TestServe_UnknownPathIs404(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{}
@@ -24,8 +22,6 @@ func TestServe_UnknownPathIs404(t *testing.T) {
 	zeroCalls(t, f)
 }
 
-// TestServe_WrongMethodOnHookIs405 pins that a known path with the wrong
-// method is 405, not 404 or a silent 200.
 func TestServe_WrongMethodOnHookIs405(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{}
@@ -40,7 +36,6 @@ func TestServe_WrongMethodOnHookIs405(t *testing.T) {
 	zeroCalls(t, f)
 }
 
-// TestServe_WrongMethodOnLogsIs405 mirrors the above for /logs.
 func TestServe_WrongMethodOnLogsIs405(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{}

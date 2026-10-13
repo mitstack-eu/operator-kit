@@ -1,7 +1,4 @@
-// Package ghapi_test pins the host-resolution contract of kit/ghapi:
-// the GitHub API host is the OPERATOR's decision, never the caller's,
-// extracted once from the six near-duplicate urlguard.go copies
-// (examples/web-app-aws/app-scaffold/urlguard.go is the reference).
+// Package ghapi_test pins that the GitHub API host is the operator's decision, never the caller's.
 package ghapi_test
 
 import (
@@ -11,8 +8,6 @@ import (
 
 	"github.com/mitstack-eu/operator-kit/v2/ghapi"
 )
-
-// --- The legitimate case: resolves to the allowlist entry -------------------
 
 func TestBase_ResolvesLegitimateEndpointToTheAllowlistEntry(t *testing.T) {
 	b, err := ghapi.Base("https://api.github.com")
@@ -25,11 +20,7 @@ func TestBase_ResolvesLegitimateEndpointToTheAllowlistEntry(t *testing.T) {
 }
 
 func TestBase_ReturnsTheAllowlistEntryNeverTheCallerHost(t *testing.T) {
-	// The whole point: a request-supplied endpoint may
-	// only be COMPARED, never propagated into the returned Base. Vary the
-	// caller's casing/trailing-slash and prove the output is byte-identical
-	// every time — it must be built from the constant, not from whatever the
-	// caller happened to send.
+	// The returned Base is built from the allowlist entry, so a varied endpoint gives byte-identical output.
 	for _, endpoint := range []string{
 		"https://api.github.com",
 		"https://API.GitHub.com",
@@ -48,8 +39,6 @@ func TestBase_ReturnsTheAllowlistEntryNeverTheCallerHost(t *testing.T) {
 		}
 	}
 }
-
-// --- Hostile / lookalike endpoints -------------------------------------------
 
 func TestBase_RefusesAHostileEndpoint(t *testing.T) {
 	if _, err := ghapi.Base("https://evil.example.com"); err == nil {
@@ -86,11 +75,8 @@ func TestBase_RefusesGarbage(t *testing.T) {
 	}
 }
 
-// --- Operator-supplied extra hosts (GitHub Enterprise) -----------------------
-
 func TestBase_AcceptsAnOperatorSuppliedExtraHost(t *testing.T) {
-	// A GitHub Enterprise deployment opts in via operator CONFIG
-	// (MITSTACK_GITHUB_API_HOSTS in the real operator), never via a payload.
+	// GitHub Enterprise opts in through operator config, never through a payload.
 	b, err := ghapi.Base("https://ghe.corp.example", "ghe.corp.example")
 	if err != nil {
 		t.Fatalf("an operator-allowlisted enterprise host must be accepted: %v", err)
@@ -101,8 +87,7 @@ func TestBase_AcceptsAnOperatorSuppliedExtraHost(t *testing.T) {
 }
 
 func TestBase_RefusesAHostTheOperatorDidNotSupply(t *testing.T) {
-	// The exact same host, but this call carries no extraHosts — must be
-	// refused. A payload can never assert its own enterprise host.
+	// A payload can never assert its own enterprise host.
 	if _, err := ghapi.Base("https://ghe.corp.example"); err == nil {
 		t.Error("a host the operator never configured must be refused")
 	}
@@ -118,11 +103,7 @@ func TestBase_ExtraHostIsCaseInsensitiveAndOrderIndependent(t *testing.T) {
 	}
 }
 
-// --- Private / loopback / link-local / metadata hosts ------------------------
-
 func TestBase_RefusesPrivateLoopbackLinkLocalAndMetadataEndpoints(t *testing.T) {
-	// None of these are on the default allowlist, so each must fail — this
-	// pins the baseline before the stronger claim below.
 	for _, endpoint := range []string{
 		"https://10.0.0.5",
 		"https://127.0.0.1",
@@ -140,11 +121,7 @@ func TestBase_RefusesPrivateLoopbackLinkLocalAndMetadataEndpoints(t *testing.T) 
 }
 
 func TestBase_AnOperatorExtraHostCanNeverReopenAnInternalOrMetadataAddress(t *testing.T) {
-	// The stronger claim, mirroring urlguard's "an allowlist entry can never
-	// re-open an internal address": even when the operator's OWN config names
-	// one of these as an extra host, Base must still refuse it. A typo or a
-	// compromised env var must not be able to point a real installation
-	// token at cloud metadata or an internal address.
+	// Even an operator-configured extra host must not point a real installation token at cloud metadata or an internal address.
 	cases := []struct{ host, endpoint string }{
 		{"10.0.0.5", "https://10.0.0.5"},
 		{"127.0.0.1", "https://127.0.0.1"},
@@ -163,8 +140,6 @@ func TestBase_AnOperatorExtraHostCanNeverReopenAnInternalOrMetadataAddress(t *te
 		}
 	}
 }
-
-// --- BaseFromEnv: extra hosts come from MITSTACK_GITHUB_API_HOSTS ------------
 
 func TestBaseFromEnv_ResolvesAgainstTheOperatorsEnvAllowlist(t *testing.T) {
 	const envVar = "MITSTACK_GITHUB_API_HOSTS"

@@ -1,17 +1,4 @@
-// verbseams_over_handler_test.go pins kittest.VerbSeamsOverHandler: it
-// drives a real handler.Handler over signed webhook requests against a
-// kittest.FakeResource and adapts the outcome into kittest.VerbSeams, so
-// CheckVerbSemantics can judge a real handler exactly as it judges any
-// operator's own hand-written seams.
-//
-// Only this test file imports handler, because only a test needs a real
-// Handler to drive. kittest's own production code imports no handler
-// package, which is what keeps the two importable in either direction.
-//
-// A harness is only worth having if it FAILS on the defects it claims to
-// catch (see verbs_test.go's own note) — so this file proves BOTH halves:
-// a conforming FakeResource passes cleanly, and each misconfigured one
-// drives CheckVerbSemantics to its matching problem.
+// Only this test file imports handler, which keeps kittest and handler importable in either direction.
 package kittest_test
 
 import (
@@ -25,10 +12,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// buildSeams wires a fresh Signer and a real Handler over f, then returns
-// the VerbSeams VerbSeamsOverHandler adapts from it. VerbBudget is kept
-// small and Sleep is a no-op so a test that drives the settle loop to
-// exhaustion (the dead-resource case) never waits on wall-clock time.
+// Sleep is a no-op so a test driving the settle loop to exhaustion never waits on wall-clock time.
 func buildSeams(t *testing.T, f *kittest.FakeResource) kittest.VerbSeams {
 	t.Helper()
 	s := kittest.NewSigner(t, "kid-1", 7)
@@ -77,10 +61,6 @@ func TestVerbSeamsOverHandler_ErrorWhenAlreadyAbsentFailsAbsenceIsSuccess(t *tes
 	}
 }
 
-// TestVerbSeamsOverHandler_ClobberOnUpgradeFailsConvergentUpgrade seeds an
-// initial output so the adapter's upgrade check has something to observe
-// surviving (or not) — the CONTRACT's Upgrade seam also seeds one when the
-// fake carries none, so seeding here is not load-bearing, only explicit.
 func TestVerbSeamsOverHandler_ClobberOnUpgradeFailsConvergentUpgrade(t *testing.T) {
 	f := &kittest.FakeResource{
 		Outputs:          map[string]string{"url": "https://example.test"},

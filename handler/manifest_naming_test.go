@@ -9,8 +9,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/handler"
 )
 
-// namingManifestHead is a block manifest up to and including spec:, with
-// one ordinary spec field. A test appends the spec lines it is about.
 const namingManifestHead = `apiVersion: mitstack/v1alpha
 kind: Block
 metadata:
@@ -20,9 +18,7 @@ spec:
   layer: infra
 `
 
-// awsAppInfraNaming is aws-app-infra's declaration: the GitHub Actions ECR
-// push role name is 37 fixed characters around the app name, inside IAM's
-// 64-character role-name limit.
+// The ECR push role name is 37 fixed characters around the app name, inside IAM's 64-character limit.
 const awsAppInfraNaming = `  naming:
     appName:
       maxLength: 27
@@ -31,7 +27,6 @@ const awsAppInfraNaming = `  naming:
           limit: 64
 `
 
-// wantAWSAppInfraNaming is what awsAppInfraNaming reads as.
 func wantAWSAppInfraNaming() *contract.AppNameNaming {
 	return &contract.AppNameNaming{
 		MaxLength: 27,
@@ -51,9 +46,6 @@ func TestManifestAppNameNaming_ReadsTheDeclaration(t *testing.T) {
 	}
 }
 
-// TestManifestAppNameNaming_ACommentLineDoesNotHideTheDeclaration pins that
-// a comment line, which YAML ignores at any indentation, neither ends spec's
-// block nor sets the indent its children sit at.
 func TestManifestAppNameNaming_ACommentLineDoesNotHideTheDeclaration(t *testing.T) {
 	cases := map[string]string{
 		"comment at column 0 between spec children": namingManifestHead + "# note\n" + awsAppInfraNaming,
@@ -75,9 +67,6 @@ func TestManifestAppNameNaming_ACommentLineDoesNotHideTheDeclaration(t *testing.
 	}
 }
 
-// TestManifestAppNameNaming_ADerivedNameMissingAKeyIsAnError pins that an
-// item without its template or its limit is refused, naming the missing
-// key, rather than read as an empty template or a zero limit.
 func TestManifestAppNameNaming_ADerivedNameMissingAKeyIsAnError(t *testing.T) {
 	cases := map[string]string{
 		"limit":    strings.Replace(awsAppInfraNaming, "          limit: 64\n", "", 1),
@@ -135,12 +124,7 @@ func TestManifestAppNameNaming_AnUnreadableValueIsAnError(t *testing.T) {
 	}
 }
 
-// A manifest contract.ParseManifest refuses is an error carrying the
-// parser's message, so the naming suite fails it rather than reading it as
-// declaring no limit: an empty manifest, which has no apiVersion, a key
-// under spec.naming other than appName, an unknown spec field beside a
-// valid declaration, and spec.naming in a v1beta manifest, which has no
-// such field.
+// A refused manifest fails the naming suite rather than read as declaring no limit.
 func TestManifestAppNameNaming_AManifestTheParserRefusesIsAnErrorCarryingItsMessage(t *testing.T) {
 	cases := []struct {
 		label, path, manifest string

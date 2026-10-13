@@ -68,8 +68,6 @@ func envelope(t *testing.T, s *kittest.Signer, nonce string, extra map[string]an
 	return kittest.Envelope(nonce, time.Now(), fields)
 }
 
-// postHook signs body with s and sends it through h's ServeHTTP, returning
-// the recorded status and the exact response bytes written.
 func postHook(t *testing.T, h http.Handler, s *kittest.Signer, body []byte) (int, []byte) {
 	t.Helper()
 	w := httptest.NewRecorder()
@@ -77,10 +75,7 @@ func postHook(t *testing.T, h http.Handler, s *kittest.Signer, body []byte) (int
 	return w.Code, w.Body.Bytes()
 }
 
-// postHookWithContext is postHook with the request's context replaced by
-// ctx, so a test can cancel the context a verb runs under — the settle-loop
-// cancellation proofs need this; postHook alone always runs on a live
-// background context.
+// postHookWithContext lets a test cancel the context a verb runs under.
 func postHookWithContext(t *testing.T, h http.Handler, s *kittest.Signer, body []byte, ctx context.Context) (int, []byte) {
 	t.Helper()
 	w := httptest.NewRecorder()
@@ -89,9 +84,6 @@ func postHookWithContext(t *testing.T, h http.Handler, s *kittest.Signer, body [
 	return w.Code, w.Body.Bytes()
 }
 
-// decodeResponse decodes raw as a contract.Response, failing the test if it
-// does not decode — every response byte this package asserts on must at
-// least be a well-formed response envelope.
 func decodeResponse(t *testing.T, raw []byte) contract.Response {
 	t.Helper()
 	resp, err := contract.DecodeResponse(raw)
@@ -101,9 +93,6 @@ func decodeResponse(t *testing.T, raw []byte) contract.Response {
 	return resp
 }
 
-// assertConforms runs raw through kittest.CheckResponse so every response
-// this package asserts on is proven contract-conforming, not merely
-// decodable.
 func assertConforms(t *testing.T, raw []byte) {
 	t.Helper()
 	if problems := kittest.CheckResponse(raw); len(problems) != 0 {

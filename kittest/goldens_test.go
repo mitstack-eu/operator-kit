@@ -14,11 +14,7 @@ import (
 
 // Every function below is exercised from a working directory unrelated to this repository, because the goldens are embedded rather than read from a path relative to the caller.
 
-// chdirOutsideMonorepo moves the test process's cwd to a fresh temp
-// directory with no ancestor relationship to this repo, and restores the
-// original cwd when the test ends. t.TempDir() lives under the OS temp root,
-// never under the mitstack-workspace checkout, so "../../../api/..." from
-// there cannot resolve to anything real.
+// t.TempDir() lives under the OS temp root, so a relative path into the checkout cannot resolve from there.
 func chdirOutsideMonorepo(t *testing.T) {
 	t.Helper()
 	orig, err := os.Getwd()
@@ -42,8 +38,6 @@ func decodeOperation(t *testing.T, raw []byte) string {
 	}
 	return envelope.Operation
 }
-
-// --- Portability (the core red) ---------------------------------------
 
 func TestValidGoldens_PortableOutsideMonorepo(t *testing.T) {
 	chdirOutsideMonorepo(t)
@@ -79,11 +73,7 @@ func TestGolden_PortableOutsideMonorepo(t *testing.T) {
 func TestAssertDecodesEveryValidGolden_PortableOutsideMonorepo(t *testing.T) {
 	chdirOutsideMonorepo(t)
 
-	// A trivial decoder + the contract fields every operator depends on
-	// (mirrors examples/web-app-aws/aws-app-infra-cfn/contract_conformance_test.go).
-	// The point here is not the decode itself — it is that this call, made
-	// from outside the monorepo, must not abort the test the way
-	// ValidGoldens does today.
+	// This call, made from outside the checkout, must not abort the test.
 	kittest.AssertDecodesEveryValidGolden(t, func(raw []byte) error {
 		var v map[string]any
 		return json.Unmarshal(raw, &v)
@@ -96,13 +86,7 @@ func TestAssertRejectsMalformed_PortableOutsideMonorepo(t *testing.T) {
 	kittest.AssertRejectsMalformed(t, func([]byte) bool { return false })
 }
 
-// TestGoldensDir_MaterializesReadableGoldensOutsideMonorepo pins the design
-// decision for GoldensDir's post-embed behaviour: rather than deprecating an
-// exported symbol with unknown external callers, it keeps working by
-// materializing the embedded fixtures to a real directory (e.g. t.TempDir())
-// and returning that path — so any caller still doing os.ReadDir /
-// os.ReadFile against the returned directory keeps working unmodified, from
-// anywhere.
+// GoldensDir materialises the embedded fixtures to a real directory, so a caller reading the returned path keeps working from anywhere.
 func TestGoldensDir_MaterializesReadableGoldensOutsideMonorepo(t *testing.T) {
 	chdirOutsideMonorepo(t)
 
@@ -125,13 +109,7 @@ func TestGoldensDir_MaterializesReadableGoldensOutsideMonorepo(t *testing.T) {
 	}
 }
 
-// --- Content parity ------------------------------------------------------
-
-// TestKittestGoldens_MatchContractPackage proves kittest carries no goldens
-// of its own: every file the contract package embeds (valid AND
-// invalid-prefixed) must be byte-identical to what kittest.Golden returns for
-// the same name, read from OUTSIDE the monorepo, so this also re-proves
-// portability for every golden, not just the 4 valid ones.
+// Reading every golden from outside the checkout also re-proves portability for each one.
 func TestKittestGoldens_MatchContractPackage(t *testing.T) {
 	srcEntries, err := fs.ReadDir(contract.Goldens, contract.GoldensDir)
 	if err != nil {
@@ -169,8 +147,6 @@ func TestKittestGoldens_MatchContractPackage(t *testing.T) {
 	}
 }
 
-// --- The valid/malformed split is preserved -------------------------------
-
 func TestValidGoldens_ExcludesInvalidPrefixedNames(t *testing.T) {
 	chdirOutsideMonorepo(t)
 
@@ -201,10 +177,7 @@ func TestAssertRejectsMalformed_ChecksOnlyInvalidPrefixedGoldens(t *testing.T) {
 		return false
 	})
 
-	// Today's fixture set has exactly 2 invalid- goldens
-	// (invalid-missing-nonce, invalid-unknown-verb). This pins that
-	// AssertRejectsMalformed drives its accepts() callback from the
-	// invalid- set specifically, not e.g. every golden in the directory.
+	// AssertRejectsMalformed drives accepts() from the two invalid- goldens only.
 	if len(checked) != 2 {
 		t.Fatalf("AssertRejectsMalformed exercised %d envelope(s), want exactly 2 (the invalid- goldens): %v", len(checked), checked)
 	}

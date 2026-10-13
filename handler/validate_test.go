@@ -9,8 +9,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// TestServe_ValidateCallsObserveExactlyOnce pins that validate never polls:
-// one Observe call, regardless of VerbBudget, and no Ensure/Delete call.
 func TestServe_ValidateCallsObserveExactlyOnce(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{Count: 1}
@@ -28,14 +26,7 @@ func TestServe_ValidateCallsObserveExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestServe_ValidateAnswersObservationResponsePlusPendingOnUnknown is the
-// table the CONTRACT pins: validate returns Observation.Response(), so
-// Unknown leaves "absent" out of the body entirely (the engine fails open
-// on that marker), but the handler layers "pending: true" on top of it for
-// Unknown — the half Observation.Response() cannot carry, per its own doc
-// ("Pending is always false — Response() reports what was observed, not
-// that a resource is still converging"). Present and Absent are never
-// pending, and an Observe error is classified, never pending.
+// Unknown leaves absent out, as Observation.Response does, and the handler adds pending: true, which Response cannot carry.
 func TestServe_ValidateAnswersObservationResponsePlusPendingOnUnknown(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -88,9 +79,6 @@ func TestServe_ValidateAnswersObservationResponsePlusPendingOnUnknown(t *testing
 	}
 }
 
-// TestServe_ValidateObserveErrorIsNotPending pins the fourth row: an Observe
-// error during validate is classified by the error table (400/500), and is
-// never folded into pending:true.
 func TestServe_ValidateObserveErrorIsNotPending(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{ObserveErr: errors.New("observe backend unavailable")}

@@ -1,22 +1,6 @@
 package contract_test
 
-// manifest_troubleshooting_test.go pins how contract.ParseManifest reads a
-// v1alpha spec.troubleshooting rule: its fix list is read under fixes.
-//
-// That the platform's earlier key for the same list is refused is proven by
-// composition, because no kit file may name that key:
-//
-//  1. a rule accepts exactly the keys signature, title, matches, fixes and
-//     doc, and its Go type holds exactly those five fields, so no other key
-//     has anywhere to go;
-//  2. a rule carrying any other key is refused naming
-//     spec.troubleshooting[<i>].<key>, exercised below with several keys at
-//     more than one index;
-//  3. the vocabulary guard in vocabulary_test.go proves no file of the kit
-//     names the earlier key, so no code path can accept it by name.
-//
-// Together they leave the earlier key nowhere to be read but the refusal of
-// any other key.
+// A troubleshooting rule accepts exactly signature, title, matches, fixes and doc, and refuses any other key naming its path.
 
 import (
 	"fmt"
@@ -30,7 +14,6 @@ import (
 // order its type declares them.
 var troubleshootingKeys = []string{"signature", "title", "matches", "fixes", "doc"}
 
-// troubleshootingFields are the Go fields that carry troubleshootingKeys.
 var troubleshootingFields = []string{"Signature", "Title", "Matches", "Fixes", "Doc"}
 
 const twoTroubleshootingRules = `  troubleshooting:
@@ -66,9 +49,7 @@ func TestParseManifest_V1AlphaReadsATroubleshootingRulesFixesUnderFixes(t *testi
 	wantField(t, "spec.troubleshooting[1].doc", second.Doc, "")
 }
 
-// The first part of the composition: each of the five keys is accepted on
-// its own and read back, and the rule's type holds exactly the five fields
-// that carry them.
+// The rule's type holds exactly the five fields that carry its keys.
 func TestParseManifest_V1AlphaTroubleshootingRuleAcceptsExactlyItsFiveKeys(t *testing.T) {
 	values := map[string]string{
 		"signature": "  troubleshooting:\n    - signature: quota-exceeded\n",
@@ -115,8 +96,6 @@ func TestParseManifest_V1AlphaTroubleshootingRuleAcceptsExactlyItsFiveKeys(t *te
 	}
 }
 
-// The second part of the composition: any key outside the five is refused,
-// naming spec.troubleshooting[<i>].<key>.
 func TestParseManifest_V1AlphaRefusesAnyOtherTroubleshootingKeyNamingItsPath(t *testing.T) {
 	others := []string{
 		"bogus", "fix", "fixList", "remedies", "actions", "resolution", "hint",

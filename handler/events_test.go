@@ -60,9 +60,6 @@ func eventsCallbackField(url, token string) map[string]any {
 
 // At most one event per verb call: validate emits nothing; the others emit completed on a settled 2xx, progress on a pending:true 2xx, failed on 4xx/5xx, and no start event, which would take the unique-index slot of the terminal event and loop ProbeHealth on validate.
 
-// TestServe_ValidateEmitsNoEvents pins that a probe is not a lifecycle
-// operation: validate emits zero events, for every outcome Observe can
-// produce, including an error.
 func TestServe_ValidateEmitsNoEvents(t *testing.T) {
 	present := contract.Present
 	unknown := contract.Unknown
@@ -95,11 +92,7 @@ func TestServe_ValidateEmitsNoEvents(t *testing.T) {
 	}
 }
 
-// TestServe_SettledSubscribeEmitsExactlyOneCompletedEvent pins that a
-// subscribe settling to Present within budget emits exactly one event —
-// completed — and no start/progress event before it. The count assertion
-// matters: a spurious start event alongside the right terminal event is
-// exactly the defect the old rule produced.
+// A spurious start event beside the right terminal event is the defect the count guards.
 func TestServe_SettledSubscribeEmitsExactlyOneCompletedEvent(t *testing.T) {
 	for _, op := range []string{"subscribe", "upgrade"} {
 		t.Run(op, func(t *testing.T) {
@@ -134,10 +127,6 @@ func TestServe_SettledSubscribeEmitsExactlyOneCompletedEvent(t *testing.T) {
 	}
 }
 
-// TestServe_SettledUnsubscribeEmitsExactlyOneCompletedEvent mirrors the
-// settled case for unsubscribe: Delete succeeds and Observe settles to
-// Absent within budget, so the verb answers a settled 2xx and emits exactly
-// one completed event.
 func TestServe_SettledUnsubscribeEmitsExactlyOneCompletedEvent(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{Count: 1} // Delete drives Count to 0 -> Observe reports Absent
@@ -162,10 +151,6 @@ func TestServe_SettledUnsubscribeEmitsExactlyOneCompletedEvent(t *testing.T) {
 	}
 }
 
-// TestServe_PendingSubscribeEmitsExactlyOneProgressEvent pins the second
-// row of the new table: a subscribe/upgrade answering pending:true (budget
-// exhausted before Present) emits progress, not completed, and exactly one
-// event.
 func TestServe_PendingSubscribeEmitsExactlyOneProgressEvent(t *testing.T) {
 	for _, op := range []string{"subscribe", "upgrade"} {
 		t.Run(op, func(t *testing.T) {
@@ -199,9 +184,6 @@ func TestServe_PendingSubscribeEmitsExactlyOneProgressEvent(t *testing.T) {
 	}
 }
 
-// TestServe_FailingSubscribeEmitsExactlyOneFailedEventWithDetail pins the
-// third row: a subscribe/upgrade answering 4xx or 5xx emits exactly one
-// failed event carrying the failure detail.
 func TestServe_FailingSubscribeEmitsExactlyOneFailedEventWithDetail(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -242,9 +224,7 @@ func TestServe_FailingSubscribeEmitsExactlyOneFailedEventWithDetail(t *testing.T
 	}
 }
 
-// TestServe_EventsFailureNeverChangesTheLifecycleResponse pins ADR 0042's
-// advisory rule: an events endpoint returning 500, or one that cannot be
-// reached at all, must not change the lifecycle outcome.
+// ADR 0042: an events endpoint answering 500, or unreachable, must not change the lifecycle outcome.
 func TestServe_EventsFailureNeverChangesTheLifecycleResponse(t *testing.T) {
 	cases := []struct {
 		name string

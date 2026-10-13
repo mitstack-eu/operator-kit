@@ -1,12 +1,6 @@
 package kittest_test
 
-// response_resources_check_test.go pins how CheckResponse judges the
-// resources a response reports: when present, resources is an object of
-// entries, each entry an object, and each of its ensure, observe and delete
-// calls an object whose error, state and statusDetail are strings and whose
-// outputs and identity are objects of string values. A key the contract
-// does not name stays accepted at every level. Each problem names the path
-// it concerns, so an operator author can find it without reading the body.
+// A key the contract does not name stays accepted at every level, and each problem names the path it concerns.
 
 import (
 	"strings"

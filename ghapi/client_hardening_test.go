@@ -66,8 +66,6 @@ func TestSetVariable_AcceptsValidNames(t *testing.T) {
 	}
 }
 
-// --- 1b. The two 422 meanings are told apart ---------------------------------
-
 func TestSetVariable_AlreadyExists422StillFallsBackToPatch(t *testing.T) {
 	var patches int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,14 +147,7 @@ func TestSetVariable_AmbiguousUnparseable422FailsSafeWithoutPatchFallback(t *tes
 	}
 }
 
-// --- 2. baseCommit's two decodes are bounded ---------------------------------
-
-// hugeJSONWithSHA is comfortably larger than any sane single-object response
-// bound (client.go's existing bounds are 4<<10 and 8<<10) while still being
-// syntactically valid, complete JSON — an UNBOUNDED decoder reads it fine (in
-// well under a second, in-process), which is exactly why this pins new
-// behaviour: today's bare json.Decoder succeeds on it, so these tests are red
-// against the current implementation.
+// hugeJSONWithSHA is valid JSON larger than any sane single-object bound, which an unbounded decoder reads fine.
 func hugeJSONWithSHA(sha string) string {
 	padding := strings.Repeat("a", 2<<20) // 2MiB — far past any 4KiB/8KiB bound
 	return `{"object":{"sha":"` + sha + `"},"tree":{"sha":"` + sha + `"},"padding":"` + padding + `"}`
@@ -218,8 +209,6 @@ func TestCommitFiles_CommitLookupDecodeIsBounded(t *testing.T) {
 	}
 }
 
-// --- 3. Guard: the token never leaks on the new failure paths ----------------
-
 func TestNoTokenLeak_SetVariableRejectedNameError(t *testing.T) {
 	const token = "ghs_super-secret-installation-token-999"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -248,11 +237,7 @@ func TestNoTokenLeak_CommitFilesLimitBreachDoesNotLeakToken(t *testing.T) {
 			padding := strings.Repeat("a", 2<<20)
 			_, _ = w.Write([]byte(`{"object":{"sha":"base-sha"},"auth":"` + token + `","padding":"` + padding + `"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widget/git/commits/base-sha":
-			// Reachable only if the ref decode is NOT bounded — kept
-			// well-formed so an unbounded client sails straight through to
-			// here (and beyond), which is what makes this test genuinely
-			// red against today's implementation rather than incidentally
-			// passing on an unrelated 404.
+			// Reachable only if the ref decode is not bounded, and well-formed so an unbounded client passes it.
 			_, _ = w.Write([]byte(`{"tree":{"sha":"tree-sha"}}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widget/git/trees":
 			_, _ = w.Write([]byte(`{"sha":"tree-sha"}`))

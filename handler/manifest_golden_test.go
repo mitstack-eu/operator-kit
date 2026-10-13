@@ -12,9 +12,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// TestHookConstants_AreTheContractHookPoints pins that the handler's four
-// HookXxx constants are exactly the contract's closed hook-point set, in
-// the same order, so the handler's closed set is the contract's.
 func TestHookConstants_AreTheContractHookPoints(t *testing.T) {
 	got := []string{handler.HookBeforeEnsure, handler.HookAfterEnsure, handler.HookBeforeDelete, handler.HookAfterDelete}
 	if want := contract.LifecycleHookPoints(); !reflect.DeepEqual(got, want) {
@@ -51,9 +48,6 @@ func TestNew_AcceptsTheSharedHooksGoldenWithEveryDeclaredHookRegistered(t *testi
 	}
 }
 
-// TestServe_SharedHooksGoldenReachesTheBeforeEnsureHook proves the golden's
-// beforeEnsure declaration is read and the registered hook is reached on a
-// subscribe, not merely accepted by New.
 func TestServe_SharedHooksGoldenReachesTheBeforeEnsureHook(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{}

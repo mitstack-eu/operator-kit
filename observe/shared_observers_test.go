@@ -1,10 +1,6 @@
 package observe_test
 
-// shared_observers_test.go pins the kit's other shared read-only observers,
-// one table each over a fake provider API. Every observer reads the
-// identity it is handed: what the API holds is present or absent, an
-// identity missing its key is unknown without a call, and an API error is
-// returned.
+// Every shared observer reads the identity it is handed, and an identity missing its key is unknown without a call.
 
 import (
 	"context"
@@ -141,8 +137,6 @@ func TestExistenceObservers_AnswerFromTheProvider(t *testing.T) {
 	}
 }
 
-// --- observers that read a description -------------------------------------------
-
 type fakeVolumes map[string]observe.EBSVolumeDescription
 
 func (f fakeVolumes) DescribeVolume(_ context.Context, _ contract.Desired, volumeID string) (observe.EBSVolumeDescription, bool, error) {
@@ -231,8 +225,6 @@ func TestRoute53Record_ReportsTheAppsHostnameAndURL(t *testing.T) {
 	got, err = observe.Route53Record{API: fakeRecords{}}.ObserveResource(context.Background(), ref)
 	wantObservation(t, got, err, contract.Absent, nil, "")
 }
-
-// --- observers reached through the instance they run on --------------------------
 
 // fakeHost answers a script run on an instance with the stdout the test
 // gives the object the script names, and records where it ran. A
@@ -383,8 +375,6 @@ func TestEC2PostgresDatabase_ReturnsAProbeThatFailedOnTheHost(t *testing.T) {
 		t.Errorf("observation %+v, error %v; want the host's error returned, never read as absence", got, err)
 	}
 }
-
-// --- Hetzner -----------------------------------------------------------------------------
 
 type fakeServers map[string]observe.HetznerServerDescription
 

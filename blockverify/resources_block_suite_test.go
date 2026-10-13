@@ -1,25 +1,7 @@
 package main
 
-// resources_block_suite_test.go pins the resources suite over a block served
-// through one block-level handler, whose TestDeclaredResources calls
-// kittest.AssertBlock. The suite runs it and fails a block that breaks any
-// of the four guards, its detail naming the resource:
-//
-//   - an observe that still reports a resource the provider has lost;
-//   - a resource tagged with the subscription's id the manifest does not
-//     declare;
-//   - a declared resource left present after unsubscribe;
-//   - a validate that hides the replacement of a stateful resource;
-//
-// and a provided resource missing an output its type requires. A pass
-// detail names the replacement guard only when it ran.
-//
-// A block whose requirement lists types runs once per listed type, passing
-// when every run passes and failing, naming the type, when one does not.
-//
-// Each fixture is a compiling module written as literal strings into
-// t.TempDir(), the kit module replaced with this checkout, with the
-// platform's type snapshot copied in beside its manifest.
+// The resources suite runs a block-level block's kittest.AssertBlock and fails a block that breaks any guard, its detail naming the resource.
+// Each fixture is a compiling module in t.TempDir() with the kit module replaced by this checkout.
 
 import (
 	"os"

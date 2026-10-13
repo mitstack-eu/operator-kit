@@ -1,18 +1,6 @@
 package observe_test
 
-// node_reported_test.go pins observe.NodeReported, the observer for a
-// resource the platform has no route to, read from the node reports its own
-// side sends (GET /v1/subscriptions/{id}/node-reports serves
-// {"reports":[{"receivedAt","body"}]}, each body listing
-// subscriptionResources).
-//
-// A report's time is its body's madeAt when present, else its receivedAt,
-// and a report counts only when that time is strictly after the verb. The
-// newest counting report decides. The object is present when that report
-// lists it for the subscription. It is absent only when the report proves
-// it: made after the verb (madeAt set) and marked
-// subscriptionResourcesComplete. Every other case is unknown, including a
-// subscriptionResources the node could not read, and no counting report.
+// A report counts only when its madeAt, else its receivedAt, is after the verb, and an object is absent only when a report made after the verb marks its list complete.
 
 import (
 	"context"

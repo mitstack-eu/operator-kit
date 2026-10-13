@@ -12,9 +12,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
-// TestServe_LogsAnswers200WhenSignedAndConfigured pins that GET /logs goes
-// through webhook.ServeLogs when Config.Logs is set, for a correctly signed
-// read-only GET.
 func TestServe_LogsAnswers200WhenSignedAndConfigured(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{}
@@ -45,8 +42,6 @@ func TestServe_LogsAnswers200WhenSignedAndConfigured(t *testing.T) {
 	}
 }
 
-// TestServe_LogsAnswers401WhenUnsigned pins that an unsigned GET /logs is
-// rejected the same way an unsigned POST /hook is.
 func TestServe_LogsAnswers401WhenUnsigned(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{}
@@ -61,8 +56,6 @@ func TestServe_LogsAnswers401WhenUnsigned(t *testing.T) {
 	}
 }
 
-// TestServe_LogsAnswers404WhenConfigNil pins that GET /logs is 404 when
-// Config.Logs is nil, even for a correctly signed request.
 func TestServe_LogsAnswers404WhenConfigNil(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{}

@@ -1,11 +1,6 @@
 package observe_test
 
-// ec2_instance_test.go pins the kit's shared observer for aws.ec2-instance:
-// it reads the instance the reported identity names through the operator's
-// EC2 API on every call, never from what an ensure remembered. A running
-// instance is present with the host outputs, a terminated or missing one is
-// absent, any other state is unknown naming it, and an identity with no
-// instanceId is unknown without asking the API.
+// The aws.ec2-instance observer reads the identity's instance through the EC2 API on every call, never from what an ensure remembered.
 
 import (
 	"context"
@@ -52,8 +47,6 @@ func (f *fakeEC2) lose(instanceID string) {
 	delete(f.instances, instanceID)
 }
 
-// refFor is a ResourceRef for typ, named by its type, with identity, for
-// subscription sub-1.
 func refFor(typ string, identity map[string]string) contract.ResourceRef {
 	return contract.ResourceRef{
 		Name:     typ,

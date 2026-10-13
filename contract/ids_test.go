@@ -1,18 +1,6 @@
 package contract_test
 
-// ids_test.go pins the grammar of block, capability and resource-type ids.
-// A community id is bare; a private id sits under its org's namespace as
-// @<org slug>/<name>.
-//
-//   - a slug is 1 to 40 characters of a-z, 0-9 and dashes, starting and
-//     ending with a letter or digit: the platform's
-//     ^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$;
-//   - ParseBlockID and ParseCapabilityID accept a bare slug, giving namespace
-//     "", and @<org slug>/<slug>, giving the org slug without its @, and
-//     refuse anything else with an error that names both forms;
-//   - ParseResourceTypeID accepts [@<org slug>/]<capability slug>.<name>,
-//     the name in lowercase kebab case;
-//   - every catalogue entry is a community type of its own capability.
+// Block, capability and resource-type ids are a bare community slug or @<org slug>/<name>, and a refusal names both forms.
 
 import (
 	"strings"

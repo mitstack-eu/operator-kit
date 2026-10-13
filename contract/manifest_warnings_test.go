@@ -1,9 +1,6 @@
 package contract_test
 
-// manifest_warnings_test.go pins Manifest.Warnings: contract.ParseManifest
-// reports each retired key a mitstack/v1alpha manifest still carries as one
-// ManifestWarning naming its path, with the platform's own message, and
-// reports nothing for a manifest of either version that carries none.
+// ParseManifest reports each retired key a v1alpha manifest still carries as one ManifestWarning naming its path.
 
 import (
 	"reflect"
@@ -12,14 +9,11 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-// dependsOnWarning is the warning ParseManifest gives for spec.dependsOn.
 var dependsOnWarning = contract.ManifestWarning{
 	Path:    "spec.dependsOn",
 	Message: "spec.dependsOn is retired and was ignored; declare the dependency with spec.requires as a capability the target provides",
 }
 
-// optionalWarning is the warning ParseManifest gives for a requirement on
-// capability that carries optional: true.
 func optionalWarning(capability string) contract.ManifestWarning {
 	return contract.ManifestWarning{
 		Path: "spec.requires[" + capability + "].optional",
@@ -29,7 +23,6 @@ func optionalWarning(capability string) contract.ManifestWarning {
 	}
 }
 
-// parseManifest parses raw and fails the test when it is refused.
 func parseManifest(t *testing.T, raw string) contract.Manifest {
 	t.Helper()
 	m, err := contract.ParseManifest([]byte(raw))
@@ -39,8 +32,6 @@ func parseManifest(t *testing.T, raw string) contract.Manifest {
 	return m
 }
 
-// A v1alpha manifest carrying spec.dependsOn parses, and Warnings holds
-// exactly one warning, naming spec.dependsOn.
 func TestParseManifest_V1AlphaWarnsOnceThatDependsOnIsRetired(t *testing.T) {
 	for label, lines := range map[string]string{
 		"a block list": "  dependsOn:\n    - weather-app\n    - postgres-db\n",
@@ -56,9 +47,7 @@ func TestParseManifest_V1AlphaWarnsOnceThatDependsOnIsRetired(t *testing.T) {
 	}
 }
 
-// A v1alpha requirement carrying optional: true gives one warning keyed by
-// its capability, not its index, and keeps Optional true. A requirement
-// whose optional is false or absent gives none.
+// A requirement's optional warning is keyed by its capability, not its index.
 func TestParseManifest_V1AlphaWarnsOnAnOptionalRequirementByItsCapability(t *testing.T) {
 	m := parseManifest(t, alphaHead+`  requires:
     - capability: repo
@@ -82,8 +71,6 @@ func TestParseManifest_V1AlphaWarnsOnAnOptionalRequirementByItsCapability(t *tes
 	wantField(t, "Requires[1].Optional", m.V1Alpha.Requires[1].Optional, true)
 }
 
-// Each optional requirement gives its own warning, keyed by its own
-// capability.
 func TestParseManifest_V1AlphaWarnsOncePerOptionalRequirement(t *testing.T) {
 	m := parseManifest(t, alphaHead+`  requires:
     - capability: app-host
@@ -108,8 +95,6 @@ func TestParseManifest_V1AlphaWarnsOncePerOptionalRequirement(t *testing.T) {
 	}
 }
 
-// A manifest of either version that carries no retired key parses with no
-// warning.
 func TestParseManifest_WarnsOfNothingWithoutARetiredKey(t *testing.T) {
 	for label, raw := range map[string]string{
 		contract.ManifestAPIVersionV1Alpha: alphaHead + "  layer: backend\n  requires:\n    - capability: repo\n      reads: [repo]\n",
@@ -127,9 +112,7 @@ func TestParseManifest_WarnsOfNothingWithoutARetiredKey(t *testing.T) {
 	}
 }
 
-// The optional warning names the requirement's capability as the manifest
-// writes it, untrimmed, in both its path and its message, as the platform's
-// warning does.
+// The optional warning keeps the capability untrimmed, as the platform's warning does.
 func TestParseManifest_V1AlphaOptionalWarningKeepsTheRawCapability(t *testing.T) {
 	m := parseManifest(t, alphaHead+`  requires:
     - capability: " app-host "
@@ -141,9 +124,6 @@ func TestParseManifest_V1AlphaOptionalWarningKeepsTheRawCapability(t *testing.T)
 	}
 }
 
-// The dependsOn warning comes first, then one optional warning per
-// requirement in spec.requires order, whatever order the spec keys are
-// written in.
 func TestParseManifest_V1AlphaWarningsComeDependsOnFirstThenRequiresInOrder(t *testing.T) {
 	m := parseManifest(t, alphaHead+`  requires:
     - capability: b-cap

@@ -1,10 +1,6 @@
 package contract_test
 
-// request_goldens_pin_test.go pins, literally, what DecodeRequest makes of
-// every request golden the contract embeds: each valid golden decodes to a
-// Request that re-encodes to exactly the bytes below, and each invalid golden
-// is refused with exactly the message below. A request field added later is
-// optional, so it must leave every golden's outcome as it is here.
+// A request field added later is optional, so it must leave every golden's DecodeRequest outcome as pinned here.
 
 import (
 	"encoding/json"
@@ -13,8 +9,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-// goldenOutcome is what DecodeRequest makes of one golden: the re-encoded
-// Request when it decodes, or the refusal message when it does not.
 type goldenOutcome struct {
 	encoded string
 	refusal string

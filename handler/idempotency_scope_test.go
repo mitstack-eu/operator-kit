@@ -13,18 +13,8 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// The idempotency cache stores only a settled answer. A validate is a probe
-// of current state, so replaying an hour-old observation would report a
-// resource that has since gone as still present; it bypasses the cache and
-// its single-flight wait exactly as an empty key does. A subscribe or
-// upgrade answered with pending:true says the resource has not converged
-// yet, and the engine re-drives it under the same key to learn when it has,
-// so a stored pending answer would pin that retry to "still pending" for
-// the whole TTL. A settled 2xx and a 400 refusal remain stored.
+// The cache stores only a settled answer: a validate probes current state, and a pending subscribe is re-driven under the same key to learn when it converges.
 
-// TestServe_IdempotencyValidateIsNeverCached pins that two validate
-// deliveries sharing an idempotencyKey and subscriptionId each observe the
-// resource, and that the second reports the state it observes then.
 func TestServe_IdempotencyValidateIsNeverCached(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{Count: 1}
@@ -57,10 +47,6 @@ func TestServe_IdempotencyValidateIsNeverCached(t *testing.T) {
 	}
 }
 
-// TestServe_IdempotencyPendingSubscribeIsNeverCached pins that a subscribe
-// or upgrade answered pending:true leaves no cache entry: a re-delivery of
-// the same key runs Ensure again and returns its own settled answer, not
-// the stored pending one.
 func TestServe_IdempotencyPendingSubscribeIsNeverCached(t *testing.T) {
 	for _, op := range []string{"subscribe", "upgrade"} {
 		t.Run(op, func(t *testing.T) {
@@ -106,10 +92,6 @@ func TestServe_IdempotencyPendingSubscribeIsNeverCached(t *testing.T) {
 	}
 }
 
-// TestServe_IdempotencySettledSubscribeIsStillDeduplicated pins that the
-// narrowing above leaves a settled answer stored: a re-delivery of a
-// subscribe that answered Present replays the identical bytes without
-// calling Ensure again.
 func TestServe_IdempotencySettledSubscribeIsStillDeduplicated(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{Outputs: map[string]string{"endpoint": "https://ready"}}
@@ -137,9 +119,7 @@ func TestServe_IdempotencySettledSubscribeIsStillDeduplicated(t *testing.T) {
 	}
 }
 
-// TestServe_IdempotencyRefusalIsStillDeduplicated pins that a 400 refusal
-// stays stored: the refusal is deterministic, so a re-delivery replays it
-// without calling Ensure again.
+// A refusal is deterministic, so a re-delivery replays it.
 func TestServe_IdempotencyRefusalIsStillDeduplicated(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{EnsureErr: handler.Refuse("quota-exceeded", "org quota exhausted")}
@@ -161,10 +141,7 @@ func TestServe_IdempotencyRefusalIsStillDeduplicated(t *testing.T) {
 	}
 }
 
-// blockingObserveResource holds Observe open until the test releases it,
-// so two validate deliveries of one key can be made to overlap. entered is
-// signalled on every Observe call and is buffered so a second call never
-// blocks on the signal itself.
+// entered is buffered so a second Observe call never blocks on the signal itself.
 type blockingObserveResource struct {
 	mu           sync.Mutex
 	observeCalls int
@@ -193,10 +170,6 @@ func (r *blockingObserveResource) calls() int {
 	return r.observeCalls
 }
 
-// TestServe_IdempotencyValidateNeverJoinsAnInFlightCall pins that a
-// validate with a key skips the single-flight wait as well as the stored
-// entries: while a first validate of the key is still inside Observe, a
-// second one reaches Observe itself rather than waiting for the first.
 func TestServe_IdempotencyValidateNeverJoinsAnInFlightCall(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	r := &blockingObserveResource{entered: make(chan struct{}, 8), release: make(chan struct{})}

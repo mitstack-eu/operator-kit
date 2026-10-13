@@ -8,12 +8,8 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// A harness is only worth having if it FAILS on the defects it claims to catch.
-// Each case below is an operator with exactly one of the four properties
-// broken, run through a recording sub-test so the harness's verdict can be
-// asserted rather than trusted.
+// Each case breaks exactly one property, so the harness's verdict is asserted rather than trusted.
 
-// conforming returns seams for an operator that honours every property.
 func conforming() kittest.VerbSeams {
 	return kittest.VerbSeams{
 		Subscribe:               func() (int, error) { return 3, nil },
@@ -25,9 +21,7 @@ func conforming() kittest.VerbSeams {
 	}
 }
 
-// broken reports whether the harness found any problem. Because
-// CheckVerbSemantics is a pure function, this is a real assertion rather than a
-// dance around *testing.T — which is the whole reason it is a pure function.
+// CheckVerbSemantics is a pure function, so this is a real assertion rather than a dance around *testing.T.
 func broken(seams kittest.VerbSeams) bool {
 	return len(kittest.CheckVerbSemantics(seams)) > 0
 }
@@ -102,8 +96,6 @@ func TestHarness_ANilSeamFailsRatherThanSkipping(t *testing.T) {
 }
 
 func TestHarness_NilSeamProblemNamesTheSeam(t *testing.T) {
-	// A failure that does not say WHICH seam is missing costs the reader the
-	// time the harness was supposed to save.
 	s := conforming()
 	s.ValidateWhenDead = nil
 	problems := kittest.CheckVerbSemantics(s)
@@ -116,8 +108,6 @@ func TestHarness_NilSeamProblemNamesTheSeam(t *testing.T) {
 }
 
 func TestHarness_ReportsEveryViolationNotJustTheFirst(t *testing.T) {
-	// An operator with three defects should learn about three, not make three
-	// round trips through CI.
 	s := conforming()
 	s.Unsubscribe = func() (int, error) { return 2, nil }
 	s.Upgrade = func() (bool, error) { return false, nil }

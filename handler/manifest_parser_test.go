@@ -9,9 +9,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// requireNewRefusesWithTheParsersMessage fails the test unless
-// contract.ParseManifest refuses cfg.Manifest naming path, and handler.New
-// refuses cfg with an error carrying that refusal's message.
 func requireNewRefusesWithTheParsersMessage(t *testing.T, cfg handler.Config, path string) {
 	t.Helper()
 	_, perr := contract.ParseManifest(cfg.Manifest)
@@ -30,8 +27,6 @@ func requireNewRefusesWithTheParsersMessage(t *testing.T, cfg handler.Config, pa
 	}
 }
 
-// withManifestEdit returns raw with old replaced by new once, failing the
-// test when old is not in raw.
 func withManifestEdit(t *testing.T, raw []byte, old, new string) []byte {
 	t.Helper()
 	if !strings.Contains(string(raw), old) {
@@ -68,8 +63,6 @@ func TestNew_RefusesAManifestTheParserRefusesWithTheParsersMessage(t *testing.T)
 	}
 }
 
-// plainV1Beta returns ADR 0083's worked plain manifest, a mitstack/v1beta
-// manifest, from the kit's embedded manifest goldens.
 func plainV1Beta(t *testing.T) []byte {
 	t.Helper()
 	raw, err := contract.ManifestGoldens.ReadFile(contract.ManifestGoldensDir + "/plain-v1beta.yaml")
@@ -100,9 +93,6 @@ func TestNew_AcceptsAV1BetaManifestAndReadsItAsDeclaringNoHook(t *testing.T) {
 	}
 }
 
-// A v1beta manifest that writes hooks or retainsOnUnsubscribe under
-// spec.lifecycle is refused by the parser, so New refuses it, rather than
-// reading a declaration the version does not have.
 func TestNew_RefusesAV1BetaManifestDeclaringHooksOrRetainsOnUnsubscribe(t *testing.T) {
 	cases := map[string]string{
 		contract.LifecycleHooksField:          "    contract: kit/v1\n    hooks: [beforeEnsure]",

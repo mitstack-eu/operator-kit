@@ -6,10 +6,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/ghapi"
 )
 
-// SafeRepo validates the operator-supplied "owner/name" repo param so it
-// can't be used to smuggle a host, path traversal, or extra path segments
-// into an outbound GitHub API URL (the reference: examples/web-app-aws/
-// app-scaffold/urlguard.go's safeRepoSegment).
+// SafeRepo keeps an operator-supplied owner/name from smuggling a host, path traversal or extra segments into a GitHub API URL.
 
 func TestSafeRepo_AcceptsOwnerSlashName(t *testing.T) {
 	for _, repo := range []string{

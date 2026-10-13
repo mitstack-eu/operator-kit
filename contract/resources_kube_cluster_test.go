@@ -1,10 +1,6 @@
 package contract_test
 
-// resources_kube_cluster_test.go pins the registry entries a kube-cluster
-// block publishes. The Hetzner k3s cluster block declares eight outputs: six
-// it registers for itself, and cloud.region and host.type, which it reuses as
-// they stand. No entry answers to the block's parameter names location or
-// serverType.
+// The Hetzner k3s cluster block registers six outputs and reuses cloud.region and host.type as they stand.
 
 import (
 	"reflect"

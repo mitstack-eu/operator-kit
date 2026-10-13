@@ -1,18 +1,6 @@
 package main
 
-// manifest_parser_test.go pins that the manifest suite reads the target's
-// and the base's manifest through contract.ParseManifest, the kit's one
-// manifest parser, and that manifest.go keeps no YAML reader of its own:
-//
-//   - a mitstack/v1beta manifest, ADR 0083's worked plain block, passes;
-//   - a target the kit's parser refuses fails the suite with the parser's
-//     reason;
-//   - a base the kit's parser refuses leaves the base version unknown, so
-//     the target needs a release class and note, and the detail names the
-//     base and the parser's reason;
-//   - manifest.go declares nothing named for YAML, imports no package a
-//     text reader is built from, scans no characters and calls
-//     contract.ParseManifest.
+// The manifest suite reads the target's and the base's manifest through contract.ParseManifest, and manifest.go keeps no YAML reader of its own.
 
 import (
 	"go/ast"
@@ -25,8 +13,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-// plainV1Beta returns ADR 0083's worked plain manifest from the kit's
-// embedded manifest goldens.
 func plainV1Beta(t *testing.T) string {
 	t.Helper()
 	raw, err := contract.ManifestGoldens.ReadFile(contract.ManifestGoldensDir + "/plain-v1beta.yaml")
@@ -86,10 +72,7 @@ func TestManifestSuite_FailsAManifestTheKitParserRefuses(t *testing.T) {
 	}
 }
 
-// A base manifest the parser refuses must not trap the pull request that
-// fixes it: its version counts as unknown, so the target needs a release
-// class and a release note, as it does for a changed version, and the
-// detail names the base and why it could not be read.
+// A base manifest the parser refuses must not trap the pull request that fixes it, so its version counts as unknown.
 func TestManifestSuite_ABaseTheParserRefusesLeavesItsVersionUnknown(t *testing.T) {
 	bases := map[string]string{
 		"a base under mitstack/v2": strings.Replace(withVersion("1.0.0"),
@@ -113,15 +96,12 @@ func TestManifestSuite_ABaseTheParserRefusesLeavesItsVersionUnknown(t *testing.T
 	}
 }
 
-// readerImports are the packages a text reader is built from, none of which
-// the manifest suite needs once the kit parses the manifest.
+// readerImports are the packages a text reader is built from.
 var readerImports = map[string]bool{
 	"bufio": true, "bytes": true, "regexp": true, "strconv": true,
 	"text/scanner": true, "unicode": true, "unicode/utf8": true,
 }
 
-// readerStringsFuncs are the strings functions that cut text into lines,
-// tokens or columns.
 var readerStringsFuncs = map[string]bool{
 	"Count": true, "Cut": true, "CutPrefix": true, "CutSuffix": true,
 	"Fields": true, "FieldsFunc": true, "FieldsFuncSeq": true, "FieldsSeq": true,
@@ -132,11 +112,7 @@ var readerStringsFuncs = map[string]bool{
 	"TrimFunc": true, "TrimLeft": true, "TrimLeftFunc": true, "TrimRight": true, "TrimRightFunc": true,
 }
 
-// A reader of YAML compares characters, cuts lines and keeps a cursor, so
-// manifest.go is held to none of that: it declares nothing named for YAML,
-// no method, no character literal, imports no package a reader is built
-// from, calls no strings function that cuts text, and hands the manifest to
-// contract.ParseManifest.
+// A YAML reader compares characters, cuts lines and keeps a cursor, so manifest.go is held to none of that.
 func TestManifestGo_HoldsNoYAMLReaderOfItsOwn(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "manifest.go", nil, parser.SkipObjectResolution)

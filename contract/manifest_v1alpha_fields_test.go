@@ -1,13 +1,6 @@
 package contract_test
 
-// manifest_v1alpha_fields_test.go pins that contract.ParseManifest reads,
-// under mitstack/v1alpha, every field the platform's manifest decoder reads,
-// one test per field group: each decodes a hand-written manifest carrying
-// the group's fields and reads every value back from V1AlphaManifest. It
-// also pins the three folded spellings (type into kind, format into kind,
-// store into kind), the retired spec.dependsOn being accepted and dropped,
-// spec.naming.appName, which the kit owns, and how a value of each Go type
-// is read from YAML.
+// contract.ParseManifest reads every field the platform's manifest decoder reads under mitstack/v1alpha, and the kit's own spec.naming.appName.
 
 import (
 	"reflect"
@@ -43,13 +36,11 @@ func parseAlpha(t *testing.T, raw string) *contract.V1AlphaManifest {
 	return m.V1Alpha
 }
 
-// alphaSpec parses alphaHead followed by specLines.
 func alphaSpec(t *testing.T, specLines string) *contract.V1AlphaManifest {
 	t.Helper()
 	return parseAlpha(t, alphaHead+specLines)
 }
 
-// wantField reports field when got differs from want.
 func wantField(t *testing.T, field string, got, want any) {
 	t.Helper()
 	if !reflect.DeepEqual(got, want) {
@@ -489,8 +480,6 @@ func TestParseManifest_V1AlphaReadsSpecNamingAppName(t *testing.T) {
 	}
 }
 
-// --- the folded spellings ---------------------------------------------------
-
 // A top-level type: block names the same document as kind: Block, and is
 // read into Kind. A type other than block, or a kind beside it other than
 // Block, is refused naming both keys.
@@ -661,8 +650,6 @@ func TestParseManifest_V1AlphaAcceptsAndDropsDependsOn(t *testing.T) {
 		}
 	}
 }
-
-// --- how a value of each Go type is read -------------------------------------
 
 // A flow mapping or sequence is read as its block form is.
 func TestParseManifest_V1AlphaReadsFlowAndBlockCollectionsAlike(t *testing.T) {

@@ -12,9 +12,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
-// oboVerbCases lists the four verbs envelope.schema.json's operation enum
-// carries, each paired with the FakeResource.Count a validate/unsubscribe
-// needs to find something to observe.
+// Each verb is paired with the FakeResource.Count a validate or unsubscribe needs to find something to observe.
 var oboVerbCases = []struct {
 	name      string
 	operation string
@@ -26,13 +24,7 @@ var oboVerbCases = []struct {
 	{"unsubscribe", "unsubscribe", 1},
 }
 
-// TestServe_401WithNoOBOToken pins that a correctly signed request carrying
-// no obo field at all — the token is required, not merely verified when
-// present — is refused with 401 on every verb, before the Resource is ever
-// consulted. The body is built with kittest.Envelope directly, not this
-// package's envelope() helper, because envelope() now mints a default valid
-// token (see helpers_test.go); a test of the missing-token boundary must
-// build a body that genuinely lacks the field.
+// The body is built with kittest.Envelope directly, since envelope() mints a valid token by default.
 func TestServe_401WithNoOBOToken(t *testing.T) {
 	for _, c := range oboVerbCases {
 		t.Run(c.name, func(t *testing.T) {
@@ -63,10 +55,6 @@ func TestServe_401WithNoOBOToken(t *testing.T) {
 	}
 }
 
-// TestServe_200WithAValidOBOToken pins that a correctly signed request
-// carrying a token minted from the same signer that signed the request
-// still gets the answer the handler gives today, on every verb — the
-// regression guard for the fix TestServe_401WithNoOBOToken drives red.
 func TestServe_200WithAValidOBOToken(t *testing.T) {
 	for _, c := range oboVerbCases {
 		t.Run(c.name, func(t *testing.T) {
@@ -99,9 +87,6 @@ func TestServe_200WithAValidOBOToken(t *testing.T) {
 	}
 }
 
-// TestConfig_CarriesNoOBOEscapeHatch pins the boundary that nothing in
-// handler.Config can turn the OBO requirement off: no field name on Config
-// mentions OBO, so there is no flag a caller could set to skip the check.
 func TestConfig_CarriesNoOBOEscapeHatch(t *testing.T) {
 	typ := reflect.TypeOf(handler.Config{})
 	for i := 0; i < typ.NumField(); i++ {

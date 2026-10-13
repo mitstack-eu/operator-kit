@@ -1,21 +1,6 @@
 package contract_test
 
-// manifest_bindings_test.go pins how a mitstack/v1beta manifest's
-// requirements and resources are judged against the platform's type
-// snapshot, and how a binding a block's code reads through them is judged:
-//
-//   - CheckManifestTypes refuses a requirement or resource listing a type
-//     the snapshot does not hold, naming the entry and the type;
-//   - CheckBinding judges requires.<reference>.outputs.<output> and
-//     resources.<name>.outputs.<output>, where a reference and an output may
-//     each hold dots. It refuses a reference or name the block does not
-//     have, and an output any listed type does not declare, naming that type
-//     and the output. The outputs it reads are the snapshot's, not the kit's
-//     own catalogue's.
-//
-// A requirement's reference, its name when set and its type id otherwise,
-// appears once in spec.requires. The refusal names both entries' indexes
-// and the shared reference.
+// CheckManifestTypes and CheckBinding judge a v1beta manifest's requirements, resources and bindings against the platform's type snapshot.
 
 import (
 	"io/fs"
@@ -46,7 +31,6 @@ func editGolden(t *testing.T, name string, pairs ...string) []byte {
 	return []byte(out)
 }
 
-// platformSnapshot reads the platform's type snapshot fixture.
 func platformSnapshot(t *testing.T) contract.TypeSnapshot {
 	t.Helper()
 	raw, err := os.ReadFile("testdata/type-snapshot.json")
@@ -60,7 +44,6 @@ func platformSnapshot(t *testing.T) contract.TypeSnapshot {
 	return snap
 }
 
-// specOf parses raw and returns its spec.
 func specOf(t *testing.T, raw []byte) contract.ManifestSpec {
 	t.Helper()
 	return parseBeta(t, raw).Spec
@@ -100,8 +83,6 @@ func TestParseManifest_ParsesEveryManifestGolden(t *testing.T) {
 	}
 }
 
-// --- CheckManifestTypes ------------------------------------------------------
-
 func TestCheckManifestTypes_AcceptsEveryTypeTheSnapshotHolds(t *testing.T) {
 	snap := platformSnapshot(t)
 	for label, raw := range map[string][]byte{
@@ -140,8 +121,6 @@ func TestCheckManifestTypes_RefusesATypeTheSnapshotDoesNotHoldNamingTheEntryAndT
 		})
 	}
 }
-
-// --- CheckBinding ----------------------------------------------------------------
 
 // bindingSpec requires a repository by its type, a host listing both host
 // types and two roles of one type by name, and declares a container listing
@@ -243,8 +222,6 @@ func TestCheckBinding_ReadsEachOutputFromTheSnapshot(t *testing.T) {
 		t.Errorf("CheckBinding(resources.state.outputs.bucketName) through a snapshot declaring it: %v", err)
 	}
 }
-
-// --- requirement references ---------------------------------------------------------
 
 // The plain golden's requires line, which requires a host at spec.requires[0]
 // and a database at spec.requires[1].

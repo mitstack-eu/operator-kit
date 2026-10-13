@@ -1,17 +1,6 @@
 package kittest_test
 
-// absence_test.go — ADR 0067 decision 3's kit-side conformance check: a
-// block that declares spec.lifecycle.absenceProbe: true must answer
-// validate for a torn-down resource with an explicit "absent" boolean
-// marker, in the shape of response-goldens/absent.json. CheckAbsenceProbe is
-// the pure judge; AssertAbsenceProbe is the *testing.T wrapper an operator's
-// own contract test calls, mirroring CheckResponse/AssertEmitsConformingResponses's
-// split in response.go.
-//
-// The kit module has no third-party dependencies, so the manifest fixtures
-// below are read as plain text: the declaration is a line whose trimmed
-// text is exactly "absenceProbe: true", anywhere in the document — no YAML
-// library involved.
+// A block declaring spec.lifecycle.absenceProbe: true must answer validate for a torn-down resource with an explicit absent marker.
 
 import (
 	"testing"
@@ -86,20 +75,11 @@ func TestCheckAbsenceProbe_NilForAnUndeclaredManifestWhateverTheReply(t *testing
 	}
 }
 
-// TestAssertAbsenceProbe_PassesForADeclaringManifestWithTheGoldenReply proves
-// the *testing.T wrapper exists with the brief's exact signature and
-// delegates cleanly for the conforming case — a failing call is exercised
-// indirectly through CheckAbsenceProbe's own problem-space tests above,
-// mirroring response_test.go's split between CheckResponse (thoroughly
-// tested) and AssertEmitsConformingResponses (only proven to pass clean).
 func TestAssertAbsenceProbe_PassesForADeclaringManifestWithTheGoldenReply(t *testing.T) {
 	golden := kittest.ValidResponseGoldens(t)["absent"]
 	kittest.AssertAbsenceProbe(t, []byte(declaringManifest), golden)
 }
 
-// TestAssertAbsenceProbe_PassesForAnUndeclaredManifestWithAnyReply: an
-// undeclared manifest owes nothing, so AssertAbsenceProbe must never fail t
-// for it, whatever the reply looks like.
 func TestAssertAbsenceProbe_PassesForAnUndeclaredManifestWithAnyReply(t *testing.T) {
 	kittest.AssertAbsenceProbe(t, []byte(undeclaredManifest), []byte(`{}`))
 }

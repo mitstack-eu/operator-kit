@@ -1,19 +1,6 @@
 package main
 
-// manifest_bindings_test.go pins that blockverify fails its manifest suite on
-// a mitstack/v1beta manifest whose requirements or resources the kit's
-// parser refuses, printing the parser's reason. Each fixture this file names
-// holds one manifest.yaml: ADR 0085's worked aws-app-infra manifest with one
-// edit, so the edit is the only defect.
-//
-//   - manifest-requirement-carries-kind gives the repository requirement the
-//     kind ADR 0085 retires;
-//   - manifest-resource-carries-inputs gives the security group the inputs
-//     ADR 0085 retires;
-//   - manifest-alternatives-without-a-name lists two types for the egress
-//     proxy without the name such an entry must carry;
-//   - manifest-shared-requirement-reference requires github.repository
-//     twice, so two requirements share one reference.
+// blockverify fails its manifest suite on a v1beta manifest whose requirements or resources the kit's parser refuses, printing the parser's reason.
 
 import (
 	"os"
@@ -66,9 +53,7 @@ var bindingFixtures = []struct {
 	},
 }
 
-// awsAppInfraWithEdits returns the aws-app-infra manifest golden with each
-// old, new pair of edits applied once, failing the test when an old text is
-// not in it.
+// awsAppInfraWithEdits fails the test when an old text is not in the golden.
 func awsAppInfraWithEdits(t *testing.T, edits []string) string {
 	t.Helper()
 	raw, err := contract.ManifestGoldens.ReadFile(contract.ManifestGoldensDir + "/aws-app-infra-v1beta.yaml")

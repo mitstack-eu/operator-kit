@@ -1,12 +1,6 @@
 package ghapi_test
 
-// revision_sha_test.go pins that every call taking a revision accepts only a
-// full commit SHA, 40 lowercase hex digits for SHA-1 or 64 for SHA-256, and
-// refuses anything else before any request. url.PathEscape leaves "." and
-// ".." as they are, so without the check a revision of ".." reaches
-// /repos/acme/gitops/commits/.., which a path-normalising server answers as
-// the repository itself. An empty parent stays valid for CommitChanges,
-// where it means "create main".
+// url.PathEscape leaves ".." as it is, so every call taking a revision refuses anything but a full lowercase hex SHA before any request.
 
 import (
 	"context"
@@ -19,7 +13,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/ghapi"
 )
 
-// Full commit SHAs the revision tests address commits by.
 const (
 	shaRev1    = "ef663767a3d60390831d0518763e341592dcbcb3"
 	shaRev2    = "ec31b1e77e397c40f195af031457e9f5ac78ddb4"
@@ -28,7 +21,6 @@ const (
 	sha256Rev  = "f807e527f163f8bc44c4b002454a7f0236e520c97386e8c31a2924c81cc26d22"
 )
 
-// invalidRevisions are revisions that are not a full lowercase hex SHA.
 var invalidRevisions = map[string]string{
 	"dot-dot":                         "..",
 	"dot":                             ".",
@@ -64,9 +56,7 @@ var revisionCalls = map[string]func(c *ghapi.Client, rev string) error{
 	},
 }
 
-// anythingServer answers every request 200 with a body every revision call
-// decodes, so only a refusal before the request can make a call fail, and
-// counts the requests it receives.
+// anythingServer answers every request 200, so only a refusal before the request can fail a call.
 func anythingServer(t *testing.T) (*ghapi.Client, func() int) {
 	t.Helper()
 	var mu sync.Mutex

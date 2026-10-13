@@ -1,11 +1,6 @@
 package main
 
-// manifest_strict_test.go pins that every blockverify suite reading the
-// target's manifest reads it through contract.ParseManifest: the lifecycle
-// contract that picks the trust-plumbing and contract rules, and the
-// spec.naming.appName declaration the naming suite checks. A manifest the
-// parser refuses fails the suite that reads it, with the parser's message
-// in the detail, and is never read as declaring nothing.
+// Every blockverify suite reading the target's manifest reads it through contract.ParseManifest, and a refused manifest fails the suite that reads it.
 
 import (
 	"strings"
@@ -14,8 +9,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-// parserRefusal returns the error contract.ParseManifest gives content,
-// failing the test when it accepts it.
+// parserRefusal fails the test when the parser accepts content.
 func parserRefusal(t *testing.T, content, path string) string {
 	t.Helper()
 	_, err := contract.ParseManifest([]byte(content))

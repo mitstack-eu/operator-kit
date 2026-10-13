@@ -12,10 +12,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
-// The trust-boundary scenarios below mirror webhook/authenticate_test.go's
-// own cases, run through Serve rather than AuthenticateHook directly: a
-// signature failure of any kind is a 401 already written before the
-// Resource is ever consulted, and every fake counter must stay at zero.
+// A signature failure of any kind is a 401 written before the Resource is consulted, so every fake counter stays at zero.
 
 func TestServe_401WhenKeyIdMissing(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
@@ -111,9 +108,6 @@ func TestServe_401OnAReplayedNonce(t *testing.T) {
 	}
 }
 
-// TestServe_401OnAnInvalidOBOToken pins that a malformed/garbage OBO token
-// is rejected with 401 and never reaches the Resource, even though the
-// outer mitstack signature verifies fine.
 func TestServe_401OnAnInvalidOBOToken(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{}
@@ -128,10 +122,6 @@ func TestServe_401OnAnInvalidOBOToken(t *testing.T) {
 	zeroCalls(t, f)
 }
 
-// TestServe_400OnAMalformedEnvelope pins that a properly-signed body that
-// fails contract.DecodeRequest (missing a required field) is 400, not 401 —
-// the signature is valid, the envelope inside it is not — and never reaches
-// the Resource.
 func TestServe_400OnAMalformedEnvelope(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{}

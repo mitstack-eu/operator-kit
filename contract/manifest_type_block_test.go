@@ -1,11 +1,6 @@
 package contract_test
 
-// manifest_type_block_test.go pins the type: block twin of the lifecycle
-// hooks golden: the same block written with type, format and store. It is
-// embedded beside the kind-named golden, names its document with type: block
-// and no top-level kind:, carries no layer, types a capability contract with
-// format: and a continuity unit with store:, and declares the same hooks.
-// The kit takes no YAML dependency, so these read the golden line by line.
+// The type: block twin of the hooks golden is the same block written with type, format and store, read line by line since the kit takes no YAML dependency.
 
 import (
 	"io/fs"
@@ -208,10 +203,7 @@ func TestTypeBlockHooksManifestGolden_DeclaresTheSameHooksAsTheHooksGolden(t *te
 	}
 }
 
-// TestTypeBlockHooksManifestGolden_IsTheHooksGoldenInTheNewNames pins that the
-// twin is the same block: every line of the kind-named golden appears in it,
-// except its top-level kind: line and its spec layer: line, which the twin
-// does not carry.
+// The twin carries every line of the kind-named golden but its top-level kind: and spec layer: lines.
 func TestTypeBlockHooksManifestGolden_IsTheHooksGoldenInTheNewNames(t *testing.T) {
 	twin := map[string]bool{}
 	for _, line := range goldenLines(contract.TypeBlockHooksManifestGolden()) {

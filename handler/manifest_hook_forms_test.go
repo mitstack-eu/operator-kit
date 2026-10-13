@@ -9,8 +9,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// manifestWithLifecycle builds a complete v1alpha manifest whose
-// spec.lifecycle holds lifecycleLines verbatim.
 func manifestWithLifecycle(lifecycleLines string) []byte {
 	return []byte("apiVersion: mitstack/v1alpha\n" +
 		"kind: Block\n" +
@@ -18,8 +16,6 @@ func manifestWithLifecycle(lifecycleLines string) []byte {
 		"spec:\n  layer: infra\n  lifecycle:\n" + lifecycleLines)
 }
 
-// newWithHooksRegistered runs handler.New on manifest with each of names
-// registered.
 func newWithHooksRegistered(t *testing.T, manifest []byte, names ...string) error {
 	t.Helper()
 	s := kittest.NewSigner(t, "kid-1", 7)
@@ -33,10 +29,6 @@ func newWithHooksRegistered(t *testing.T, manifest []byte, names ...string) erro
 	return err
 }
 
-// TestManifestHooks_ReadsQuotedAndCommentedFormsAsYAMLDoes pins that New
-// takes each quoted or commented form as declaring the plain names YAML
-// reads, with no quote characters and no comment text: registering exactly
-// those names is accepted.
 func TestManifestHooks_ReadsQuotedAndCommentedFormsAsYAMLDoes(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -73,8 +65,6 @@ func TestManifestHooks_ReadsQuotedAndCommentedFormsAsYAMLDoes(t *testing.T) {
 	})
 }
 
-// TestManifestHooks_ACommentOnTheSpecLineDoesNotHideTheHooks pins that a
-// trailing comment on the top-level spec: line still opens spec's block.
 func TestManifestHooks_ACommentOnTheSpecLineDoesNotHideTheHooks(t *testing.T) {
 	manifest := []byte(strings.Replace(string(manifestWithLifecycle("    hooks:\n      - beforeEnsure\n")),
 		"spec:\n", "spec: # note\n", 1))
@@ -83,9 +73,7 @@ func TestManifestHooks_ACommentOnTheSpecLineDoesNotHideTheHooks(t *testing.T) {
 	}
 }
 
-// TestManifestHooks_HashInsideQuotesIsNotAComment pins that a "#" inside a
-// quoted scalar is part of the value, as in YAML, so the name read keeps it
-// and New's closed-set check, not a comment stripper, is what refuses it.
+// The closed-set check, not a comment stripper, refuses a name keeping a quoted #.
 func TestManifestHooks_HashInsideQuotesIsNotAComment(t *testing.T) {
 	err := newWithHooksRegistered(t, manifestWithLifecycle("    hooks:\n      - \"before#Ensure\"\n"))
 	if err == nil {
@@ -98,9 +86,6 @@ func TestManifestHooks_HashInsideQuotesIsNotAComment(t *testing.T) {
 	}
 }
 
-// TestManifestHooks_AColumnZeroKeyAfterTheHooksIsRefusedAsUnknown pins that
-// a line at column zero ends spec, and a key there that no manifest field
-// names is refused with the parser's message rather than read as anything.
 func TestManifestHooks_AColumnZeroKeyAfterTheHooksIsRefusedAsUnknown(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	cfg := baseConfig(t, &kittest.FakeResource{}, s)

@@ -1,15 +1,6 @@
 package main
 
-// manifest_kubernetes_namespace_test.go pins that blockverify's manifest
-// suite reads a kubernetes.namespace block in ADR 0085's shape. Both
-// fixtures under testdata are one self-contained mitstack/v1beta block that
-// requires a hetzner.k3s-cluster, creates the app's namespace and offers it
-// by its type id.
-//
-//   - manifest-kubernetes-namespace-on-cluster names the cluster nowhere in
-//     the manifest, since the namespace's identity names it at runtime;
-//   - manifest-namespace-carries-on is the same block placing the namespace
-//     with on:, which ADR 0085 retires, so its only defect is that key.
+// blockverify's manifest suite reads a kubernetes.namespace block that requires a hetzner.k3s-cluster, and refuses one placing the namespace with on:.
 
 import (
 	"os"

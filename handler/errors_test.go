@@ -14,11 +14,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// TestServe_ClassifiesEnsureErrors is the CONTRACT's classification table:
-// a *Refused (by errors.As) is 400 with statusDetail "refused:<class>: <msg>",
-// a wrapped *Refused classifies the same way, a plain error is 500 with no
-// "refused:" prefix, and a *Refused with an empty Class renders as class
-// "unclassified".
+// A *Refused, wrapped or not, is 400 with "refused:<class>: <msg>", a plain error is 500, and an empty Class renders as "unclassified".
 func TestServe_ClassifiesEnsureErrors(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -119,9 +115,6 @@ func TestServe_ClassifiesAHookError(t *testing.T) {
 		t.Errorf("EnsureCalls = %d, want 0 — Ensure must never run after its guarding hook refuses", f.EnsureCalls)
 	}
 }
-
-// TestRefusedClass_RoundTripsTheClass and TestRefusedClass_EmptyForNonRefusalDetail
-// pin RefusedClass directly, independent of any handler call.
 
 func TestRefusedClass_RoundTripsTheClass(t *testing.T) {
 	got := handler.RefusedClass("refused:dependents-remain: two apps still bind this database")

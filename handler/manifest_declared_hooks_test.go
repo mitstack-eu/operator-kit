@@ -8,10 +8,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// The platform's manifest parser refuses a spec.lifecycle.hooks declaration
-// naming a hook outside contract.LifecycleHookPoints(), or naming one twice,
-// and reads every YAML scalar form as its plain value. New must agree with
-// it on the same manifest bytes, whatever the Config registers.
+// New agrees with the platform's parser on a hook declaration, whatever the Config registers.
 
 // assertDeclarationRefused fails the test unless err is non-nil and names
 // both the spec.lifecycle.hooks field and the offending hook name.
@@ -75,9 +72,6 @@ func TestNew_RefusesADuplicateDeclaredHookWithThatHookRegistered(t *testing.T) {
 	assertDeclarationRefused(t, err, "beforeEnsure")
 }
 
-// TestNew_RefusesADuplicateDeclaredHookSpelledPlainAndQuoted pins that a
-// quoted item is the same name as its plain spelling, as YAML reads it, so
-// declaring both is a duplicate.
 func TestNew_RefusesADuplicateDeclaredHookSpelledPlainAndQuoted(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	cfg := baseConfig(t, &kittest.FakeResource{}, s)
@@ -89,8 +83,6 @@ func TestNew_RefusesADuplicateDeclaredHookSpelledPlainAndQuoted(t *testing.T) {
 	assertDeclarationRefused(t, err, "beforeEnsure")
 }
 
-// manifestWithHooksBlock builds a manifest whose spec.lifecycle "hooks:" key
-// is followed by the given item lines verbatim.
 func manifestWithHooksBlock(items string) []byte {
 	return []byte("apiVersion: mitstack/v1alpha\n" +
 		"kind: Block\n" +
@@ -99,10 +91,7 @@ func manifestWithHooksBlock(items string) []byte {
 		"    hooks:\n" + items)
 }
 
-// TestNew_ReadsHookNamesAsYAMLScalars pins that each written form yields the
-// plain names YAML reads: a registered hook is accepted only when the
-// manifest declares exactly its name, so New succeeding proves the reader
-// stripped the quotes and the comment.
+// New succeeding proves the reader stripped the quotes and the comment.
 func TestNew_ReadsHookNamesAsYAMLScalars(t *testing.T) {
 	cases := []struct {
 		name       string

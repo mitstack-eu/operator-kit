@@ -10,16 +10,8 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// An unsubscribe answer of absent:false says the resource was still observed
-// after the verb budget ran out, and the engine re-drives the same key to
-// learn when it has gone. An absence answer must come from observing the
-// resource, so a stored absent:false would pin every re-delivery to "not yet
-// absent" for the whole TTL. A settled absent:true answer remains stored.
+// An absence answer must come from observing the resource, so absent:false is never stored and a settled absent:true is.
 
-// TestServe_IdempotencyUnsubscribeNotAbsentIsNeverCached pins that an
-// unsubscribe answered absent:false leaves no cache entry: a re-delivery of
-// the same key and subscription runs Delete and Observe again instead of
-// replaying the first answer.
 func TestServe_IdempotencyUnsubscribeNotAbsentIsNeverCached(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	present := contract.Present
@@ -54,10 +46,6 @@ func TestServe_IdempotencyUnsubscribeNotAbsentIsNeverCached(t *testing.T) {
 	}
 }
 
-// TestServe_IdempotencyUnsubscribeAbsentIsStillDeduplicated pins that the
-// narrowing above leaves a settled absent:true answer stored: a re-delivery
-// of the same key replays the identical bytes without calling Delete or
-// Observe again.
 func TestServe_IdempotencyUnsubscribeAbsentIsStillDeduplicated(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{Count: 1} // Delete drives Count to 0, so Observe reports Absent

@@ -10,10 +10,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// callSnapshot is one hook invocation, paired with the fake's own call
-// counters at that instant. Verb dispatch is single-threaded and
-// synchronous, so this snapshot is an accurate position in the call
-// sequence, not just the hook's own name.
+// Verb dispatch is single-threaded and synchronous, so a snapshot is an accurate position in the call sequence.
 type callSnapshot struct {
 	hook                                   string
 	ensureCalls, observeCalls, deleteCalls int
@@ -65,9 +62,6 @@ func newRecordingHandler(t *testing.T, f *kittest.FakeResource) (*handler.Handle
 	return h, s, &seq
 }
 
-// TestServe_MapsEachVerbToItsCallSequence is the one table test the CONTRACT
-// asks for: one row per verb, asserting the exact hook/Resource call
-// sequence and call counts the fake recorded.
 func TestServe_MapsEachVerbToItsCallSequence(t *testing.T) {
 	t.Run("subscribe", func(t *testing.T) {
 		f := &kittest.FakeResource{}

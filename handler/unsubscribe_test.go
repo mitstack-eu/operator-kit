@@ -10,9 +10,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// TestServe_UnsubscribeAbsentTrueOnlyAfterObserveReportsAbsent pins the
-// success path: Delete succeeds, Observe settles to Absent within budget,
-// and the response says absent:true.
 func TestServe_UnsubscribeAbsentTrueOnlyAfterObserveReportsAbsent(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{Count: 1} // Delete drives Count to 0 -> Observe reports Absent
@@ -33,11 +30,7 @@ func TestServe_UnsubscribeAbsentTrueOnlyAfterObserveReportsAbsent(t *testing.T) 
 	}
 }
 
-// TestServe_UnsubscribeAbsentFalseWithDetailForPresent pins unsubscribe's
-// deliberate divergence from Observation.Response(): unlike validate,
-// unsubscribe always answers a definite boolean, so a resource still
-// observed Present after Delete answers absent:false with a detail, not an
-// omitted marker.
+// Unlike validate, unsubscribe always answers a definite boolean, so a resource still Present after Delete answers absent:false.
 func TestServe_UnsubscribeAbsentFalseWithDetailForPresent(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	present := contract.Present
@@ -62,9 +55,6 @@ func TestServe_UnsubscribeAbsentFalseWithDetailForPresent(t *testing.T) {
 	}
 }
 
-// TestServe_UnsubscribeAbsentFalseWithDetailForUnknown mirrors the Present
-// case for Unknown: validate would omit "absent" entirely for Unknown, but
-// unsubscribe still answers a definite false.
 func TestServe_UnsubscribeAbsentFalseWithDetailForUnknown(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	unknown := contract.Unknown
@@ -86,9 +76,6 @@ func TestServe_UnsubscribeAbsentFalseWithDetailForUnknown(t *testing.T) {
 	}
 }
 
-// TestServe_UnsubscribeObserveErrorAfterSuccessfulDeleteIsAnErrorResponse
-// pins that an Observe error after Delete succeeded is classified as an
-// error response — not folded into absent:false.
 func TestServe_UnsubscribeObserveErrorAfterSuccessfulDeleteIsAnErrorResponse(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{Count: 1, ObserveErr: errors.New("observe backend unavailable")}
