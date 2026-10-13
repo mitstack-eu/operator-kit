@@ -14,9 +14,3 @@ scan could not read on a tooling failure.
 
 The trees hold Go sources only. Each harness adds the `go.mod` and the
 `manifest.yaml` its own gate needs around them.
-
-The platform keeps a byte-identical copy at
-`scripts/test/fixtures/kit-handler-import/`. Its suite
-`scripts/kit-handler-files_test.sh` compares that copy with this directory
-in the operator-kit version `api/go.mod` pins, so the two sets cannot drift
-apart past a pin bump.
