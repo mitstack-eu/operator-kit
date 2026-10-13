@@ -46,7 +46,7 @@ func trustPlumbingSuite(target string) SuiteResult {
 	if detail, ok := checkKitDependency(target); !ok {
 		return SuiteResult{name, "fail", detail}
 	}
-	binding := kitShimFile + " present"
+	var binding string
 	if contract == kitV1Contract {
 		file, ok := checkKitHandlerImport(target)
 		if !ok {
@@ -55,6 +55,8 @@ func trustPlumbingSuite(target string) SuiteResult {
 		binding = fmt.Sprintf("%s imports %s (%s waived)", file, kitHandlerPackage, kitShimFile)
 	} else if _, err := os.Stat(filepath.Join(target, kitShimFile)); err != nil {
 		return SuiteResult{name, "fail", fmt.Sprintf("%s has no %s binding it to the kit", target, kitShimFile)}
+	} else if binding, ok = checkKitShimParity(target); !ok {
+		return SuiteResult{name, "fail", binding}
 	}
 	if detail, ok := checkNoOwnedSymbolRedeclared(target); !ok {
 		return SuiteResult{name, "fail", detail}

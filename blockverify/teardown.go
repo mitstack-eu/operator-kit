@@ -22,6 +22,10 @@ func teardownSuite(target string) SuiteResult {
 		return SuiteResult{name, "fail", fmt.Sprintf("%s is missing a %s... test", target, teardownNeedle)}
 	}
 
+	if detail, ok := refuseKitFake(target, "TestUnsubscribeDeletes"); !ok {
+		return SuiteResult{name, "fail", detail}
+	}
+
 	ok, output := runGoTest(target, "TestUnsubscribeDeletes")
 	if !ok {
 		return SuiteResult{name, "fail", detailFromGoTestOutput(output)}

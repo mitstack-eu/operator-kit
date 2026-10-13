@@ -21,6 +21,10 @@ func secretSafetySuite(target string) SuiteResult {
 		return SuiteResult{name, "fail", fmt.Sprintf("%s serves /logs but is missing a %s... test", target, secretLeakLogsNeedle)}
 	}
 
+	if detail, ok := refuseKitFake(target, "TestNoSecretLeak"); !ok {
+		return SuiteResult{name, "fail", detail}
+	}
+
 	ok, output := runGoTest(target, "TestNoSecretLeak")
 	if !ok {
 		return SuiteResult{name, "fail", detailFromGoTestOutput(output)}
