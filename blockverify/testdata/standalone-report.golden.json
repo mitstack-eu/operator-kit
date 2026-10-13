@@ -9,7 +9,7 @@
     {
       "name": "trust-plumbing",
       "status": "pass",
-      "detail": "depends on github.com/mitstack-eu/operator-kit at or above the floor v0.1.0, kitshim.go present, no kit-owned symbol redeclared, manifest.yaml present"
+      "detail": "depends on github.com/mitstack-eu/operator-kit at or above the floor v0.1.0, kitshim.go matches the kit's canonical, no kit-owned symbol redeclared, manifest.yaml present"
     },
     {
       "name": "contract",
@@ -24,7 +24,7 @@
     {
       "name": "teardown",
       "status": "pass",
-      "detail": "TestUnsubscribeDeletes* proves unsubscribe deletes what subscribe created"
+      "detail": "TestUnsubscribeDeletes* proves unsubscribe deletes what subscribe created; verify.go asks the provider again through the kit's teardown rule, outside any comma-ok block, and TestUnsubscribeVerifies* passes"
     },
     {
       "name": "resources",

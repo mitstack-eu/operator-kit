@@ -17,7 +17,7 @@ const kitVersionFloor = "v0.1.0"
 
 const kitShimFile = "kitshim.go"
 
-// kitOwnedFuncs mirrors kit_owned_funcs in scripts/check-operator-kit-pin.sh.
+// kitOwnedFuncs are the trust-boundary functions only the kit may declare, so a block's local copy cannot diverge from the contract.
 var kitOwnedFuncs = []string{
 	"verifyReplay",
 	"verifyTimestampSkew",
@@ -46,7 +46,7 @@ func trustPlumbingSuite(target string) SuiteResult {
 	if detail, ok := checkKitDependency(target); !ok {
 		return SuiteResult{name, "fail", detail}
 	}
-	binding := kitShimFile + " present"
+	var binding string
 	if contract == kitV1Contract {
 		file, ok := checkKitHandlerImport(target)
 		if !ok {
@@ -55,6 +55,8 @@ func trustPlumbingSuite(target string) SuiteResult {
 		binding = fmt.Sprintf("%s imports %s (%s waived)", file, kitHandlerPackage, kitShimFile)
 	} else if _, err := os.Stat(filepath.Join(target, kitShimFile)); err != nil {
 		return SuiteResult{name, "fail", fmt.Sprintf("%s has no %s binding it to the kit", target, kitShimFile)}
+	} else if binding, ok = checkKitShimParity(target); !ok {
+		return SuiteResult{name, "fail", binding}
 	}
 	if detail, ok := checkNoOwnedSymbolRedeclared(target); !ok {
 		return SuiteResult{name, "fail", detail}
@@ -62,10 +64,17 @@ func trustPlumbingSuite(target string) SuiteResult {
 	if _, err := os.Stat(filepath.Join(target, manifestFile)); err != nil {
 		return SuiteResult{name, "fail", fmt.Sprintf("%s is missing manifest.yaml", target)}
 	}
+	githubBase, ok := checkGitHubBaseAllowlist(target)
+	if !ok {
+		return SuiteResult{name, "fail", githubBase}
+	}
 
 	pass := fmt.Sprintf(
 		"depends on %s at or above the floor %s, %s, no kit-owned symbol redeclared, manifest.yaml present",
 		kitModulePath, kitVersionFloor, binding)
+	if githubBase != "" {
+		pass += ", " + githubBase
+	}
 	if contract == kitV1Contract {
 		pass = kitV1Contract + " rule: " + pass
 	}

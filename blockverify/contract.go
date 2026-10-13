@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// contractRequiredTests mirrors required_tests in scripts/check-operator-contract-tests.sh exactly.
+// contractRequiredTests are the webhook-contract tests a legacy block must ship and pass.
 var contractRequiredTests = []string{
 	"TestContract_DecodesEveryValidGolden",
 	"TestContract_RejectsMalformedGoldens",

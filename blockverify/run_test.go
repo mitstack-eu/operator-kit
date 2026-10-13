@@ -322,6 +322,9 @@ func TestRun_ResultsDigest_ChangesWhenASuiteOutcomeChanges(t *testing.T) {
 	}
 }
 
+// standaloneInvocation is the command a block author runs from the block's own directory.
+const standaloneInvocation = "blockverify --standalone ."
+
 func TestRun_RepoModeRefused_NoStandaloneFlag(t *testing.T) {
 	dir := newGoldenFixture(t)
 
@@ -329,8 +332,8 @@ func TestRun_RepoModeRefused_NoStandaloneFlag(t *testing.T) {
 	if exit != 2 {
 		t.Fatalf("want exit 2 (usage/config error) refusing repo mode, got %d\nstdout:\n%s", exit, stdout)
 	}
-	if !strings.Contains(stdout, "scripts/block-verify.sh") {
-		t.Errorf("refusal message must name scripts/block-verify.sh as the repo-mode tool, got:\n%s", stdout)
+	if !strings.Contains(stdout, standaloneInvocation) {
+		t.Errorf("refusal message must show the standalone invocation %q, got:\n%s", standaloneInvocation, stdout)
 	}
 }
 
@@ -339,8 +342,8 @@ func TestRun_RepoModeRefused_NoArgsAtAll(t *testing.T) {
 	if exit != 2 {
 		t.Fatalf("want exit 2 with no arguments at all, got %d\nstdout:\n%s", exit, stdout)
 	}
-	if !strings.Contains(stdout, "scripts/block-verify.sh") {
-		t.Errorf("refusal message must name scripts/block-verify.sh, got:\n%s", stdout)
+	if !strings.Contains(stdout, standaloneInvocation) {
+		t.Errorf("refusal message must show the standalone invocation %q, got:\n%s", standaloneInvocation, stdout)
 	}
 }
 

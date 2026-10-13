@@ -31,6 +31,9 @@ with `contract.ParseBlockID` in its manifest suite. Write a private id in
 quotes, as in `id: "@acme/billing-db"`, because YAML does not allow `@` at
 the start of an unquoted value.
 
+[Running the block checks on your block](docs/block-checks.md) lists every
+suite blockverify runs and the one command you run it with.
+
 `contract.ParseManifest` is the kit's one block manifest parser for both
 manifest versions, and blockverify and the handler read every manifest
 through it. Under `mitstack/v1alpha` it reads the whole manifest strictly
@@ -68,7 +71,8 @@ A block whose cloud credential is short-lived sets
 that credential before it expires. The field is optional and takes `true` or
 `false` only, and a manifest without it reads as `false`.
 
-A block whose install can outlast the platform's default settle wait sets
+To settle means the platform observes the state a block's last verb asked
+for. A block whose install can outlast the platform's default settle wait sets
 `spec.lifecycle.settleBudget`, read into `ManifestLifecycle.SettleBudget`, to
 say how long the platform waits for it to settle. The field is optional and
 takes a positive Go duration such as `75m`. The parser refuses zero, a
@@ -191,12 +195,12 @@ consulted. The token is the platform's own signed assertion of the
 consuming org, app and subscription, and nothing in `Config` or the
 manifest turns the check off.
 
-An error the Resource or a hook returns is answered by its kind. A
+An error the Resource or a hook returns is answered by its type. A
 `*handler.Refused` answers 400 with a `refused:<class>` status detail,
 which the engine treats as permanent. Any other error answers 500, which
 the engine retries under the same idempotency key, and the idempotency
 cache never stores a 500, so the retry reaches the Resource again. A panic
-in the Resource or a hook is answered the same way as that second kind: the
+in the Resource or a hook is answered the same way as that second case: the
 Handler recovers it and answers 500 with a fixed error naming the verb,
 such as `handler: the block panicked during subscribe`. The response never
 carries the panic value. The Handler recovers inside the idempotency cache's

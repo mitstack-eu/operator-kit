@@ -400,3 +400,188 @@ func TestNoContract_DeliverableKeepsTheLegacyVerdict(t *testing.T) {
 		t.Errorf("deliverable detail = %q, want it to name Dockerfile", got.Detail)
 	}
 }
+
+const unverifiedSurvivedGo = `package main
+
+import "context"
+
+func (h *Handler) survived(_ context.Context, id string) bool {
+	return h.Store.Exists(id)
+}
+`
+
+const verifyOnlyInATestGo = `package main
+
+import (
+	"context"
+	"testing"
+
+	"github.com/mitstack-eu/operator-kit/v2/teardown"
+)
+
+func TestVerifyIsReachable(t *testing.T) {
+	_ = teardown.Verify(context.Background(), teardown.Options{})
+}
+`
+
+const verifyGatedByCommaOkGo = `package main
+
+import (
+	"context"
+
+	"github.com/mitstack-eu/operator-kit/v2/teardown"
+)
+
+type existenceChecker interface{ Exists(string) bool }
+
+func (h *Handler) survived(ctx context.Context, id string) bool {
+	var store any = h.Store
+	if checker, ok := store.(existenceChecker); ok {
+		return teardown.Verify(ctx, teardown.Options{}, teardown.Check{
+			Kind:    "fixture resource",
+			Present: func(context.Context) (bool, error) { return checker.Exists(id), nil },
+		})
+	}
+	return false
+}
+`
+
+const verifyAfterAClosedCommaOkGo = `package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/mitstack-eu/operator-kit/v2/teardown"
+)
+
+type existenceChecker interface{ Exists(string) bool }
+
+func (h *Handler) survived(ctx context.Context, id string) bool {
+	var store any = h.Store
+	if _, ok := store.(existenceChecker); ok {
+		log.Printf("store answers existence checks")
+	}
+	return teardown.Verify(ctx, teardown.Options{}, teardown.Check{
+		Kind:    "fixture resource",
+		Present: func(context.Context) (bool, error) { return h.Store.Exists(id), nil },
+	})
+}
+`
+
+const failingTeardownVerifyTestGo = `package main
+
+import "testing"
+
+func TestUnsubscribeVerifiesNothing(t *testing.T) {
+	t.Fatal("the verification test fails")
+}
+`
+
+const kitV1TeardownTestGo = `package main
+
+import "testing"
+
+func TestUnsubscribeDeletesWhatSubscribeCreated(t *testing.T) {}
+`
+
+func TestTeardownSuite_LegacyRuleRequiresAnUnconditionalVerifiedTeardown(t *testing.T) {
+	tests := []struct {
+		name       string
+		files      func(t *testing.T) map[string]string
+		wantStatus string
+		wantDetail string
+	}{
+		{
+			name:       "a teardown that asks the provider again through the kit, proven by a passing test, passes",
+			files:      noContractFixtureFiles,
+			wantStatus: "pass",
+			wantDetail: "TestUnsubscribeVerifies",
+		},
+		{
+			name: "a teardown that reports success without calling Survivor, Verify or Absent fails",
+			files: func(t *testing.T) map[string]string {
+				files := noContractFixtureFiles(t)
+				files["verify.go"] = unverifiedSurvivedGo
+				return files
+			},
+			wantStatus: "fail",
+			wantDetail: "Survivor, Verify or Absent",
+		},
+		{
+			name: "a verification call that lives only in a test file does not count",
+			files: func(t *testing.T) map[string]string {
+				files := noContractFixtureFiles(t)
+				files["verify.go"] = unverifiedSurvivedGo
+				files["verify_reachable_test.go"] = verifyOnlyInATestGo
+				return files
+			},
+			wantStatus: "fail",
+			wantDetail: "Survivor, Verify or Absent",
+		},
+		{
+			name: "a verification call inside a comma-ok type assertion block fails, naming its file and line",
+			files: func(t *testing.T) map[string]string {
+				files := noContractFixtureFiles(t)
+				files["verify.go"] = verifyGatedByCommaOkGo
+				return files
+			},
+			wantStatus: "fail",
+			wantDetail: "verify.go:14",
+		},
+		{
+			name: "a comma-ok block that closes before the verification call does not gate it",
+			files: func(t *testing.T) map[string]string {
+				files := noContractFixtureFiles(t)
+				files["verify.go"] = verifyAfterAClosedCommaOkGo
+				return files
+			},
+			wantStatus: "pass",
+			wantDetail: "TestUnsubscribeVerifies",
+		},
+		{
+			name: "a module with no TestUnsubscribeVerifies test fails, naming it",
+			files: func(t *testing.T) map[string]string {
+				files := noContractFixtureFiles(t)
+				delete(files, "teardown_verify_test.go")
+				return files
+			},
+			wantStatus: "fail",
+			wantDetail: "TestUnsubscribeVerifies",
+		},
+		{
+			name: "a failing TestUnsubscribeVerifies test fails the suite",
+			files: func(t *testing.T) map[string]string {
+				files := noContractFixtureFiles(t)
+				files["teardown_verify_test.go"] = failingTeardownVerifyTestGo
+				return files
+			},
+			wantStatus: "fail",
+			wantDetail: "FAIL",
+		},
+		{
+			name: "a kit/v1 block is not held to the legacy rule, because the kit owns its teardown verification",
+			files: func(t *testing.T) map[string]string {
+				files := kitV1FixtureFiles(t)
+				files["teardown_test.go"] = kitV1TeardownTestGo
+				return files
+			},
+			wantStatus: "pass",
+			wantDetail: "kit/v1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := newFixtureFrom(t, tc.files(t))
+
+			got := teardownSuite(dir)
+
+			if got.Status != tc.wantStatus {
+				t.Fatalf("teardownSuite(%s).Status = %q; want %q; detail: %s", dir, got.Status, tc.wantStatus, got.Detail)
+			}
+			if !strings.Contains(got.Detail, tc.wantDetail) {
+				t.Errorf("teardownSuite(%s).Detail = %q; want it to contain %q", dir, got.Detail, tc.wantDetail)
+			}
+		})
+	}
+}

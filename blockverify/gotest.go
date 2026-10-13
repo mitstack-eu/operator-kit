@@ -14,7 +14,7 @@ func runGoTest(dir, pattern string, flags ...string) (ok bool, output string) {
 	return err == nil, string(out)
 }
 
-// detailFromGoTestOutput picks the first FAIL line, else the last line, as scripts/block-verify.sh's run_suite does.
+// detailFromGoTestOutput picks the first FAIL line, else the last line, so a suite's detail names what failed.
 func detailFromGoTestOutput(output string) string {
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 	for _, l := range lines {
