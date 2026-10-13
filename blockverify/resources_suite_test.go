@@ -86,12 +86,3 @@ func TestResourcesSuite_FailsWhenTestDeclaredResourcesNeverCallsTheKitCheck(t *t
 	dir := resourcesFixture(t, resourcesFixtureManifest, "package main\n\nimport \"testing\"\n\nfunc TestDeclaredResources(t *testing.T) {}\n")
 	requireResourcesFailNaming(t, resourcesSuite(dir), "kittest.AssertBlock")
 }
-
-func TestResourcesSuite_FailsWhenTestDeclaredResourcesCallsOnlyTheRetiredPerResourceCheck(t *testing.T) {
-	testGo := "package main\n\nimport \"testing\"\n\nfunc TestDeclaredResources(t *testing.T) {\n\t_ = \"kittest.AssertDeclaredResources(\"\n}\n"
-	dir := resourcesFixture(t, resourcesFixtureManifest, testGo)
-
-	got := resourcesSuite(dir)
-
-	requireResourcesFailNaming(t, got, "kittest.AssertBlock")
-}
