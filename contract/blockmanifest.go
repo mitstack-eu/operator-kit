@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -210,6 +211,39 @@ type ManifestLifecycle struct {
 	Contract               string        `json:"contract"`
 	NeedsCredentialRefresh bool          `json:"needsCredentialRefresh,omitempty"`
 	SettleBudget           time.Duration `json:"settleBudget,omitempty"`
+}
+
+type plainLifecycle ManifestLifecycle
+
+// lifecycleJSON writes SettleBudget in the form ParseManifest reads, since encoding/json writes a time.Duration as nanoseconds.
+type lifecycleJSON struct {
+	plainLifecycle
+	SettleBudget string `json:"settleBudget,omitempty"`
+}
+
+func (l ManifestLifecycle) MarshalJSON() ([]byte, error) {
+	out := lifecycleJSON{plainLifecycle: plainLifecycle(l)}
+	if l.SettleBudget != 0 {
+		out.SettleBudget = l.SettleBudget.String()
+	}
+	return json.Marshal(out)
+}
+
+func (l *ManifestLifecycle) UnmarshalJSON(raw []byte) error {
+	var in lifecycleJSON
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return err
+	}
+	*l = ManifestLifecycle(in.plainLifecycle)
+	if in.SettleBudget == "" {
+		return nil
+	}
+	budget, err := time.ParseDuration(in.SettleBudget)
+	if err != nil {
+		return fmt.Errorf("lifecycle settleBudget %q: %w", in.SettleBudget, err)
+	}
+	l.SettleBudget = budget
+	return nil
 }
 
 type ManifestObservability struct {
