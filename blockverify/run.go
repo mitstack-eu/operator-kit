@@ -42,11 +42,11 @@ a spec.version that differs from the base's needs spec.releaseClass and
 spec.releaseNote. A path that does not exist is a block new on this branch,
 and no version is compared.
 
-This command supports ONLY standalone mode (a single external target,
-scanned in isolation). It refuses to run without --standalone and a target
-directory. For repo-mode verification against this monorepo's own examples/
-tree, use scripts/block-verify.sh instead — that is the tool for a block
-living inside this repository; this command is its external-repo twin.
+This command supports ONLY standalone mode: one block's directory, scanned
+in isolation. It refuses to run without --standalone and a target directory.
+From the block's own directory, run:
+
+  blockverify --standalone .
 `
 
 // Run executes the blockverify CLI and returns its exit code, writing only to stdout.

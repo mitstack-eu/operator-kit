@@ -17,7 +17,7 @@ const kitVersionFloor = "v0.1.0"
 
 const kitShimFile = "kitshim.go"
 
-// kitOwnedFuncs mirrors kit_owned_funcs in scripts/check-operator-kit-pin.sh.
+// kitOwnedFuncs are the trust-boundary functions only the kit may declare, so a block's local copy cannot diverge from the contract.
 var kitOwnedFuncs = []string{
 	"verifyReplay",
 	"verifyTimestampSkew",
@@ -62,10 +62,17 @@ func trustPlumbingSuite(target string) SuiteResult {
 	if _, err := os.Stat(filepath.Join(target, manifestFile)); err != nil {
 		return SuiteResult{name, "fail", fmt.Sprintf("%s is missing manifest.yaml", target)}
 	}
+	githubBase, ok := checkGitHubBaseAllowlist(target)
+	if !ok {
+		return SuiteResult{name, "fail", githubBase}
+	}
 
 	pass := fmt.Sprintf(
 		"depends on %s at or above the floor %s, %s, no kit-owned symbol redeclared, manifest.yaml present",
 		kitModulePath, kitVersionFloor, binding)
+	if githubBase != "" {
+		pass += ", " + githubBase
+	}
 	if contract == kitV1Contract {
 		pass = kitV1Contract + " rule: " + pass
 	}

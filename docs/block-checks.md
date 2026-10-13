@@ -1,0 +1,71 @@
+# Running the block checks on your block
+
+This page is for a block author who wants the conformance verdict before
+pushing. It covers what `blockverify` judges, how you run it from your block's
+own repository, and where CI runs it for you. Every check the platform holds a
+block to lives in this kit, so the verdict you get locally is the verdict the
+platform reads.
+
+## What blockverify judges
+
+`blockverify` runs eight suites over one block's directory, in this order. A
+suite that fails turns the verdict to `fail`, and a partial pass is never
+signed. A suite that does not apply to your block reports `skipped` with the
+reason.
+
+| Suite | What it checks |
+|---|---|
+| `trust-plumbing` | Your `go.mod` requires the kit at or above the floor, the block binds to the kit, no kit-owned function is redeclared, and `manifest.yaml` is present. A block that reads the GitHub API must resolve a request-supplied base through an allowlist it owns, either `ghapi.Base` or `ghapi.BaseFromEnv`, or a `urlguard.go` with `allowedGitHubHosts()`. It must also never concatenate a raw `apiBase` into a URL |
+| `contract` | A legacy block ships and passes `TestContract_DecodesEveryValidGolden`, `TestContract_RejectsMalformedGoldens` and `TestContract_EmitsConformingResponse`. A `kit/v1` block passes once a non-test file imports the kit's `handler` package |
+| `secret-safety` | `TestNoSecretLeak` exists and passes, plus its `/logs` variant when the block serves `/logs` |
+| `teardown` | `TestUnsubscribeDeletes*` exists and passes. A legacy block must also call `teardown.Survivor`, `teardown.Verify` or `teardown.Absent` from production code, outside any `if x, ok := y.(T); ok` block, and ship a passing `TestUnsubscribeVerifies*`. A `kit/v1` block is exempt, because the kit's handler observes absence after every delete |
+| `resources` | Each resource a `mitstack/v1beta` manifest declares is driven through the kit and proven absent afterwards |
+| `deliverable` | The block has its own `Dockerfile`, and it copies nothing from the retired `examples/operator-kit` path |
+| `manifest` | The manifest parses strictly, and every output and read resolves through the kit's resource registry |
+| `naming` | When the manifest declares `spec.naming.appName`, its `maxLength` equals the smallest room any name derived from it leaves under its provider's limit |
+
+A legacy block is one whose manifest declares no `spec.lifecycle.contract`. A
+`kit/v1` block declares `contract: kit/v1` and lets the kit serve its lifecycle
+route.
+
+## Run it locally
+
+The kit is a private module, so Go needs your GitHub credential to fetch it.
+Set this once, in the shell you run the checks from:
+
+```sh
+export GOPRIVATE=github.com/mitstack-eu
+git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+```
+
+Then run the suites from your block's directory, naming the kit release to
+run:
+
+```sh
+go run github.com/mitstack-eu/operator-kit/v2/blockverify@v2.1.0 --standalone .
+```
+
+The version is required because `go run` with `@` builds the command outside
+your block's module, so your own `go.mod` cannot choose it. `v2.1.0` is the
+first release that carries every block check, and a later tag works the same
+way. The run takes about a minute, mostly spent compiling and running your
+tests. A passing block ends with a line like this:
+
+```text
+VERDICT: PASS — 8 suite(s), kit v0.1.0, standalone mode
+```
+
+A failing suite prints its reason on its own line, such as the missing test or
+the file and line of a gated teardown call. Add `--json` for the
+machine-readable report the attestation binds to.
+
+## Where CI runs it
+
+The kit's reusable workflow, `.github/workflows/publish-block.yml`, runs
+`blockverify --standalone` in its `conformance` job on every event your block's
+CI calls it for. A red verdict there stops the `publish` job, so no image ships
+without a pass.
+
+A block the platform scaffolds also carries `.github/workflows/block-verify.yml`.
+That workflow runs the same command on each push to `main` and submits the
+report to the platform, which signs it as the block's attestation.
