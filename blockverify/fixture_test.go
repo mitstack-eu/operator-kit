@@ -173,8 +173,9 @@ type request struct {
 // production operator would provision — just enough to prove subscribe
 // creates something and unsubscribe deletes it (MIT-1124's teardown contract).
 type resourceStore struct {
-	mu        sync.Mutex
-	resources map[string]bool
+	mu           sync.Mutex
+	resources    map[string]bool
+	keepOnDelete bool
 }
 
 func newResourceStore() *resourceStore { return &resourceStore{resources: map[string]bool{}} }
@@ -188,6 +189,9 @@ func (s *resourceStore) Create(id string) {
 func (s *resourceStore) Delete(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.keepOnDelete {
+		return
+	}
 	delete(s.resources, id)
 }
 
@@ -228,6 +232,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeOK(w)
 	case "unsubscribe":
 		h.Store.Delete(req.SubscriptionID)
+		if h.survived(r.Context(), req.SubscriptionID) {
+			writeError(w, http.StatusConflict, "unsubscribe reported success but the resource is still present")
+			return
+		}
 		writeOK(w)
 	case "validate":
 		writeOK(w)
@@ -435,6 +443,48 @@ func TestUnsubscribeDeletesTheResourceItCreated(t *testing.T) {
 }
 `
 
+// verifyGo asks the provider again after a delete through the kit's teardown
+// rule, outside any comma-ok block, which the legacy teardown rule requires.
+const verifyGo = `package main
+
+import (
+	"context"
+
+	"github.com/mitstack-eu/operator-kit/v2/teardown"
+)
+
+func (h *Handler) survived(ctx context.Context, id string) bool {
+	return teardown.Verify(ctx, teardown.Options{}, teardown.Check{
+		Kind: "fixture resource",
+		Present: func(context.Context) (bool, error) {
+			return h.Store.Exists(id), nil
+		},
+	})
+}
+`
+
+const teardownVerifyTestGo = `package main
+
+import (
+	"net/http"
+	"testing"
+)
+
+func TestUnsubscribeVerifiesASurvivingResourceFailsTheTeardown(t *testing.T) {
+	h, signer := newHandler(t)
+	h.Store.keepOnDelete = true
+	if rec := post(t, h, signer, request{Operation: "subscribe", SubscriptionID: "sub_verify_1"}); rec.Code != http.StatusOK {
+		t.Fatalf("subscribe: want 200, got %d: %s", rec.Code, rec.Body)
+	}
+
+	rec := post(t, h, signer, request{Operation: "unsubscribe", SubscriptionID: "sub_verify_1"})
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("unsubscribe of a resource that survived its delete: want a failure, got 200: %s", rec.Body)
+	}
+}
+`
+
 const manifestYAML = `apiVersion: mitstack/v1alpha
 kind: Block
 metadata:
@@ -481,6 +531,8 @@ func goldenFixtureFiles(t *testing.T) map[string]string {
 		"contract_response_test.go":    contractResponseTestGo,
 		"secrets_leak_test.go":         secretsLeakTestGo,
 		"teardown_test.go":             teardownTestGo,
+		"verify.go":                    verifyGo,
+		"teardown_verify_test.go":      teardownVerifyTestGo,
 		"manifest.yaml":                manifestYAML,
 		"Dockerfile":                   dockerfileContents,
 	}
