@@ -63,7 +63,6 @@ func v1alphaUnknownFields(t *testing.T) map[string][]byte {
 		"spec.naming.appName.bogus":     spec("  naming:\n    appName:\n      maxLength: 27\n      bogus: 1\n"),
 		"spec.naming.appName.derivedNames[0].bogus": spec("  naming:\n    appName:\n      maxLength: 27\n" +
 			"      derivedNames:\n        - template: \"{appName}-db\"\n          limit: 30\n          bogus: 1\n"),
-		"spec.lifecycle.settleBudget": spec("  lifecycle:\n    endpoint: https://fixture.example.test/hook\n    settleBudget: 75m\n"),
 	}
 }
 

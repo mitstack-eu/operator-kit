@@ -923,3 +923,9 @@ func TestParseManifest_V1BetaRefusesASettleBudgetThatIsNotAPositiveDuration(t *t
 		})
 	}
 }
+
+func TestParseManifest_V1AlphaRefusesSettleBudgetAsAnUnknownLifecycleKey(t *testing.T) {
+	raw := []byte(alphaHead + "  lifecycle:\n    endpoint: https://fixture.example.test/hook\n    settleBudget: 75m\n")
+
+	requireRefusedNaming(t, raw, "spec.lifecycle.settleBudget")
+}
