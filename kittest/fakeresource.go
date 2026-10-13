@@ -21,8 +21,7 @@ type FakeResource struct {
 	EnsureErr, ObserveErr, DeleteErr error
 
 	DuplicateOnEnsure bool
-	// LeakOnDelete leaves one resource behind on Delete.
-	LeakOnDelete bool
+	LeakOnDelete      bool
 	// ErrorWhenAlreadyAbsent makes Delete fail when nothing is provisioned.
 	ErrorWhenAlreadyAbsent bool
 	// ClobberOnUpgrade drops the pre-existing outputs on a second Ensure.
@@ -34,7 +33,6 @@ type FakeResource struct {
 	EnsureCalls, ObserveCalls, DeleteCalls int
 }
 
-// Ensure converges Count to a provisioned resource, or adds one per call under DuplicateOnEnsure.
 func (f *FakeResource) Ensure(ctx context.Context, d contract.Desired) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -79,7 +77,6 @@ func (f *FakeResource) Observe(ctx context.Context, d contract.Desired) (contrac
 	return contract.Observation{State: state, Outputs: f.Outputs, StatusDetail: f.StatusDetail}, nil
 }
 
-// Delete treats absence as success unless ErrorWhenAlreadyAbsent is set.
 func (f *FakeResource) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

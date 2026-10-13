@@ -10,37 +10,25 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-// Rendered is one resource's Argo CD app, its files by repository path, each
-// with content, and the outputs it publishes, none of them a secret.
+// Rendered is one resource's Argo CD app, its files by repository path and its outputs, none of them a secret.
 type Rendered struct {
 	App     string
 	Files   map[string][]byte
 	Outputs map[string]string
 }
 
-// Resource observes one declared resource whose files a block-level handler
-// commits through Deploy, as the handler.Observer of that resource. All
-// three fields are required.
+// Resource is the handler.Observer of one declared resource whose files a block-level handler commits through Deploy, and every field is required.
 type Resource struct {
-	// Repository returns the GitOps repository the resource for d lives in.
 	Repository func(ctx context.Context, d contract.Desired) (Repository, error)
 
-	// Notifications returns d's notification source, usually
-	// NotificationsFromContext.
+	// Notifications usually returns NotificationsFromContext.
 	Notifications func(ctx context.Context, d contract.Desired) (Notifications, error)
 
-	// Render renders d's files.
 	Render func(d contract.Desired) (Rendered, error)
 }
 
-// ObserveResource judges the app's newest notification, whatever its
-// revision, once the files at that revision stand as they do at head, since
-// Argo CD may sync a later revision than the one committed. It renders from
-// the request ref carries. A live sync on a scratch cluster with two commits
-// inside one poll interval would show whether Argo CD does sync a later
-// revision. A block reads only the notifications of the cluster its
-// kubernetes-cluster requirement binds, so binding none or several stays
-// unknown, and a cluster hosting several orgs' apps needs its own rule.
+// ObserveResource judges the app's newest notification, whatever its revision, once the files at that revision stand as they do at head, since Argo CD may sync a later revision than the one committed.
+// A block reads only the notifications of the cluster its kubernetes-cluster requirement binds, so binding none or several stays unknown.
 func (r *Resource) ObserveResource(ctx context.Context, ref contract.ResourceRef) (contract.Observation, error) {
 	d := ref.Desired
 	out, err := r.render(d)
@@ -135,7 +123,6 @@ func (r *Resource) repository(ctx context.Context, d contract.Desired) (Reposito
 	return repo, nil
 }
 
-// standing is how a set of files stands at one revision.
 type standing struct {
 	total   int
 	missing []string

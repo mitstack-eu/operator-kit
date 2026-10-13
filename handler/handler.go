@@ -25,15 +25,11 @@ type Resource interface {
 	Ensure(ctx context.Context, d contract.Desired) error
 
 	// Observe is polled after Ensure and Delete and called once for validate, and sees the verb's Secrets held only for that one call.
-	//
 	// Its outputs reach the wire unscrubbed, so they must never carry secret material, and a value identical to one of d.Secrets is refused.
 	Observe(ctx context.Context, d contract.Desired) (contract.Observation, error)
 
-	// Delete must not error when nothing was ever provisioned, and an error aborts before anything is destroyed.
-	//
-	// It must be idempotent: a settle timeout answers absent:false with no outputs and a redrive calls it again, so a second call must find the handover artifact it already made, or report the resource gone, rather than fail.
-	//
-	// Its outputs are merged into the unsubscribe response once the block settles absent, reach the wire unscrubbed, and must never carry secret material.
+	// Delete must not error when nothing was ever provisioned, and must be idempotent, since a settle timeout's redrive calls it again after it may already have destroyed the resource.
+	// Its outputs are merged into the unsubscribe answer once the block settles absent and reach the wire unscrubbed, so they must never carry secret material.
 	Delete(ctx context.Context, d contract.Desired) (outputs map[string]string, err error)
 }
 
