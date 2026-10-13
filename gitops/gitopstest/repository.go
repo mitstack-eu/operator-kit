@@ -11,8 +11,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/gitops"
 )
 
-// Commit is one commit a Repository landed, with the changes it was handed,
-// where a nil content deleted its path.
+// A nil content in Changes deleted its path.
 type Commit struct {
 	Revision string
 	Parent   string
@@ -20,8 +19,7 @@ type Commit struct {
 	Changes  map[string][]byte
 }
 
-// Repository is an in-memory gitops.Repository, safe for concurrent use,
-// that keeps every commit's tree so any revision it landed can be read.
+// Repository keeps every commit's tree so any revision it landed can be read.
 type Repository struct {
 	mu      sync.Mutex
 	commits []Commit
@@ -31,7 +29,6 @@ type Repository struct {
 	foreignChanges map[string][]byte
 }
 
-// NewRepository returns an empty Repository, whose head is "".
 func NewRepository() *Repository {
 	return &Repository{trees: map[string]map[string][]byte{}}
 }
@@ -43,8 +40,7 @@ func (r *Repository) Head(context.Context) (string, error) {
 	return r.head(), nil
 }
 
-// ReadFile returns a copy of path's content at revision and whether it
-// exists there. An unknown revision is an error.
+// An unknown revision is an error.
 func (r *Repository) ReadFile(_ context.Context, revision, path string) ([]byte, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -77,7 +73,6 @@ func (r *Repository) Commit(_ context.Context, parent string, changes map[string
 	return r.land(parent, changes, message), nil
 }
 
-// Changed returns revision's parent and the sorted paths its commit changed.
 func (r *Repository) Changed(_ context.Context, revision string) (string, []string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

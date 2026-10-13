@@ -1,10 +1,5 @@
 package main
 
-// run.go is the CLI seam: Run(args, stdout) does the whole command's work
-// and returns its process exit code, so the command is testable without a
-// real process, real network, or the real operator-kit repository's
-// history. main.go's only job is wiring Run to the real process streams.
-
 import (
 	"flag"
 	"fmt"
@@ -16,12 +11,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/safe"
 )
 
-// Run derives which board keys the commits between the resolved range's
-// endpoints deliver and records them once. It returns 0 on success,
-// including the "recorded nothing" case, and non-zero on any hard failure.
-// Every message, including error text, goes to stdout — Run never writes to
-// the real process streams directly, so a caller can capture and assert on
-// it.
+// Run writes every message, errors included, to stdout so a caller can capture it.
 func Run(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("board-delivery", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -73,11 +63,6 @@ func Run(args []string, stdout io.Writer) int {
 	return 0
 }
 
-// deliveredKeys reads every commit's subject and body in rng and returns
-// the board keys they deliver together: boardkeys.Message per commit,
-// merged, deduped and sorted numerically across the whole range by
-// boardkeys.Merge — the package's single definition of that rule, so it is
-// never re-implemented here.
 func deliveredKeys(repo, rng string) ([]string, error) {
 	commits, err := commitsInRange(repo, rng)
 	if err != nil {

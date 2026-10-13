@@ -9,8 +9,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-// NodeReport is one report a node of the Hetzner cluster sent the platform,
-// as GET /v1/subscriptions/{id}/node-reports serves it.
+// NodeReport is one report as GET /v1/subscriptions/{id}/node-reports serves it.
 type NodeReport struct {
 	ReceivedAt time.Time
 	Body       json.RawMessage
@@ -20,16 +19,9 @@ type NodeReportsAPI interface {
 	NodeReports(ctx context.Context, d contract.Desired, subscriptionID string) ([]NodeReport, error)
 }
 
-// NodeReported observes a resource the platform has no route to, such as a
-// kubernetes.namespace, by the kind, name and optional namespace its
-// identity names, reporting presence and identity only. It reads the
-// reports of the cluster subscription the identity's clusterSubscription
-// names, else its own, and matches an object labelled with the observing
-// subscription's id. A report counts
-// when its madeAt, else its receivedAt, is after the verb, and the newest
-// counting report decides: a listed object is present, and an unlisted one
-// is absent only when that report has a madeAt after the verb and marks its
-// list complete. Anything else is unknown.
+// NodeReported matches an object labelled with the observing subscription's id in the reports of the identity's clusterSubscription, else its own.
+// A report counts when its madeAt, else its receivedAt, is after the verb, and the newest counting report decides.
+// An unlisted object is absent only when that report has a madeAt after the verb and marks its list complete.
 type NodeReported struct {
 	API NodeReportsAPI
 }

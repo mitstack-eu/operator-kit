@@ -15,15 +15,11 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/settle"
 )
 
-// ProbeTimeout bounds a single probe.
 const ProbeTimeout = 5 * time.Second
 
 const (
-	// OutputAppURL is the URL the platform advertises.
-	OutputAppURL = "appUrl"
-	// OutputReachable is "true"/"false" for whether the app answered.
-	OutputReachable = "reachable"
-	// OutputCertTrusted is "true"/"false" for whether the answer carried a browser-trusted certificate.
+	OutputAppURL      = "appUrl"
+	OutputReachable   = "reachable"
 	OutputCertTrusted = "certTrusted"
 	// OutputAppHostname preserves the intended hostname when appUrl was rewritten to a fallback address.
 	OutputAppHostname = "appHostname"
@@ -31,7 +27,6 @@ const (
 	OutputPublicIP = "publicIp"
 )
 
-// Keys returns every output name this package reads or writes, sorted.
 func Keys() []string {
 	return []string{
 		OutputAppHostname,
@@ -42,7 +37,6 @@ func Keys() []string {
 	}
 }
 
-// Result is what one evaluation learned.
 type Result struct {
 	Reachable   bool
 	CertTrusted bool
@@ -60,10 +54,8 @@ type Result struct {
 	ServingURL string
 }
 
-// Prober performs one bounded probe of a URL; nil selects the real HTTP probe.
 type Prober func(ctx context.Context, url string) Result
 
-// Diagnoser explains why a hostname does not resolve; nil is allowed.
 type Diagnoser func(ctx context.Context, hostname string) string
 
 // Checker evaluates reachability for one operator; its zero value probes for real.
@@ -76,8 +68,6 @@ type Checker struct {
 	ExtraSuffixes []string
 }
 
-// Evaluate probes the appUrl in a set of outputs and returns the verdict.
-//
 // Outputs with no appUrl count as reachable, so non-web blocks are not stranded behind a web-only gate.
 func (c Checker) Evaluate(ctx context.Context, outputs map[string]string) Result {
 	appURL := outputs[OutputAppURL]
@@ -113,7 +103,6 @@ func (c Checker) Evaluate(ctx context.Context, outputs map[string]string) Result
 	}, diagnosis)
 }
 
-// promote re-probes a preserved appHostname, adding no probe when no rewrite happened.
 func (c Checker) promote(ctx context.Context, outputs map[string]string, appURL string, res Result) Result {
 	hostname := outputs[OutputAppHostname]
 	if hostname == "" || hostname == appURL {
@@ -148,7 +137,6 @@ func (c Checker) diagnose(ctx context.Context, hostname string) string {
 	return c.Diagnose(ctx, hostname)
 }
 
-// withDiagnosis appends a diagnosis to the Reason and never changes the verdict.
 func withDiagnosis(res Result, diagnosis string) Result {
 	if diagnosis == "" {
 		return res
@@ -164,7 +152,6 @@ func withDiagnosis(res Result, diagnosis string) Result {
 // PlatformAppsDomain is the platform's own apps zone, the one implicit entry in TrustedAppURL's allowlist.
 const PlatformAppsDomain = "apps.mitstack.dev"
 
-// TrustedAppURL validates an app URL against the apps zone plus extra suffixes and returns a URL rebuilt from the validated parts.
 func TrustedAppURL(raw string, extraSuffixes ...string) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("reach: app URL is empty")
@@ -203,13 +190,10 @@ func trustedAppURLPattern(extraSuffixes []string) *regexp.Regexp {
 	return regexp.MustCompile(`^https://(?:` + hostAlt + `)(?::\d+)?(?:/.*)?$`)
 }
 
-// Resolver looks up the addresses a hostname resolves to; *net.Resolver satisfies it.
 type Resolver interface {
 	LookupHost(ctx context.Context, host string) ([]string, error)
 }
 
-// VerifiedCustomDomain proves a claimed custom domain resolves to an address this subscription provisioned and returns it unchanged.
-//
 // One matching address suffices, since round-robin records are ordinary; a resolver error is always a refusal.
 func VerifiedCustomDomain(ctx context.Context, resolver Resolver, domain string, expectedAddrs []string) (string, error) {
 	if domain == "" || strings.ContainsAny(domain, ":/") {
@@ -233,11 +217,8 @@ func VerifiedCustomDomain(ctx context.Context, resolver Resolver, domain string,
 		domain, addrs, expectedAddrs)
 }
 
-// ProbeURL performs one bounded GET of a public URL and classifies the answer.
-//
 // Serving means a status below 500, or a TLS failure on trust only; a 502 is the edge up with the app down.
 // appURL must be in allowedURLs AND pass the barrier, since an OR would let a self-vouching caller reach a metadata endpoint.
-// InsecureSkipVerify is never used.
 func ProbeURL(ctx context.Context, client *http.Client, appURL string, allowedURLs ...string) Result {
 	return probeURL(ctx, client, appURL, nil, allowedURLs...)
 }
@@ -389,8 +370,7 @@ func neverRoutableCheckedURL(candidate string) (string, error) {
 var neverRoutableURLPattern = regexp.MustCompile(
 	`^https?://(?:127\.0\.0\.1|localhost|\[::1\]|(?:example|test|invalid)|[a-z0-9.-]+\.(?:example|test|invalid))(?::\d+)?(?:/.*)?$`)
 
-// Apply records the verdict on the outputs so every provider emits the same keys.
-// It copies the caller's map and never mutates it.
+// Apply copies the caller's map and never mutates it.
 func Apply(outputs map[string]string, res Result) map[string]string {
 	merged := make(map[string]string, len(outputs)+len(Keys()))
 	for k, v := range outputs {

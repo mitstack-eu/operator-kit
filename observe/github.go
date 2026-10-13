@@ -10,8 +10,6 @@ type GitHubRepositoryAPI interface {
 	RepositoryExists(ctx context.Context, d contract.Desired, fullName string) (bool, error)
 }
 
-// GitHubRepository observes a github.repository by its owner/name repo,
-// reporting it as repo.
 type GitHubRepository struct {
 	API GitHubRepositoryAPI
 }

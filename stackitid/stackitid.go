@@ -22,7 +22,6 @@ const subjectTokenType = "urn:ietf:params:oauth:token-type:jwt"
 // Bounds the response read so a hostile endpoint cannot exhaust memory.
 const maxResponseBody = 1 << 20 // 1 MiB
 
-// Identity is what Resolve needs to exchange the platform's assertion for a STACKIT access token.
 type Identity struct {
 	// TokenURL is required and must be absolute https, since the assertion is a bearer credential sent in the request body.
 	TokenURL string
@@ -30,11 +29,9 @@ type Identity struct {
 	// Assertion is the platform-signed OIDC assertion and is never logged or placed in a URL or error.
 	Assertion string
 	Scope     string
-	// Client is the injectable HTTP seam, defaulting to http.DefaultClient.
-	Client *http.Client
+	Client    *http.Client
 }
 
-// Credential is the access token resulting from the exchange.
 type Credential struct {
 	AccessToken string
 	TokenType   string
@@ -149,7 +146,6 @@ type Refresher struct {
 	inner *credrefresh.Refresher[Credential]
 }
 
-// NewRefresher returns a Refresher that mints access tokens through resolve.
 func NewRefresher(resolve func(context.Context) (Credential, error)) *Refresher {
 	r := &Refresher{}
 	r.inner = credrefresh.New(func(ctx context.Context) (Credential, time.Time, error) {
@@ -166,7 +162,6 @@ func NewRefresher(resolve func(context.Context) (Credential, error)) *Refresher 
 	return r
 }
 
-// FromIdentity returns a Refresher that re-resolves the given identity.
 func FromIdentity(id Identity) *Refresher {
 	return NewRefresher(func(ctx context.Context) (Credential, error) { return Resolve(ctx, id) })
 }

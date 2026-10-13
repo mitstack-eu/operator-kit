@@ -10,15 +10,12 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/ghapi"
 )
 
-// GitHubRepository is the Repository over the main branch of Repo, an
-// "owner/name" GitHub repository.
 type GitHubRepository struct {
 	Client *ghapi.Client
 	Repo   string
 }
 
-// NewGitHubRepository returns the GitHubRepository for repoFullName from d's
-// github instance and secret. No error it returns carries the token.
+// No error NewGitHubRepository returns carries the token.
 func NewGitHubRepository(d contract.Desired, repoFullName string) (*GitHubRepository, error) {
 	repo, err := ghapi.SafeRepo(repoFullName)
 	if err != nil {
@@ -44,7 +41,6 @@ func (r *GitHubRepository) Head(ctx context.Context) (string, error) {
 	return r.Client.HeadCommit(ctx, r.Repo)
 }
 
-// ReadFile returns path's content at revision and whether it exists there.
 // Revision "" holds nothing, and any other must be a full lowercase hex SHA.
 func (r *GitHubRepository) ReadFile(ctx context.Context, revision, path string) ([]byte, bool, error) {
 	if revision == "" {
@@ -60,9 +56,7 @@ func (r *GitHubRepository) ReadFile(ctx context.Context, revision, path string) 
 	return nil, false, nil
 }
 
-// Commit lands changes on parent as one commit on main. Content must be
-// UTF-8, a parent other than "" must be a full lowercase hex SHA, and a
-// parent no longer the tip yields an error wrapping ErrStaleBase.
+// A parent no longer the tip yields an error wrapping ErrStaleBase.
 func (r *GitHubRepository) Commit(ctx context.Context, parent string, changes map[string][]byte, message string) (string, error) {
 	entries := make(map[string]*string, len(changes))
 	for path, content := range changes {
@@ -83,7 +77,6 @@ func (r *GitHubRepository) Commit(ctx context.Context, parent string, changes ma
 	return rev, err
 }
 
-// Changed returns revision's first parent and the sorted paths it changed.
 // Revision must be a full lowercase hex SHA.
 func (r *GitHubRepository) Changed(ctx context.Context, revision string) (string, []string, error) {
 	return r.Client.CommitParentAndPaths(ctx, r.Repo, revision)

@@ -9,24 +9,19 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-// HostCommander runs a shell script on an EC2 instance and returns its
-// standard output. A script that exits nonzero is an error, never output.
+// A script that exits nonzero is an error, never output.
 type HostCommander interface {
 	RunOnInstance(ctx context.Context, d contract.Desired, instanceID, script string) (stdout string, err error)
 }
 
-// A name is interpolated into a script, so only names that need no quoting
-// are run.
+// A name is interpolated into a script, so only names that need no quoting are run.
 var containerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
-// The probe prints absent only when Docker answers that no such container
-// exists; any other failure exits nonzero.
+// The probe prints absent only when Docker answers that no such container exists.
 const containerProbe = `out=$(docker inspect --format '{{.State.Status}}' %[1]s 2>&1) && { printf '%%s\n' "$out"; exit 0; }
 case "$out" in *"No such object"*|*"No such container"*) echo absent ;; *) printf '%%s\n' "$out" >&2; exit 1 ;; esac`
 
-// EC2Container observes an aws.ec2-container through the instance it runs
-// on: running is present, absent is absent, anything else is unknown, and
-// a failed probe is an error.
+// Running is present, absent is absent, anything else is unknown, and a failed probe is an error.
 type EC2Container struct {
 	API HostCommander
 }
@@ -55,18 +50,11 @@ func (o EC2Container) ObserveResource(ctx context.Context, r contract.ResourceRe
 	}
 }
 
-// postgresProbe is postgres-db's: PRESENT=1, 0 when Docker answers without
-// the container, or unknown when Docker does not answer, then for a present
-// container READY=<pg_isready's exit status>.
+// postgresProbe prints PRESENT=1, or 0 when Docker answers without the container, then READY=<pg_isready's exit status>.
 const postgresProbe = `if docker inspect %[1]s >/dev/null 2>&1; then echo PRESENT=1; docker exec %[1]s pg_isready -U postgres >/dev/null 2>&1; echo READY=$?
 elif docker version >/dev/null 2>&1; then echo PRESENT=0; else echo PRESENT=unknown; fi`
 
-// EC2PostgresDatabase observes an aws.ec2-postgres-database, the Postgres
-// container postgres-db runs per subscription, through the instance it runs
-// on: present once it accepts connections, absent when Docker has no such
-// container, and otherwise unknown. It reports presence, identity and, when
-// the identity names its database, dbName only; a block that provides it
-// reports the type's other required outputs from its own observer.
+// EC2PostgresDatabase reports only presence, identity and dbName, and a block that provides it reports the type's other outputs.
 type EC2PostgresDatabase struct {
 	API HostCommander
 }

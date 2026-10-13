@@ -10,14 +10,12 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/safe"
 )
 
-// Event is one thing that happened to one resource.
 type Event struct {
 	Action   string
 	Resource string
 	Detail   string
 }
 
-// Narrator emits per-resource progress and keeps a running count of terminal events.
 type Narrator struct {
 	mu       sync.Mutex
 	emit     func(ctx context.Context, detail string)
@@ -38,7 +36,6 @@ func New(secrets ...string) *Narrator {
 	}
 }
 
-// NewWithSink returns a Narrator that pushes to an arbitrary sink.
 func NewWithSink(sink func(detail string), secrets ...string) *Narrator {
 	return &Narrator{
 		emit:    func(_ context.Context, detail string) { sink(detail) },
@@ -98,7 +95,6 @@ func isTerminal(action string) bool {
 	return false
 }
 
-// Done reports how many terminal events have been observed.
 func (n *Narrator) Done() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()

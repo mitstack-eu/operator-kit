@@ -8,7 +8,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/adopt"
 )
 
-// Presence is the evidence behind an `absent` marker.
 type Presence struct {
 	Absent    bool
 	Remaining []Resource
@@ -16,11 +15,7 @@ type Presence struct {
 	Unsearched []string
 }
 
-// Probe reports whether anything a Sweep would reclaim is still present, without deleting anything.
-//
-// It must stay read-only, since every validate carries the marker, including validates of live subscriptions.
-// A Find failure is never absent and also returns an error.
-// An unattributable resource reaches Unsearched without an error, because verifyTeardownAndSettle fails open on an unrecognised probe error and would settle the teardown.
+// Probe must stay read-only because every validate carries the marker, and an unattributable resource goes to Unsearched without an error because verifyTeardownAndSettle fails open on an unrecognised probe error.
 func Probe(ctx context.Context, id adopt.Identity, classes []Class) (Presence, error) {
 	var p Presence
 

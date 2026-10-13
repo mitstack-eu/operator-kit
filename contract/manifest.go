@@ -10,7 +10,6 @@ import (
 // LifecycleHooksField is the one block manifest field that carries lifecycle hook declarations, read by both the kit handler and the platform's parser.
 const LifecycleHooksField = "spec.lifecycle.hooks"
 
-// AppNameNamingField is the block manifest field that declares the longest app name the block accepts.
 const AppNameNamingField = "spec.naming.appName"
 
 // AppNameNaming is a block's AppNameNamingField declaration, whose yaml tags without omitempty are keys the parser requires.
@@ -19,24 +18,18 @@ type AppNameNaming struct {
 	DerivedNames []DerivedName `yaml:"derivedNames,omitempty"`
 }
 
-// DerivedName is one provider resource name a block builds from the app name.
 type DerivedName struct {
 	// Template is the name with the app name written as {appName}.
 	Template string `yaml:"template"`
-	// Limit is the provider's maximum length for the whole name.
-	Limit int `yaml:"limit"`
+	Limit    int    `yaml:"limit"`
 }
 
-// LifecycleHookPoints returns the closed set of lifecycle hook points, in the order a subscribe and an unsubscribe reach them.
 func LifecycleHookPoints() []string {
 	return []string{"beforeEnsure", "afterEnsure", "beforeDelete", "afterDelete"}
 }
 
-// ManifestGoldensDir is the directory inside ManifestGoldens holding the manifest fixtures.
 const ManifestGoldensDir = "manifest-goldens"
 
-// ManifestGoldens embeds the manifest fixtures both the kit handler and the platform's parser test against.
-//
 //go:embed manifest-goldens/*.yaml
 var ManifestGoldens embed.FS
 
@@ -58,7 +51,6 @@ func TypeBlockHooksManifestGolden() []byte {
 	return raw
 }
 
-// HooksManifestGoldenDeclares returns the hook names HooksManifestGolden declares, in manifest order.
 func HooksManifestGoldenDeclares() []string {
 	return []string{"beforeEnsure", "afterDelete"}
 }
@@ -90,7 +82,6 @@ func ParseBlockID(id string) (namespace, name string, err error) {
 	return parseNamespacedName("block", id)
 }
 
-// ParseCapabilityID splits a capability id into its namespace and name under the grammar of ParseBlockID.
 func ParseCapabilityID(id string) (namespace, name string, err error) {
 	return parseNamespacedName("capability", id)
 }

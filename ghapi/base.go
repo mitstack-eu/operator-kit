@@ -10,13 +10,10 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/safe"
 )
 
-// APIGitHubHost is the standard github.com REST API host, always allowed.
 const APIGitHubHost = "api.github.com"
 
-// HostsEnv names the comma-separated list of extra GitHub API hosts an operator allows.
 const HostsEnv = "MITSTACK_GITHUB_API_HOSTS"
 
-// BaseFromEnv resolves endpoint with Base against the extra hosts listed in HostsEnv.
 func BaseFromEnv(endpoint string) (safe.Base, error) {
 	return Base(endpoint, strings.Split(os.Getenv(HostsEnv), ",")...)
 }
@@ -50,7 +47,6 @@ func isPublicHost(host string) bool {
 		return false
 	}
 	if net.ParseIP(h) != nil {
-		// Any IP literal is refused, public or not.
 		return false
 	}
 	return true

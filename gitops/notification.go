@@ -14,8 +14,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/events"
 )
 
-// Notification is the body Argo CD sends when a sync completes, as the
-// platform relays it. Only Phase and Health decide a deploy.
+// Only Phase and Health decide a deploy.
 type Notification struct {
 	App          string `json:"app"`
 	Project      string `json:"project"`
@@ -27,19 +26,15 @@ type Notification struct {
 	ReconciledAt string `json:"reconciledAt"`
 }
 
-// Verdict is what a Notification says about the deploy of one revision.
 type Verdict string
 
-// The verdicts Judge returns.
 const (
 	VerdictPending   Verdict = "pending"
 	VerdictSucceeded Verdict = "succeeded"
 	VerdictFailed    Verdict = "failed"
 )
 
-// Judge returns n's verdict on the deploy of revision, pending when n names
-// another revision. Phase Succeeded with health Healthy succeeds, phase Error
-// or Failed or health Degraded fails, and anything else is pending.
+// Phase Succeeded with health Healthy succeeds, phase Error or Failed or health Degraded fails, and anything else is pending.
 func Judge(n Notification, revision string) Verdict {
 	if revision == "" || n.Revision != revision {
 		return VerdictPending
@@ -54,21 +49,17 @@ func Judge(n Notification, revision string) Verdict {
 	}
 }
 
-// Notifications is a source of Argo CD's deploy notifications.
 type Notifications interface {
-	// Latest returns app's newest notification at revision, or at any
-	// revision when revision is "", and false when there is none yet.
+	// Revision "" asks for the newest notification at any revision.
 	Latest(ctx context.Context, app, revision string) (Notification, bool, error)
 }
 
-// Outcome is a verdict and the notification, if any, it was judged from.
 type Outcome struct {
 	Verdict      Verdict
 	Notification Notification
 }
 
-// Check judges app's notification for exactly revision once. None yet is
-// pending, and an empty revision is an error.
+// An empty revision is an error.
 func Check(ctx context.Context, src Notifications, app, revision string) (Outcome, error) {
 	pending := Outcome{Verdict: VerdictPending}
 	if revision == "" {
@@ -84,7 +75,6 @@ func Check(ctx context.Context, src Notifications, app, revision string) (Outcom
 	return Outcome{Verdict: Judge(n, revision), Notification: n}, nil
 }
 
-// Wait runs Check for exactly revision every poll until it succeeds or fails.
 // A failed deploy is an outcome, not an error.
 func Wait(ctx context.Context, src Notifications, app, revision string, poll time.Duration) (Outcome, error) {
 	if poll <= 0 {
@@ -116,17 +106,14 @@ const maxNotificationBody = 64 << 10
 
 var notificationsClient = &http.Client{Timeout: 10 * time.Second}
 
-// PlatformNotifications reads the notifications the platform relayed, with
-// the bearer Token. A nil HTTPClient uses a short-timeout default, and no
-// error it returns carries Token.
+// A nil HTTPClient uses a short-timeout default, and no error it returns carries Token.
 type PlatformNotifications struct {
 	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
 }
 
-// Latest asks the platform for app's notification at revision, or its newest
-// when revision is "". A 404 is none yet, and any status but 200 an error.
+// A 404 is none yet, and any status but 200 an error.
 func (p PlatformNotifications) Latest(ctx context.Context, app, revision string) (Notification, bool, error) {
 	query := url.Values{"app": {app}}
 	if revision != "" {
@@ -173,8 +160,7 @@ func (p PlatformNotifications) scrub(text string) string {
 	return strings.ReplaceAll(text, p.Token, "[REDACTED]")
 }
 
-// NotificationsFromContext builds a PlatformNotifications from the events
-// callback on ctx, whose URL must end in /v1/webhooks/operator-events.
+// The events callback URL on ctx must end in /v1/webhooks/operator-events.
 func NotificationsFromContext(ctx context.Context) (PlatformNotifications, error) {
 	env, ok := events.EnvelopeFrom(ctx)
 	if !ok || env.Callback == nil {

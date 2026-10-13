@@ -8,7 +8,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/events"
 )
 
-// Check asks whether one provider resource of Kind is still present.
 type Check struct {
 	Kind string
 	// Present answers the question; any non-nil error means it could not be answered, whatever the bool says.
@@ -17,8 +16,7 @@ type Check struct {
 
 // Options carries the side effects Survivor, Verify and Absent perform, defaulted when nil.
 type Options struct {
-	Logf func(format string, args ...any)
-	// Scrub runs over every string before it is logged or emitted.
+	Logf  func(format string, args ...any)
 	Scrub func(string) string
 	// Emit reports a confirmed survivor; defaults to events.EmitFailed.
 	Emit   func(ctx context.Context, detail string) error
@@ -43,10 +41,7 @@ func resolved(opts Options) Options {
 	return opts
 }
 
-// Survivor returns the Kind of the first confident positive, Present returning (true, nil), or "" if none.
-//
-// Only a confident positive may turn a reported success into a failure, since an error is evidence of neither survival nor absence.
-// Zero checks is a programming error, so it is logged.
+// Only a confident positive, Present returning (true, nil), may turn a reported success into a failure, since an error is evidence of neither survival nor absence.
 func Survivor(ctx context.Context, opts Options, checks ...Check) string {
 	opts = resolved(opts)
 
@@ -74,8 +69,7 @@ func Survivor(ctx context.Context, opts Options, checks ...Check) string {
 	return ""
 }
 
-// Verify calls Survivor and reports a found survivor through opts.Emit.
-// It returns whether a survivor was found even when Emit failed, since an unreported survivor is still a survivor.
+// Verify returns whether a survivor was found even when Emit failed, since an unreported survivor is still a survivor.
 func Verify(ctx context.Context, opts Options, checks ...Check) bool {
 	opts = resolved(opts)
 
@@ -94,9 +88,7 @@ func Verify(ctx context.Context, opts Options, checks ...Check) bool {
 	return true
 }
 
-// Absent answers the `validate` verb's `absent` marker and is not the negation of Survivor.
-//
-// It needs every check asked successfully and answered gone; any error, nil Present or zero checks defeats absence.
+// Absent is not the negation of Survivor: any error, nil Present or zero checks defeats absence.
 func Absent(ctx context.Context, opts Options, checks ...Check) bool {
 	opts = resolved(opts)
 

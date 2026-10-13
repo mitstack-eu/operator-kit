@@ -16,7 +16,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/credrefresh"
 )
 
-// Identity is the CloudIdentity an operator receives in the signed webhook.
 type Identity struct {
 	RoleARN string
 	// WebIdentityToken is written to a temp file and never placed on a command line.
@@ -27,7 +26,6 @@ type Identity struct {
 	SessionSuffix string
 }
 
-// Credentials are the temporary credentials resulting from the assume-role.
 type Credentials struct {
 	AccessKeyID     string
 	SecretAccessKey string
@@ -139,7 +137,6 @@ func Resolve(ctx context.Context, id Identity) (Credentials, error) {
 	return creds, nil
 }
 
-// Env returns an environment slice carrying the credentials, for exec.Cmd.Env.
 func Env(c Credentials) []string {
 	return append(os.Environ(),
 		"AWS_ACCESS_KEY_ID="+c.AccessKeyID,
@@ -160,7 +157,6 @@ type Refresher struct {
 	inner *credrefresh.Refresher[Credentials]
 }
 
-// NewRefresher returns a Refresher that mints credentials through resolve.
 func NewRefresher(resolve func(context.Context) (Credentials, error)) *Refresher {
 	r := &Refresher{}
 	r.inner = credrefresh.New(func(ctx context.Context) (Credentials, time.Time, error) {
@@ -192,14 +188,10 @@ func (r *Refresher) Get(ctx context.Context) (Credentials, error) {
 }
 
 var (
-	// ErrQuotaExceeded means an account limit was hit.
-	ErrQuotaExceeded = errors.New("aws account quota exceeded")
-	// ErrNoDefaultVPC means the account has no default VPC.
-	ErrNoDefaultVPC = errors.New("aws account has no default vpc")
-	// ErrInstanceTypeUnavailable means the instance type is not offered in the chosen availability zone.
+	ErrQuotaExceeded           = errors.New("aws account quota exceeded")
+	ErrNoDefaultVPC            = errors.New("aws account has no default vpc")
 	ErrInstanceTypeUnavailable = errors.New("instance type not available in the selected availability zone")
-	// ErrNoSubnet means there is no usable subnet.
-	ErrNoSubnet = errors.New("no usable subnet")
+	ErrNoSubnet                = errors.New("no usable subnet")
 )
 
 var classifiers = []struct {

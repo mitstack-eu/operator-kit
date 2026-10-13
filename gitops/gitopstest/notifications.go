@@ -9,8 +9,6 @@ import (
 
 type appRevision struct{ app, revision string }
 
-// Notifications is an in-memory gitops.Notifications, safe for concurrent
-// use, that answers what a test seeded and counts its reads.
 type Notifications struct {
 	mu        sync.Mutex
 	sequences map[appRevision][]gitops.Notification
@@ -20,7 +18,6 @@ type Notifications struct {
 	err       error
 }
 
-// NewNotifications returns a Notifications that answers none.
 func NewNotifications() *Notifications {
 	return &Notifications{
 		sequences: map[appRevision][]gitops.Notification{},
@@ -55,21 +52,18 @@ func (s *Notifications) SucceedCommits(app string, repo *Repository) {
 	s.succeed[app] = repo
 }
 
-// FailWith makes every read return err.
 func (s *Notifications) FailWith(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.err = err
 }
 
-// Reads returns how many times Latest was asked for app at revision.
 func (s *Notifications) Reads(app, revision string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.reads[appRevision{app, revision}]
 }
 
-// Latest answers app's notification at revision from what the test seeded.
 func (s *Notifications) Latest(ctx context.Context, app, revision string) (gitops.Notification, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -94,7 +88,7 @@ func (s *Notifications) Latest(ctx context.Context, app, revision string) (gitop
 	return gitops.Notification{}, false, nil
 }
 
-// newestFor answers revision "" for app. The caller holds mu.
+// The caller holds mu.
 func (s *Notifications) newestFor(ctx context.Context, app string) (gitops.Notification, bool, error) {
 	if n, ok := s.newest[app]; ok {
 		return n, true, nil

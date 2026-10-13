@@ -11,19 +11,15 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/adopt"
 )
 
-// Resource is one leftover discovered in the provider.
 type Resource struct {
 	Kind string
 	ID   string
-	// Tags as read back from the provider; identity is decided from these.
 	Tags map[string]string
 	// InUse marks a resource that is live; it is skipped and reported, never deleted.
 	InUse bool
 	Note  string
 }
 
-// Class is one kind of leftover: how to find it, and how to remove it.
-//
 // Find queries the provider, not engine state, and must scope its query to the identity it is given.
 type Class interface {
 	Kind() string
@@ -37,13 +33,11 @@ type Skip struct {
 	Reason   string
 }
 
-// Failure records a resource that could not be reclaimed.
 type Failure struct {
 	Resource Resource
 	Err      error
 }
 
-// Report is the evidence a teardown test asserts against.
 type Report struct {
 	Reclaimed []Resource
 	Skipped   []Skip
@@ -52,7 +46,6 @@ type Report struct {
 	Unsearched []string
 }
 
-// Clean reports whether the sweep searched everything and left nothing behind.
 func (r Report) Clean() bool {
 	return len(r.Failed) == 0 && len(r.Unsearched) == 0 && len(r.Skipped) == 0
 }
@@ -128,7 +121,6 @@ func Sweep(ctx context.Context, id adopt.Identity, classes []Class) (Report, err
 	return rep, nil
 }
 
-// skipKind classifies why skipReason refused a resource, which Probe needs and Sweep does not.
 type skipKind int
 
 const (
@@ -158,8 +150,7 @@ func skipReason(id adopt.Identity, r Resource) (string, skipKind) {
 	return "", notSkipped
 }
 
-// notFoundPattern is deliberately generous, since a false negative turns a benign race into a failed teardown.
-// It matches `not[ -]?found` because Kubernetes says `"app" not found` with a space.
+// notFoundPattern is generous because a false negative turns a benign race into a failed teardown, and Kubernetes says `"app" not found` with a space.
 var notFoundPattern = regexp.MustCompile(
 	`(?i)(not[ -]?found|NoSuchBucket|NoSuchEntity|NoSuchKey|ResourceNotFoundException|` +
 		`does not exist|cannot be found|404)`)
