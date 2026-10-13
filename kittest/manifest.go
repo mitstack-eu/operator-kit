@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // Manifest is a block manifest parsed by contract.ParseManifest and read by dotted key path.

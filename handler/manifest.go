@@ -7,18 +7,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-var errNilResource = errors.New("handler: Config.Resource is required, or Config.Resources for a block whose manifest declares its resources")
-
-var errResourceAndResources = errors.New("handler: Config.Resource and Config.Resources are both set; a block sets Resource, or Resources when its manifest declares its resources, never both")
-
-var errObserversAndResources = errors.New("handler: Config.Observers and Config.Resources are both set; a block served over Config.Resource observes each declared resource through Config.Observers, and a DeclaredResource observes itself")
+var errNilResource = errors.New("handler: Config.Resource is required")
 
 var errObserversWithoutManifest = fmt.Errorf("handler: Config.Observers is set but Config.Manifest is not a %s manifest; an observer can only serve a resource the manifest declares under spec.resources", contract.ManifestAPIVersion)
-
-var errTypeObserversAndResources = errors.New("handler: Config.TypeObservers and Config.Resources are both set; a type observer serves a block served over Config.Resource, and a DeclaredResource observes itself")
 
 var errTypeObserversWithoutManifest = fmt.Errorf("handler: Config.TypeObservers is set but Config.Manifest is not a %s manifest; a type observer serves a resource a block-level block's earlier manifest declared", contract.ManifestAPIVersion)
 
@@ -28,14 +22,13 @@ var errEmptyJWKSURL = errors.New("handler: Config.JWKSURL is required")
 // knownHooks comes from the contract so the handler and the platform's manifest validation share one set.
 var knownHooks = contract.LifecycleHookPoints()
 
-// manifestDeclarations holds what New reads of a manifest; only a v1beta manifest declares resources and params, and it declares no hook and does not retain its resource.
+// manifestDeclarations holds what New reads of a manifest; only a v1beta manifest declares resources, and it declares no hook and does not retain its resource.
 type manifestDeclarations struct {
 	apiVersion           string
 	hooks                []string
 	retainsOnUnsubscribe bool
 	resources            []contract.ManifestResource
 	provided             map[string]bool
-	secretParams         map[string]bool
 }
 
 // readManifestDeclarations errors on a manifest the parser refuses, since a declaration nobody can read must not be mistaken for an absent one.
@@ -48,21 +41,14 @@ func readManifestDeclarations(manifest []byte) (manifestDeclarations, error) {
 		return manifestDeclarations{}, fmt.Errorf("handler: Config.Manifest is not a manifest the kit's parser accepts: %w", err)
 	}
 	if m.Block != nil {
-		secretParams := map[string]bool{}
-		for _, p := range m.Block.Spec.Params {
-			if p.Secret {
-				secretParams[p.Name] = true
-			}
-		}
 		provided := make(map[string]bool, len(m.Block.Spec.Provides))
 		for _, name := range m.Block.Spec.Provides {
 			provided[name] = true
 		}
 		return manifestDeclarations{
-			apiVersion:   m.APIVersion,
-			resources:    m.Block.Spec.Resources,
-			provided:     provided,
-			secretParams: secretParams,
+			apiVersion: m.APIVersion,
+			resources:  m.Block.Spec.Resources,
+			provided:   provided,
 		}, nil
 	}
 	if m.V1Alpha == nil || m.V1Alpha.Spec.Lifecycle == nil {
@@ -72,10 +58,8 @@ func readManifestDeclarations(manifest []byte) (manifestDeclarations, error) {
 	return manifestDeclarations{apiVersion: m.APIVersion, hooks: l.Hooks, retainsOnUnsubscribe: l.RetainsOnUnsubscribe}, nil
 }
 
-// namedResource of a block-level block has an observer and no DeclaredResource.
 type namedResource struct {
 	name        string
-	resource    DeclaredResource
 	observer    Observer
 	declaration contract.ManifestResource
 }
@@ -127,35 +111,6 @@ func undeclaredKeys[V any](m map[string]V, declared map[string]bool) string {
 	}
 	sort.Strings(undeclared)
 	return strings.Join(undeclared, ", ")
-}
-
-func declaredResources(cfg Config, declared manifestDeclarations) ([]namedResource, error) {
-	if len(cfg.Hooks) > 0 {
-		return nil, errors.New("handler: Config.Hooks is set together with Config.Resources; a block that declares its resources registers no hooks")
-	}
-	if declared.apiVersion == "" {
-		return nil, errors.New("handler: Config.Resources is set but Config.Manifest is empty; a resource can only be handled if the manifest declares it under spec.resources")
-	}
-	if declared.apiVersion != contract.ManifestAPIVersion {
-		return nil, fmt.Errorf("handler: Config.Resources is set but the manifest is %s; only a %s manifest declares resources under spec.resources",
-			declared.apiVersion, contract.ManifestAPIVersion)
-	}
-
-	declaredSet := make(map[string]bool, len(declared.resources))
-	out := make([]namedResource, 0, len(declared.resources))
-	for _, decl := range declared.resources {
-		declaredSet[decl.Name] = true
-		r := cfg.Resources[decl.Name]
-		if r == nil {
-			return nil, fmt.Errorf("handler: the manifest declares resource %q, but Config.Resources has no handler for it", decl.Name)
-		}
-		out = append(out, namedResource{name: decl.Name, resource: r, declaration: decl})
-	}
-
-	if undeclared := undeclaredKeys(cfg.Resources, declaredSet); undeclared != "" {
-		return nil, fmt.Errorf("handler: Config.Resources has a handler for %s, which the manifest's spec.resources does not declare", undeclared)
-	}
-	return out, nil
 }
 
 // validateHooks refuses a declaration naming an unknown hook or one twice even with no Hooks registered, so New refuses exactly what the platform's manifest validation refuses.

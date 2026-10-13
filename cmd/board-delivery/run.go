@@ -12,8 +12,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/boardkeys"
-	"github.com/mitstack-eu/operator-kit/safe"
+	"github.com/mitstack-eu/operator-kit/v2/boardkeys"
+	"github.com/mitstack-eu/operator-kit/v2/safe"
 )
 
 // Run derives which board keys the commits between the resolved range's

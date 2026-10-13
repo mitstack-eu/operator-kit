@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/provenance"
+	"github.com/mitstack-eu/operator-kit/v2/provenance"
 )
 
 type blockverifyReport struct {

@@ -10,51 +10,10 @@ sides are checked against, and the resource registry. The registry is the one
 list of output names a block may declare in `spec.outputs` and read under
 `spec.requires[].reads`, and the engine reads it from this package.
 
-The `contract` package also holds the resource-type catalogue, which is the
-one list of resource types a block can create or reference.
-`contract.ResourceTypes` returns every type, sorted by its ID, and
-`contract.LookupResourceType` returns the one type with a given ID, such as
-`aws.ecr-repository`. Each type implements a kind, which names what the
-resource is without naming a provider: the kind of `aws.ecr-repository` is
-`container-repository`. A kind is an interface of outputs. `contract.Kinds`
-and `contract.LookupKind` return each kind's required and optional outputs,
-each marked secret or not, and a type produces every required output of its
-kind, may produce the optional ones and names no other output.
-
-Each type lives in one place, which `ResourceType.Place` reads from the ID
-prefix. The place is a capability from `contract.Capabilities`, as
-`aws.ec2-instance` lives in `aws`, or a kind, as `host.container` lives on a
-host. A type also names the capabilities it relies on and the one it hosts,
-if any. It declares its inputs, each with a secret mark, what it accepts and
-whether changing it replaces the resource. An input whose accepts is
-`resource:<kind>` or `output:<kind>/<output>` takes a resource, and it also
-says where that resource must live. The input's place is `own` for the
-type's own capability, `capability:<slug>` for a named capability, or
-`carrier` for the capability of the resource the type lives on. For example,
-the `repository` input of `ubicloud.runner` takes `capability:github`. An
-input that accepts `value` has no place. The type declares its lifecycle,
-with a handover when it is stateful, its upgrade behaviour, its pricing, how it is
-observed and proven absent, a time budget for each of `ensure`, `observe` and
-`delete`, and the failures it can meet, each `permanent` or `transient`. It
-also carries a category, the languages it serves, the artifact type it holds
-and its scope.
-
-A type that maps one to one onto an OpenTofu provider resource names that
-resource, and its inputs are generated from the provider's schema by
-`cmd/catalogue-inputs` into `contract/provider-inputs.json`. Regenerate them
-with
-`go run ./cmd/catalogue-inputs -schema cmd/catalogue-inputs/testdata/provider-schema-extract.json > contract/provider-inputs.json`.
-A provider schema carries no replacement rule, so each such type lists by
-hand the inputs its provider forces a new resource on.
-
-Types that share a name, the part of the ID after the first dot, share a
-kind, and `contract.ValidateResourceTypes` refuses a catalogue in which they
-do not. That rule is stricter than ADR 0081, and the reason is naming: a name
-means one real thing in every place, so a different thing gets a different
-name. Every catalogue type has a bare name that mitstack assigns, so
-`contract.ValidateResourceTypes` also refuses an ID whose prefix is not a bare
-slug, such as `reconcile/crossplane.claim`, and an ID whose prefix is neither
-a capability nor a kind.
+Resource types, and the kinds they implement, live in the platform's
+catalogue and not in the kit. A block reads them from the type snapshot the
+platform serves, which `contract.ParseTypeSnapshot` reads, as a later
+section describes.
 
 The `contract` package also owns the grammar of block, capability and
 resource-type ids, which the platform's ADR 0080 sets. A community name is
@@ -129,7 +88,7 @@ refuses an entry listing a type the snapshot does not hold.
 `contract.CheckBinding` judges a binding a block's code reads, such as
 `requires.host.outputs.hostId` or `resources.deploy-role.outputs.roleArn`. It
 refuses a reference the block lacks, and an output that any listed type does
-not declare in the snapshot. Neither reads the kit's own catalogue.
+not declare in the snapshot.
 
 A snapshot type may carry `"endsWithSubscription": true`, read into
 `SnapshotType.EndsWithSubscription`, and a type without the field is
@@ -151,18 +110,22 @@ type without the field has no parts.
 
 `ManifestRequirement.Types` and `ManifestResource.Types` hold the listed ids,
 and `ManifestResource.Type` holds the one id of an entry that lists one.
-`ManifestRequirement.Kind` and `In`, `ManifestResource.Inputs` and `On`, and
-`contract.InputValue` are deprecated, stay empty after a parse, and go in the
-next major release.
+`ManifestResource.Inputs` and `On`, and `contract.InputValue`, are deprecated
+and stay empty after a parse.
 
 ## Importing it
 
-The module path is `github.com/mitstack-eu/operator-kit`. A block adds it the
-usual way:
+The module path is `github.com/mitstack-eu/operator-kit/v2`, since Go puts
+the major version of a v2 or later release in the path. A block adds it the
+usual way and imports its packages under that path, as in
+`github.com/mitstack-eu/operator-kit/v2/handler`:
 
 ```
-go get github.com/mitstack-eu/operator-kit@vX.Y.Z
+go get github.com/mitstack-eu/operator-kit/v2@vX.Y.Z
 ```
+
+A block on a v1 release keeps working, because v2 changes the Go API and
+leaves the wire contract alone. It moves to v2 on its next change.
 
 The repository is private, so the fetch needs `GOPRIVATE=github.com/mitstack-eu`
 in the environment and a credential able to read this repository (an SSH key
@@ -187,16 +150,12 @@ lives — subscription, block, org, app, its resolved tool instances, its
 prior outputs, and its cloud identity — independent of what it should
 converge to. The instances belong here because a teardown has to address
 the resource where it was provisioned: a block scoped to an AWS region
-reads that region out of `Identity.Instances`, and `Delete` and `Observe`
-are handed an `Identity` and nothing else by default — a Resource that opts
-into `handler.RequestObserver` or `handler.HandoverResource` (below) sees
-the verb's own `Desired`, secrets included, instead. `Request.Desired()`
-returns a `contract.Desired`, which embeds `Identity` and adds the params, secrets
-and bindings that describe what an operator should converge its resource
-to, so `d.Instances` inside `Ensure` resolves through the embedded
-`Identity` to the same map a teardown sees. Splitting a request this way
-lets a validate/unsubscribe handler read only `Identity`, without pulling in
-fields a teardown call never needs.
+reads that region out of `Identity.Instances`. `Request.Desired()` returns a
+`contract.Desired`, which embeds `Identity` and adds the params, secrets and
+bindings that describe what an operator should converge its resource to, so
+`d.Instances` resolves through the embedded `Identity` to the same map on
+every verb. `Ensure`, `Observe` and `Delete` are each handed the verb's own
+`Desired`, secrets included.
 
 `contract.Observation` is what a validate or unsubscribe check found: a
 `contract.State` (`Present`, `Absent`, or `Unknown`) plus whatever outputs
@@ -265,49 +224,30 @@ request bypass the cache entirely: a validate, because it is a probe of the
 resource's current state and a replayed observation could report a state
 the resource has left, and any request whose `idempotencyKey` is empty.
 
-A block whose resource sits behind a token — or otherwise needs the
-request's own secrets to authenticate — implements `handler.RequestObserver`:
+`Resource` has one `Observe` and one `Delete`, and each receives the verb's
+own `Desired`:
 
 ```go
-type RequestObserver interface {
-	ObserveWithRequest(ctx context.Context, d contract.Desired) (contract.Observation, error)
+type Resource interface {
+	Ensure(ctx context.Context, d contract.Desired) error
+	Observe(ctx context.Context, d contract.Desired) (contract.Observation, error)
+	Delete(ctx context.Context, d contract.Desired) (outputs map[string]string, err error)
 }
 ```
 
-The Handler checks for it with a type assertion everywhere it would
-otherwise call `Observe`: once on validate, and on every settle poll a
-subscribe, upgrade or unsubscribe drives. A Resource that also implements
-`RequestObserver` has `ObserveWithRequest` called instead, with that verb's
-own `Desired` — secrets included. A Resource that does not implement it is
-unaffected and keeps calling `Observe(ctx, Identity)` exactly as before. The
-secrets reach `ObserveWithRequest` only for the duration of that one verb
+The Handler calls `Observe` once on validate, and on every settle poll a
+subscribe, upgrade or unsubscribe drives, each time with that verb's
+`Desired`, secrets included. A block whose resource sits behind a token reads
+it there. The secrets reach `Observe` only for the duration of that one verb
 call: the Handler stores them nowhere of its own, the idempotency cache
 included, so a later, unrelated request never sees them.
 
-`Delete` already has a route to the request's secrets, through
-`DeleteWithRequest` below: `Request.Desired()` copies `Secrets` onto the
-`Desired` it returns, the same way it copies `Params`, so a block that
-implements `HandoverResource` sees the unsubscribe request's secrets there
-too.
-
-A block whose teardown needs the unsubscribe request's own params, or that
-must return outputs from tearing down, also implements
-`handler.HandoverResource`:
-
-```go
-type HandoverResource interface {
-	DeleteWithRequest(ctx context.Context, d contract.Desired) (outputs map[string]string, err error)
-}
-```
-
-The Handler checks for it with a type assertion before calling Delete. A
-Resource that also implements HandoverResource has `DeleteWithRequest` called
-instead, with the unsubscribe request's full `Desired` — Params included,
-unlike the bare `Identity` Delete receives. A Resource that does not
-implement it is unaffected and keeps calling `Delete(ctx, Identity)` exactly
-as before. Returning an error from `DeleteWithRequest` aborts before
-anything is destroyed: the Handler answers the error response immediately,
-with no destroy action and no settle poll.
+`Delete` receives the unsubscribe request's full `Desired`, params and
+secrets included. Returning an error from `Delete` aborts before anything is
+destroyed: the Handler answers the error response immediately, with no
+settle poll. The outputs `Delete` returns land in the unsubscribe response's
+`outputs` once the block settles absent, and a block with nothing to hand
+over returns none.
 
 This is the shape the kit's own `handover` package exists for: a block reads
 `d.Params["dataHandover"] == "snapshot"` to decide whether to snapshot data
@@ -316,13 +256,12 @@ before destroying it, and returns the resulting id under the key
 response's `outputs`, alongside `absent:true`, once the resource settles
 absent.
 
-`DeleteWithRequest` must be idempotent. A settle timeout answers
-`absent:false` with no outputs, and the platform's redrive calls
-`DeleteWithRequest` again, possibly after an earlier call already destroyed
-the resource; a second call must find the snapshot (or other handover
-artifact) it already made, or report the resource gone, rather than fail.
-Its outputs also reach the wire unscrubbed, the same way Observe's do, so
-they must never carry secret material.
+`Delete` must be idempotent. A settle timeout answers `absent:false` with no
+outputs, and the platform's redrive calls `Delete` again, possibly after an
+earlier call already destroyed the resource; a second call must find the
+snapshot (or other handover artifact) it already made, or report the
+resource gone, rather than fail. Its outputs also reach the wire unscrubbed,
+the same way Observe's do, so they must never carry secret material.
 
 ### Retaining a resource on unsubscribe
 
@@ -332,13 +271,13 @@ repository, say — so a normal teardown's `Observe` poll would just keep
 reporting `Present` forever, since nothing ever destroys the resource to
 make it go absent. Such a block declares `retainsOnUnsubscribe` so the
 Handler settles its unsubscribe without ever probing for absence: as soon as
-the `beforeDelete` hook, `Delete` (or `DeleteWithRequest`) and the
-`afterDelete` hook have all succeeded, it answers `absent:true` at once,
-carrying any `HandoverResource` outputs, with a `statusDetail` explaining
-that the block declares it retains its resource so absence was not
-observed. `Observe` is never called for that unsubscribe.
+the `beforeDelete` hook, `Delete` and the `afterDelete` hook have all
+succeeded, it answers `absent:true` at once, carrying any outputs `Delete`
+returned, with a `statusDetail` explaining that the block declares it
+retains its resource so absence was not observed. `Observe` is never called
+for that unsubscribe.
 
-A failed `Delete`, `DeleteWithRequest` or delete-side hook is unaffected by
+A failed `Delete` or delete-side hook is unaffected by
 the declaration: it still answers the ordinary error response, never
 `absent:true`. A block that does not declare `retainsOnUnsubscribe` — the
 field defaults to `false` — keeps the ordinary behaviour: the Handler polls
@@ -350,7 +289,7 @@ runs out still non-absent.
 Before any response leaves validate, a settled `Present` or a settled
 `absent:true`, the Handler refuses one whose `Outputs` carry a value that
 exactly matches one of the request's `secrets` values, over the merged
-`Observe` and `HandoverResource` outputs. The refusal is a `*handler.Refused`
+outputs of `Observe`, of each observer and of `Delete`. The refusal is a `*handler.Refused`
 with `Class` `"secret-in-output"`, and its message names the offending
 output key — never the value — so the refusal itself never becomes a second
 leak.
@@ -390,7 +329,7 @@ is known, and the verb's `Desired`.
 | Verb | What the Handler does |
 |---|---|
 | subscribe, upgrade | Runs one `Ensure`, then observes each declared resource in manifest order until it reports `Present` |
-| unsubscribe | Runs one `Delete`, or `DeleteWithRequest` for a `handler.RequestDeleter`, then observes each declared resource in reverse order until it reports `Absent`, skipping one whose type `Config.Types` marks `endsWithSubscription` |
+| unsubscribe | Runs one `Delete`, then observes each declared resource in reverse order until it reports `Absent`, skipping one whose type `Config.Types` marks `endsWithSubscription`, and merges the outputs `Delete` returned into the `absent:true` answer |
 | validate | Observes each declared resource once, and names the resources an upgrade would replace |
 
 A block-level handler that implements `handler.ResourceReporter` reports
@@ -473,6 +412,16 @@ A failed delete still answers the ordinary error, and a block given no
 `Config.Types`, or a snapshot leaving the type unmarked, observes the
 resource as any other. A block passes `Config.Types` the snapshot its
 manifest is judged against.
+
+The Handler checks the request's context before it observes each resource.
+Once the context is done, the verb stops before that resource and names it
+in `statusDetail`. Subscribe, upgrade and validate then answer
+`pending:true`, and unsubscribe answers `absent:false`. Every answer, an
+error included, carries in its `resources` map only the resources the verb
+reached. Each entry's `error` and `statusDetail` are scrubbed of the
+request's secrets, and each entry's `outputs` pass the output-secret gate
+above. A block served over a single `Resource` reports no `resources` map.
+
 A request naming one resource is served for validate alone, observing that
 resource with the request's `resourceIdentity` and `resourceType`. A named
 subscribe, upgrade or unsubscribe answers 400. The request's
@@ -487,8 +436,8 @@ quoting the resource and its type. So does a named subscribe, upgrade or
 unsubscribe.
 
 `handler.New` refuses a declared resource with no observer, an observer the
-manifest does not declare, `Observers` beside `Resources`, and `Observers`
-without a `mitstack/v1beta` manifest. It refuses `TypeObservers` on the same
+manifest does not declare, and `Observers` without a `mitstack/v1beta`
+manifest. It refuses `TypeObservers` on the same
 two grounds, and also refuses a key that is not a resource-type id. The trust
 boundary, idempotency, secret scrubbing, events and error classes work as for any other block.
 
@@ -533,7 +482,7 @@ does not list is absent only when the report carries a `madeAt` after
 subscription's id, under the AWS tag `mitstack:subscription`
 (`observe.AWSSubscriptionTag`) or the Hetzner label
 `mitstack.dev/subscription` (`observe.HetznerSubscriptionLabel`).
-`observe.AWSTagged` names each object by its catalogue type id. An instance
+`observe.AWSTagged` names each object by its type id. An instance
 profile, an Elastic IP, a security group rule, a DLM lifecycle policy and an
 SSM document read as `aws.iam-instance-profile`, `aws.elastic-ip`,
 `aws.security-group-rule`, `aws.dlm-lifecycle-policy` and `aws.ssm-document`.
@@ -579,186 +528,15 @@ listing more than one type runs the check once per listed type, with
 a `TestDeclaredResources` test that calls `kittest.AssertBlock`, runs it, and
 names in its pass detail the guards that ran.
 
-### Serving a block one handler per resource
-
-This mode is deprecated: `Config.Resources`, `handler.DeclaredResource`,
-`handler.ReportingResource`, a request running ensure or delete on one named
-resource, and `resourceInputs` go in the next major release.
-
-A block whose `mitstack/v1beta` manifest lists its resources under
-`spec.resources` may implement `handler.DeclaredResource` once for each of them.
-The interface has the same `Ensure`, `Observe` and `Delete` as
-`handler.Resource`, scoped to one resource. You hand the implementations to
-`handler.New` in `Config.Resources`, keyed by the names the manifest gives,
-together with the manifest in `Config.Manifest`.
-
-`handler.New` refuses a `Config` that sets both `Resource` and `Resources`,
-and one that sets `Resources` with no manifest or with a manifest that is not
-`mitstack/v1beta`. It refuses `Hooks` set beside `Resources`. It also
-refuses a declared resource with no implementation and an implementation
-under a name the manifest does not declare, quoting the name in each case.
-
-The Handler runs each verb resource by resource, because the manifest's
-order is creation order and a later resource may depend on an earlier one.
-
-| Verb | What the Handler does |
-|---|---|
-| subscribe, upgrade | Ensures each resource in manifest order and polls its `Observe` until it reports `Present` before ensuring the next |
-| unsubscribe | Deletes each resource in reverse manifest order and polls its `Observe` until it reports `Absent` before deleting the next |
-| validate | Observes each resource once, in manifest order |
-
-When every resource is present, subscribe and upgrade answer with the union
-of the resources' `outputs` and `secretOutputs`, and a later resource wins a
-key both produce. Validate answers the same union when every resource is
-present.
-
-That merge would leave two `aws.iam-role` resources with one `roleArn`
-between them. So subscribe and upgrade, and validate when every resource is
-present, also answer `resourceSecretOutputs`, which maps each resource's name
-to its own secret outputs.
-
-A resource that is still converging when the verb budget
-runs out stops the verb there: subscribe and upgrade answer `pending:true`,
-and unsubscribe answers `absent:false`. An error from any call stops the
-verb the same way and is answered by its kind, as for a single `Resource`.
-Validate answers present when every resource is present, `absent:true` when
-every resource is absent, and `pending:true` for any other mix.
-
-The Handler checks the request's context before each resource's first call.
-Once the context is done, the verb stops before that resource and names it
-in `statusDetail`. Subscribe, upgrade and validate then answer
-`pending:true`, and unsubscribe answers `absent:false`. The `resources` map
-holds only the resources the verb reached before it stopped.
-
-Every answer, an error included, reports each resource the verb reached in
-the response's `resources` map. A key under a resource means that call ran
-for it, and a resource the verb never reached has no entry. This subscribe
-stopped at an instance whose ensure was refused:
-
-```json
-{
-  "outputs": null,
-  "error": "refused:quota: no capacity in eu-west-1",
-  "statusDetail": "refused:quota: no capacity in eu-west-1",
-  "resources": {
-    "network": {
-      "ensure": {},
-      "observe": {"state": "present", "outputs": {"vpcId": "vpc-0abc"}}
-    },
-    "instance": {
-      "ensure": {
-        "error": "refused:quota: no capacity in eu-west-1",
-        "statusDetail": "refused:quota: no capacity in eu-west-1"
-      }
-    }
-  }
-}
-```
-
-Each entry's `error` and `statusDetail` are scrubbed of the request's
-secrets, and each entry's `outputs` pass the output-secret gate above. A
-block served over a single `Resource` reports no `resources` map and
-answers exactly as it always has.
-
-A declared resource that also implements `handler.ReportingResource` reports
-what its ensure did. The Handler calls its `EnsureWithReport` in place of
-`Ensure`, never both. The `contract.Ensured` it returns carries the identity
-the ensure stored for the resource and the outputs it published. Both go on
-that resource's `ensure` entry:
-
-```json
-"firewall": {
-  "ensure": {
-    "outputs": {"groupArn": "arn:aws:ec2:eu-west-1:123456789012:security-group/sg-0abc"},
-    "identity": {"groupId": "sg-0abc"}
-  },
-  "observe": {"state": "present", "outputs": {"groupId": "sg-0abc"}}
-}
-```
-
-An identity or output value equal to a request secret is refused with the
-`secret-in-output` class, as an observe output is. The top-level `outputs`
-stay the union of what each resource's observe found.
-
-A request may name one declared resource under `resource`, and carry that
-resource's inputs under `resourceInputs`. Each input is a scalar or a
-mapping, kept as raw JSON. It may also carry the identity that resource's
-ensure stored under `resourceIdentity`, an object of strings. The verb then
-runs on that resource alone. Subscribe and upgrade ensure it and settle it
-present, unsubscribe deletes it and settles it absent, and validate
-observes it once. Its ensure receives a `Desired` whose `Resource`,
-`ResourceInputs` and `ResourceIdentity` are the request's. The answer's
-`resources` map holds that resource's entry alone, and the top-level
-`outputs` are its own. A name the manifest does not declare answers 400
-naming it, and no resource is reached. A block served over a single
-`Resource` answers any named request the same way. The idempotency cache
-keys on the name too, so one idempotency key naming different resources
-runs each of them, and a repeat of the same named request replays.
-`contract.DecodeRequest` refuses `resourceInputs` or `resourceIdentity` sent
-without a `resource`.
-
-The Handler scrubs each secret input of the named resource from the answer,
-the event it emits for the verb and every log line it writes, as it scrubs
-`secretInputs`. An input is secret when the resource's catalogued type marks
-it secret, and then every string inside it is secret.
-
-Some declared resources can only find what they created through the inputs
-the engine recorded at subscribe and the identity their ensure stored. The
-engine sends both back on a later request naming the resource. Such a
-resource implements `handler.RequestObserver`, `handler.RequestDeleter` or
-both:
-
-```go
-type RequestDeleter interface {
-	DeleteWithRequest(ctx context.Context, d contract.Desired) error
-}
-```
-
-The Handler calls `ObserveWithRequest` instead of `Observe` and
-`DeleteWithRequest` instead of `Delete`, never the two for one call, and
-hands each the verb's own `Desired`. For a firewall whose ensure stored
-`{"groupId": "sg-0abc"}`, an unsubscribe naming `firewall` hands its
-`DeleteWithRequest` and every settle poll a `Desired` whose
-`ResourceIdentity["groupId"]` is `sg-0abc`. A request naming no resource
-makes the same calls, with `Resource`, `ResourceInputs` and
-`ResourceIdentity` empty. A declared resource that implements neither keeps
-receiving the `Identity` alone. `handler.HandoverResource` declares a
-`DeleteWithRequest` with a different signature, so assert
-`var _ handler.RequestDeleter = (*T)(nil)` to have a mismatch caught at
-compile time.
-
-A block proves its declared resources in its own tests with
-`kittest.AssertDeclaredResources`, which takes the manifest, the
-implementations, any resources the app supplies and the subscription to
-drive. It ensures each declared resource twice in manifest order, observing
-it present after each ensure with the same outputs both times. It then
-deletes each in reverse order and observes it absent. A resource the app
-supplies must be present before the first ensure and still present after the
-last delete, since a block never deletes what the app supplies. With
-`Resource` set, the check drives that one declared resource alone, under a
-`Desired` naming it, and a name the manifest does not declare is one
-problem. A resource that implements `handler.ReportingResource` is ensured
-through `EnsureWithReport`, and a second ensure that reports a different
-identity from the first is a problem. `ResourceInputs` and
-`ResourceIdentity`, when set, go on the `Desired` every call is made for, as
-the engine hands them on a later request. Either one set with no `Resource`
-named, on the input or on its `Desired`, is one problem naming the fields
-set, and nothing is driven, since the engine never sends such a request. A
-resource that implements `handler.RequestObserver` or
-`handler.RequestDeleter` is observed or deleted through it with that
-`Desired`. Each problem about a resource names it. blockverify's resources
-suite also accepts a `TestDeclaredResources` test that calls
-`kittest.AssertDeclaredResources`.
-
 ### Deploying a declared resource through GitOps
 
 The `gitops` package serves a declared resource that deploys through Argo CD,
 the controller on the cluster that applies whatever the GitOps repository
-holds. It commits the block's rendered manifests to that repository and judges
-the deploy from Argo CD's notification, which the platform relays. A
-`gitops.Resource` implements `handler.DeclaredResource` along with the
-reporting, request-observer and request-deleter interfaces. The Handler
-therefore drives it per call, with that call's own `Desired`.
+holds. A block-level handler commits the block's rendered manifests to that
+repository and waits for Argo CD through `gitops.Deploy`, and a
+`gitops.Resource` observes each such resource as its `handler.Observer`,
+judging the deploy from Argo CD's notification, which the platform relays.
+The Handler serves a validate naming the resource through that observer.
 
 You give a `gitops.Resource` three functions: one returns the
 `gitops.Repository` the resource lives in, one returns its notification source
@@ -779,19 +557,14 @@ resource := &gitops.Resource{
 }
 ```
 
-Its ensure commits the rendered files and reports the app, the revision and
-the paths as the resource's identity. When the recorded identity names a path
-the render no longer has, as after an upgrade renames or moves a file, the
-same commit removes that path, in whatever directory it stands. Only the
-resource's own ensure writes that record, so it names only paths the resource
-wrote. The ensure removes anything only when the record's app is the render's
-own app, so a record of another app, or no record, removes nothing. When the
-commit would change nothing, the ensure reports the revision its record names,
-as long as that revision still holds every rendered file, and head otherwise.
+`ObserveResource` renders from the request its `contract.ResourceRef`
+carries, so it judges the files the block's handler committed for that
+request.
 
-A rendered file that carries any of the request's secrets, verbatim or
-base64-encoded on its own, is refused as `secret-in-manifest` before anything
-is written. That check is a backstop. A secret encoded inside a larger value,
+`gitops.CommitManifests`, and `gitops.Deploy` through it, refuses a file that
+carries any of the request's secrets, verbatim or base64-encoded on its own,
+with `gitops.ErrSecretInManifest` before anything is written. That check is a
+backstop. A secret encoded inside a larger value,
 such as the token in a `.dockerconfigjson` auth field, passes it. So does a
 secret in raw or URL-safe base64, or in any other encoding. A block
 therefore never renders secret material, and a secret reaches a slice through
@@ -799,7 +572,7 @@ External Secrets instead (platform ADR 0072).
 
 Its observe reads the app's newest notification, whatever revision it names,
 and judges it only when the files at that revision match the render. Say the
-ensure committed revision `a1b2` and the newest notification names a later
+handler committed revision `a1b2` and the newest notification names a later
 commit `c3d4`: observe reads the files at `c3d4`, finds the rendered files
 there, and lets the sync of `c3d4` decide the deploy. It works this way
 because Argo CD may sync a later revision than the one committed, so the
@@ -813,7 +586,7 @@ Observe answers unknown in three more cases. The first is when head holds the
 rendered files only in part, or with other content. The second is when Argo CD
 has reported no deploy of the app yet. The third is when the newest
 notification names a revision that does not yet carry the change at head. A
-resource that was never ensured is therefore absent only in an empty
+resource that was never committed is therefore absent only in an empty
 repository. In a repository that holds other apps' commits, it stays unknown
 until Argo CD reports on the app. A sync in phase `Error` or `Failed`, or with
 health `Degraded`, makes observe return an error carrying the phase, the
@@ -852,11 +625,10 @@ func (b *block) Ensure(ctx context.Context, d contract.Desired) error {
 }
 ```
 
-Its delete removes the paths the record names, without rendering, and falls
-back to the rendered paths when there is no record. Paths already gone commit
-nothing, so deleting a resource that was never created succeeds.
-`gitops.Revert` restores every path one revision changed to its content at
-that revision's parent.
+The block's `Delete` ships the removal the same way, handing `Deploy` each
+rendered path with no content. Paths already gone commit nothing, so
+deleting what was never created succeeds. `gitops.Revert` restores every
+path one revision changed to its content at that revision's parent.
 
 The platform answers a block only the notifications of the cluster its
 `kubernetes-cluster` requirement binds, within the block's own org. A block
@@ -1081,22 +853,9 @@ and each raise zeroes the levels below it. A skipped or failed release run is
 not lost: the next push resolves the base from the newest tag and cuts the
 release the earlier push owed.
 
-`go test ./contract/...` compares the resource-type catalogue with the golden
-at `contract/goldens/catalogue/resourcetypes.json`, which holds the catalogue
-as the previous release shipped it, and fails a breaking change. A breaking
-change is a type removed or renamed, a type changing its kind, an output
-removed or changing its secret mark, or a new required input.
-`contract.CatalogueMajor` records the major version being released, and a test
-holds it equal to the major the module path declares.
-
-A breaking catalogue change takes `kit-release: major` and raises
-`contract.CatalogueMajor` by one in the same change. From v2 on, Go also
-requires the module path to end in `/v2` (or the matching major) for a major
-release, so the same change moves the module path and every import. After a release whose catalogue changed, a follow-up change refreshes
-the golden with
-`go run ./cmd/catalogue-golden > contract/goldens/catalogue/resourcetypes.json`.
-A change that alters the catalogue never refreshes the golden itself, since
-the golden is what the comparison reads as the previous release.
+A change that breaks the Go API takes `kit-release: major`. Go requires the
+module path to end in the major version from v2 on, so the same change moves
+the module path, now `/v2`, to the next major and every import with it.
 
 ## Recording a delivery on the board
 

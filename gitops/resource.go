@@ -7,19 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-)
-
-const (
-	refusedSecretInManifest    = "secret-in-manifest"
-	refusedInvalidManifestPath = "invalid-manifest-path"
-)
-
-const (
-	identityApp      = "app"
-	identityRevision = "revision"
-	identityPaths    = "paths"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // Rendered is one resource's Argo CD app, its files by repository path, each
@@ -30,9 +18,9 @@ type Rendered struct {
 	Outputs map[string]string
 }
 
-// Resource serves one declared resource through GitOps, as a
-// handler.DeclaredResource the Handler drives per call. All three fields are
-// required.
+// Resource observes one declared resource whose files a block-level handler
+// commits through Deploy, as the handler.Observer of that resource. All
+// three fields are required.
 type Resource struct {
 	// Repository returns the GitOps repository the resource for d lives in.
 	Repository func(ctx context.Context, d contract.Desired) (Repository, error)
@@ -41,79 +29,20 @@ type Resource struct {
 	// NotificationsFromContext.
 	Notifications func(ctx context.Context, d contract.Desired) (Notifications, error)
 
-	// Render renders d's files. A bare Observe or Delete hands it a Desired
-	// carrying the Identity alone.
+	// Render renders d's files.
 	Render func(d contract.Desired) (Rendered, error)
 }
 
-// Ensure commits the rendered files the way EnsureWithReport does.
-func (r *Resource) Ensure(ctx context.Context, d contract.Desired) error {
-	_, err := r.EnsureWithReport(ctx, d)
-	return err
-}
-
-// EnsureWithReport commits the rendered files through CommitManifests and
-// reports the app, the revision and the comma-joined sorted paths. When the
-// recorded identity is of the render's own app, the same commit removes each
-// recorded path the render no longer has; another app's record removes
-// nothing. A file carrying a secret is refused as secret-in-manifest, and a
-// path holding a comma as invalid-manifest-path, before anything is written.
-func (r *Resource) EnsureWithReport(ctx context.Context, d contract.Desired) (contract.Ensured, error) {
-	out, err := r.render(d)
-	if err != nil {
-		return contract.Ensured{}, err
-	}
-	paths := sortedPaths(out.Files)
-	for _, path := range paths {
-		if strings.Contains(path, ",") {
-			return contract.Ensured{}, handler.Refuse(refusedInvalidManifestPath,
-				"the rendered path %s holds a comma, which the identity's paths list cannot carry", path)
-		}
-	}
-	repo, err := r.repository(ctx, d)
-	if err != nil {
-		return contract.Ensured{}, err
-	}
-	changes := make(map[string][]byte, len(out.Files))
-	for path, content := range out.Files {
-		changes[path] = content
-	}
-	for _, path := range stalePaths(d, out) {
-		changes[path] = nil
-	}
-	rev, changed, err := CommitManifests(ctx, repo, changes, out.App+": update manifests", SecretValues(d))
-	if errors.Is(err, ErrSecretInManifest) {
-		return contract.Ensured{}, handler.Refuse(refusedSecretInManifest, "%v", err)
-	}
-	if err != nil {
-		return contract.Ensured{}, err
-	}
-	if !changed {
-		rev = reportedRevision(ctx, repo, d.ResourceIdentity[identityRevision], rev, out.Files)
-	}
-	return contract.Ensured{
-		Identity: map[string]string{
-			identityApp:      out.App,
-			identityRevision: rev,
-			identityPaths:    strings.Join(paths, ","),
-		},
-		Outputs: out.Outputs,
-	}, nil
-}
-
-// Observe observes the resource with a Desired carrying id alone.
-func (r *Resource) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
-	return r.ObserveWithRequest(ctx, contract.Desired{Identity: id})
-}
-
-// ObserveWithRequest judges the app's newest notification, whatever its
+// ObserveResource judges the app's newest notification, whatever its
 // revision, once the files at that revision stand as they do at head, since
-// Argo CD may sync a later revision than the one committed. A live sync on a
-// scratch cluster with two commits inside one poll interval would show
-// whether it does. A block reads only the notifications of the cluster its
+// Argo CD may sync a later revision than the one committed. It renders from
+// the request ref carries. A live sync on a scratch cluster with two commits
+// inside one poll interval would show whether Argo CD does sync a later
+// revision. A block reads only the notifications of the cluster its
 // kubernetes-cluster requirement binds, so binding none or several stays
 // unknown, and a cluster hosting several orgs' apps needs its own rule.
-func (r *Resource) ObserveWithRequest(ctx context.Context, d contract.Desired) (contract.Observation, error) {
+func (r *Resource) ObserveResource(ctx context.Context, ref contract.ResourceRef) (contract.Observation, error) {
+	d := ref.Desired
 	out, err := r.render(d)
 	if err != nil {
 		return contract.Observation{}, err
@@ -179,65 +108,6 @@ func (r *Resource) ObserveWithRequest(ctx context.Context, d contract.Desired) (
 	}
 }
 
-// Delete deletes the resource with a Desired carrying id alone.
-func (r *Resource) Delete(ctx context.Context, id contract.Identity) error {
-	return r.DeleteWithRequest(ctx, contract.Desired{Identity: id})
-}
-
-// DeleteWithRequest commits the removal of the recorded paths, or of the
-// rendered ones when none are recorded.
-func (r *Resource) DeleteWithRequest(ctx context.Context, d contract.Desired) error {
-	app, paths, err := r.deletePaths(d)
-	if err != nil {
-		return err
-	}
-	repo, err := r.repository(ctx, d)
-	if err != nil {
-		return err
-	}
-	removal := make(map[string][]byte, len(paths))
-	for _, path := range paths {
-		removal[path] = nil
-	}
-	_, _, err = commitFiles(ctx, repo, removal, app+": remove manifests")
-	return err
-}
-
-func (r *Resource) deletePaths(d contract.Desired) (string, []string, error) {
-	paths := recordedPaths(d)
-	if len(paths) > 0 {
-		return d.ResourceIdentity[identityApp], paths, nil
-	}
-	out, err := r.render(d)
-	if err != nil {
-		return "", nil, err
-	}
-	return out.App, sortedPaths(out.Files), nil
-}
-
-func recordedPaths(d contract.Desired) []string {
-	var paths []string
-	for _, path := range strings.Split(d.ResourceIdentity[identityPaths], ",") {
-		if path != "" {
-			paths = append(paths, path)
-		}
-	}
-	return paths
-}
-
-func stalePaths(d contract.Desired, out Rendered) []string {
-	if d.ResourceIdentity[identityApp] != out.App {
-		return nil
-	}
-	var stale []string
-	for _, path := range recordedPaths(d) {
-		if _, rendered := out.Files[path]; !rendered {
-			stale = append(stale, path)
-		}
-	}
-	return stale
-}
-
 func (r *Resource) render(d contract.Desired) (Rendered, error) {
 	out, err := r.Render(d)
 	if err != nil {
@@ -263,19 +133,6 @@ func (r *Resource) repository(ctx context.Context, d contract.Desired) (Reposito
 		return nil, fmt.Errorf("gitops: reaching the repository: %w", err)
 	}
 	return repo, nil
-}
-
-// reportedRevision keeps an unchanged ensure reporting its recorded revision
-// while that revision still holds every file.
-func reportedRevision(ctx context.Context, repo Repository, recorded, head string, files map[string][]byte) string {
-	if recorded == "" || recorded == head {
-		return head
-	}
-	at, err := compareAt(ctx, repo, recorded, files)
-	if err != nil || !at.all() {
-		return head
-	}
-	return recorded
 }
 
 // standing is how a set of files stands at one revision.

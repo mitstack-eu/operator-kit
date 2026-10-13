@@ -8,7 +8,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/mitstack-eu/operator-kit/gitops"
+	"github.com/mitstack-eu/operator-kit/v2/gitops"
 )
 
 // Commit is one commit a Repository landed, with the changes it was handed,

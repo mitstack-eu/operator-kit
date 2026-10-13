@@ -8,12 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 const (
 	resourcesTestNeedle       = "func TestDeclaredResources("
-	resourcesCheckNeedle      = "kittest.AssertDeclaredResources("
 	resourcesBlockCheckNeedle = "kittest.AssertBlock("
 	guardsRanMarker           = "kittest.AssertBlock guards ran:"
 )
@@ -41,33 +40,23 @@ func resourcesSuite(target string) SuiteResult {
 		return SuiteResult{name, "fail", fmt.Sprintf(
 			"%s declares its resources but has no TestDeclaredResources test to drive them through kittest.AssertBlock", target)}
 	}
-	block := strings.Contains(tests, resourcesBlockCheckNeedle)
-	if !block && !strings.Contains(tests, resourcesCheckNeedle) {
+	if !strings.Contains(tests, resourcesBlockCheckNeedle) {
 		return SuiteResult{name, "fail", fmt.Sprintf(
-			"%s defines TestDeclaredResources but never calls kittest.AssertBlock or kittest.AssertDeclaredResources, so no declared resource is driven", target)}
+			"%s defines TestDeclaredResources but never calls kittest.AssertBlock, so no declared resource is driven", target)}
 	}
 
-	var flags []string
-	if block {
-		flags = []string{"-v"}
-	}
-	ok, output := runGoTest(target, "TestDeclaredResources", flags...)
+	ok, output := runGoTest(target, "TestDeclaredResources", "-v")
 	if !ok {
 		return SuiteResult{name, "fail", resourceProblemLine(output)}
 	}
-	if block {
-		_, ran, logged := strings.Cut(output, guardsRanMarker)
-		if !logged {
-			return SuiteResult{name, "pass", "TestDeclaredResources passed, but kittest.AssertBlock logged no guards, so which ran is unknown"}
-		}
-		ran, _, _ = strings.Cut(ran, "\n")
-		return SuiteResult{name, "pass", fmt.Sprintf(
-			"TestDeclaredResources proves the block's %d declared resources hold the guards that ran: %s",
-			len(m.Block.Spec.Resources), strings.TrimSpace(ran))}
+	_, ran, logged := strings.Cut(output, guardsRanMarker)
+	if !logged {
+		return SuiteResult{name, "pass", "TestDeclaredResources passed, but kittest.AssertBlock logged no guards, so which ran is unknown"}
 	}
+	ran, _, _ = strings.Cut(ran, "\n")
 	return SuiteResult{name, "pass", fmt.Sprintf(
-		"TestDeclaredResources proves each of the %d declared resources survives ensure twice, observe, delete and the absence proof, "+
-			"and every supplied resource still stands", len(m.Block.Spec.Resources))}
+		"TestDeclaredResources proves the block's %d declared resources hold the guards that ran: %s",
+		len(m.Block.Spec.Resources), strings.TrimSpace(ran))}
 }
 
 func resourceProblemLine(output string) string {

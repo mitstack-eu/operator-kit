@@ -16,7 +16,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 func main() {

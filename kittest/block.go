@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/observe"
-	"github.com/mitstack-eu/operator-kit/webhook"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/observe"
+	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
 // Provider is the provider a block creates its resources in, which lists everything carrying a subscription's id and loses one resource out from under the block.

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // NodeReport is one report a node of the Hetzner cluster sent the platform,

@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/webhook"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
 // maxHookBodyBytes bounds the read so a hostile caller cannot exhaust memory before the trust boundary runs.
@@ -24,11 +24,17 @@ type Resource interface {
 	// Ensure may be called more than once for the same subscription and must converge rather than duplicate.
 	Ensure(ctx context.Context, d contract.Desired) error
 
-	// Observe is polled after Ensure and Delete and called once for validate; id carries the instance config so a region-scoped block addresses the resource where it lives.
-	Observe(ctx context.Context, id contract.Identity) (contract.Observation, error)
+	// Observe is polled after Ensure and Delete and called once for validate, and sees the verb's Secrets held only for that one call.
+	//
+	// Its outputs reach the wire unscrubbed, so they must never carry secret material, and a value identical to one of d.Secrets is refused.
+	Observe(ctx context.Context, d contract.Desired) (contract.Observation, error)
 
-	// Delete must not error when nothing was ever provisioned.
-	Delete(ctx context.Context, id contract.Identity) error
+	// Delete must not error when nothing was ever provisioned, and an error aborts before anything is destroyed.
+	//
+	// It must be idempotent: a settle timeout answers absent:false with no outputs and a redrive calls it again, so a second call must find the handover artifact it already made, or report the resource gone, rather than fail.
+	//
+	// Its outputs are merged into the unsubscribe response once the block settles absent, reach the wire unscrubbed, and must never carry secret material.
+	Delete(ctx context.Context, d contract.Desired) (outputs map[string]string, err error)
 }
 
 // Observer reports what one declared resource actually is, from the provider and never from what an ensure remembered.
@@ -46,28 +52,7 @@ type ReplacementPlanner interface {
 	PlanReplacements(ctx context.Context, d contract.Desired) ([]string, error)
 }
 
-// Deprecated: a block serves its declared resources through its block-level Resource and an Observer for each, and the next major release removes DeclaredResource.
-type DeclaredResource interface {
-	Ensure(ctx context.Context, d contract.Desired) error
-
-	Observe(ctx context.Context, id contract.Identity) (contract.Observation, error)
-
-	Delete(ctx context.Context, id contract.Identity) error
-}
-
-// Deprecated: a block-level Resource reports what it created through ResourceReporter, and the next major release removes ReportingResource.
-type ReportingResource interface {
-	EnsureWithReport(ctx context.Context, d contract.Desired) (contract.Ensured, error)
-}
-
-// RequestDeleter replaces Delete with a call carrying the verb's Desired, for a resource reachable only through recorded inputs and identity.
-// A declared resource asserts var _ handler.RequestDeleter = (*T)(nil) because HandoverResource declares a DeleteWithRequest with a different signature, which would otherwise be silently deleted through Delete.
-type RequestDeleter interface {
-	// DeleteWithRequest must not error when the resource was never created.
-	DeleteWithRequest(ctx context.Context, d contract.Desired) error
-}
-
-// Hook is an extension point registered at one of the four HookXxx points; the delete-side Desired carries only its Identity, whose instance config lets a hook reach a region-scoped API.
+// Hook is an extension point registered at one of the four HookXxx points.
 type Hook func(ctx context.Context, d contract.Desired) error
 
 // The closed set of hook points the Handler calls; New refuses a hook registered under any other name.
@@ -78,20 +63,17 @@ const (
 	HookAfterDelete  = "afterDelete"
 )
 
-// Config wires a Handler; only JWKSURL and exactly one of Resource and Resources are required, VerbBudget defaults to 20, PollInterval to 500ms, and a nil Logs answers GET /logs with 404.
+// Config wires a Handler; only Resource and JWKSURL are required, VerbBudget defaults to 20, PollInterval to 500ms, and a nil Logs answers GET /logs with 404.
 type Config struct {
 	Resource Resource
 
-	// Observers needs one Observer for each declared resource, and is refused with Resources or without a mitstack/v1beta manifest.
+	// Observers needs one Observer for each declared resource, and is refused without a mitstack/v1beta manifest.
 	Observers map[string]Observer
 
-	// TypeObservers is keyed by resource-type id and serves a validate naming a resource the manifest no longer declares; refused with Resources or without a mitstack/v1beta manifest.
+	// TypeObservers is keyed by resource-type id and serves a validate naming a resource the manifest no longer declares; refused without a mitstack/v1beta manifest.
 	TypeObservers map[string]Observer
 
-	// Deprecated: serve the block over Resource with an Observer for each declared resource, and the next major release removes Resources.
-	Resources map[string]DeclaredResource
-
-	// Manifest is required when Hooks or Resources is non-empty, since a hook or declared resource is registered only if the manifest declares it.
+	// Manifest is required when Hooks is non-empty, since a hook is registered only if the manifest declares it.
 	Manifest []byte
 
 	Hooks map[string]Hook
@@ -121,11 +103,10 @@ type Handler struct {
 	resource Resource
 	hooks    map[string]Hook
 
+	// declared is nil unless the manifest is mitstack/v1beta, whose block the handler serves at block level.
 	declared      []namedResource
-	blockLevel    bool
 	typeObservers map[string]Observer
 	provided      map[string]bool
-	secretParams  map[string]bool
 
 	retainsOnUnsubscribe bool
 	types                contract.TypeSnapshot
@@ -145,10 +126,7 @@ type Handler struct {
 
 // New refuses a configuration that would let a block override an invariant.
 func New(cfg Config) (*Handler, error) {
-	if cfg.Resource != nil && len(cfg.Resources) > 0 {
-		return nil, errResourceAndResources
-	}
-	if cfg.Resource == nil && len(cfg.Resources) == 0 {
+	if cfg.Resource == nil {
 		return nil, errNilResource
 	}
 	if cfg.JWKSURL == "" {
@@ -159,16 +137,8 @@ func New(cfg Config) (*Handler, error) {
 		return nil, err
 	}
 	var resources []namedResource
-	blockLevel := false
 	switch {
-	case len(cfg.Resources) > 0 && len(cfg.Observers) > 0:
-		err = errObserversAndResources
-	case len(cfg.Resources) > 0 && len(cfg.TypeObservers) > 0:
-		err = errTypeObserversAndResources
-	case len(cfg.Resources) > 0:
-		resources, err = declaredResources(cfg, declared)
 	case declared.apiVersion == contract.ManifestAPIVersion:
-		blockLevel = true
 		resources, err = observedResources(cfg, declared)
 		if err == nil {
 			err = validateTypeObservers(cfg.TypeObservers)
@@ -193,10 +163,8 @@ func New(cfg Config) (*Handler, error) {
 		resource:             cfg.Resource,
 		hooks:                hooks,
 		declared:             resources,
-		blockLevel:           blockLevel,
 		typeObservers:        cfg.TypeObservers,
 		provided:             declared.provided,
-		secretParams:         declared.secretParams,
 		retainsOnUnsubscribe: declared.retainsOnUnsubscribe,
 		types:                cfg.Types,
 		jwksURL:              cfg.JWKSURL,

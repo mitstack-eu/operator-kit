@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 const (
@@ -38,9 +38,11 @@ func (r *declaredRun) serveBlock(ctx context.Context, operation string) (int, co
 		r.setRefs(reported)
 		return r.ensureEach(ctx)
 	case "unsubscribe":
-		if err := r.deleteBlock(ctx); err != nil {
+		outputs, err := r.h.resource.Delete(ctx, r.d)
+		if err != nil {
 			return r.h.errorResponse(err, r.secrets)
 		}
+		r.deleteOutputs = outputs
 		r.d.VerbAt = r.h.now()
 		r.setRefs(nil)
 		return r.deleteEach(ctx)
@@ -87,13 +89,6 @@ func (r *declaredRun) ensureBlock(ctx context.Context) (map[string]contract.Crea
 		reported[c.Name] = c
 	}
 	return reported, nil
-}
-
-func (r *declaredRun) deleteBlock(ctx context.Context) error {
-	if rd, ok := r.h.resource.(RequestDeleter); ok {
-		return rd.DeleteWithRequest(ctx, r.d)
-	}
-	return r.h.resource.Delete(ctx, r.d.Identity)
 }
 
 func (r *declaredRun) planReplacements(ctx context.Context) ([]string, error) {

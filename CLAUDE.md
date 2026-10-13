@@ -1,6 +1,6 @@
 # CLAUDE.md — operator-kit
 
-Module path: `github.com/mitstack-eu/operator-kit`.
+Module path: `github.com/mitstack-eu/operator-kit/v2`.
 
 The kit is stdlib-only by design. No third-party dependency is ever added,
 however convenient one looks for a single call site.

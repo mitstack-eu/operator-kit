@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/safe"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/safe"
 )
 
 const classUndeclaredResource = "undeclared-resource"
 
-// dispatchDeclared refuses a name the manifest does not declare with a 400 before any resource is reached, unless a block-level validate names a type Config.TypeObservers holds.
+// dispatchDeclared refuses a name the manifest does not declare with a 400 before any resource is reached, unless a validate names a type Config.TypeObservers holds.
 //
 // A resource still converging, left standing or failing stops the verb there, and the request context is checked before each resource's first call. Every answer, an error included, carries the resources map of the resources reached.
 func (h *Handler) dispatchDeclared(ctx context.Context, operation string, d contract.Desired, secrets []string) (int, contract.Response) {
@@ -31,23 +31,11 @@ func (h *Handler) dispatchDeclared(ctx context.Context, operation string, d cont
 	}
 
 	run := &declaredRun{h: h, d: d, secrets: secrets, resources: resources, outcomes: map[string]contract.ResourceOutcome{}}
-	if h.blockLevel {
-		return run.serveBlock(ctx, operation)
-	}
-	switch operation {
-	case "subscribe", "upgrade":
-		return run.ensureEach(ctx)
-	case "validate":
-		return run.validateEach(ctx)
-	case "unsubscribe":
-		return run.deleteEach(ctx)
-	default:
-		return http.StatusInternalServerError, contract.Response{Error: "handler: unreachable — unknown operation " + operation}
-	}
+	return run.serveBlock(ctx, operation)
 }
 
 func (h *Handler) typeObserved(operation string, d contract.Desired) (namedResource, bool) {
-	if !h.blockLevel || operation != "validate" {
+	if operation != "validate" {
 		return namedResource{}, false
 	}
 	o, ok := h.typeObservers[d.ResourceType]
@@ -67,15 +55,16 @@ func (h *Handler) declaredResource(name string) (namedResource, bool) {
 	return namedResource{}, false
 }
 
-// declaredRun's refs, for a block-level block whose handler has already ensured or deleted the whole block, hold what each observer is handed, and provided limits the answer's outputs.
+// declaredRun's refs hold what each observer is handed, provided limits the answer's outputs, and deleteOutputs are what the block-level Delete returned.
 type declaredRun struct {
-	h         *Handler
-	d         contract.Desired
-	secrets   []string
-	resources []namedResource
-	outcomes  map[string]contract.ResourceOutcome
-	refs      map[string]contract.ResourceRef
-	provided  map[string]bool
+	h             *Handler
+	d             contract.Desired
+	secrets       []string
+	resources     []namedResource
+	outcomes      map[string]contract.ResourceOutcome
+	refs          map[string]contract.ResourceRef
+	provided      map[string]bool
+	deleteOutputs map[string]string
 
 	resourceSecretOutputs map[string]map[string]string
 }
@@ -95,7 +84,7 @@ func (r *declaredRun) keepSecretOutputs(name string, secretOutputs map[string]st
 	r.resourceSecretOutputs[name] = maps.Clone(secretOutputs)
 }
 
-// ensureEach settles each resource present before the next, a later resource winning a key both produce, and ensures none on its own for a block-level block.
+// ensureEach settles each resource present before the next, a later resource winning a key both produce, once the block-level handler has ensured the whole block.
 func (r *declaredRun) ensureEach(ctx context.Context) (int, contract.Response) {
 	var outputs, secretOutputs map[string]string
 	for _, nr := range r.resources {
@@ -103,14 +92,6 @@ func (r *declaredRun) ensureEach(ctx context.Context) (int, contract.Response) {
 			return http.StatusOK, contract.Response{Pending: true, StatusDetail: r.notReached(nr.name), Resources: r.outcomes}
 		}
 		var entry contract.ResourceOutcome
-		if r.refs == nil {
-			ensured, err := r.ensure(ctx, nr)
-			if err != nil {
-				return r.fail(nr.name, &entry, &entry.Ensure, err)
-			}
-			entry.Ensure = ensured
-		}
-
 		obs, attempts, err := r.settle(ctx, nr, contract.Present, &entry)
 		if err != nil {
 			return r.fail(nr.name, &entry, &entry.Observe, err)
@@ -136,30 +117,7 @@ func (r *declaredRun) ensureEach(ctx context.Context) (int, contract.Response) {
 	return http.StatusOK, resp
 }
 
-// ensure refuses a reported identity or output value equal to a request secret rather than reporting it.
-func (r *declaredRun) ensure(ctx context.Context, nr namedResource) (*contract.CallOutcome, error) {
-	reporting, ok := nr.resource.(ReportingResource)
-	if !ok {
-		if err := nr.resource.Ensure(ctx, r.d); err != nil {
-			return nil, err
-		}
-		return &contract.CallOutcome{}, nil
-	}
-
-	report, err := reporting.EnsureWithReport(ctx, r.d)
-	if err != nil {
-		return nil, err
-	}
-	if err := refuseSecretOutputs(report.Identity, r.d.Secrets); err != nil {
-		return nil, err
-	}
-	if err := refuseSecretOutputs(report.Outputs, r.d.Secrets); err != nil {
-		return nil, err
-	}
-	return &contract.CallOutcome{Identity: report.Identity, Outputs: report.Outputs}, nil
-}
-
-// deleteEach settles each resource absent in reverse creation order so one created earlier outlives every one created after it, deletes none on its own for a block-level block, and observes none whose type ends with its subscription.
+// deleteEach settles each resource absent in reverse creation order, once the block-level handler has deleted the whole block, observes none whose type ends with its subscription, and merges the delete's outputs over the observed ones on absent:true.
 func (r *declaredRun) deleteEach(ctx context.Context) (int, contract.Response) {
 	var outputs map[string]string
 	for i := len(r.resources) - 1; i >= 0; i-- {
@@ -169,12 +127,6 @@ func (r *declaredRun) deleteEach(ctx context.Context) (int, contract.Response) {
 			return http.StatusOK, contract.Response{Absent: &absent, StatusDetail: r.notReached(nr.name), Resources: r.outcomes}
 		}
 		var entry contract.ResourceOutcome
-		if r.refs == nil {
-			if err := r.delete(ctx, nr); err != nil {
-				return r.fail(nr.name, &entry, &entry.Delete, err)
-			}
-			entry.Delete = &contract.CallOutcome{}
-		}
 		if ended, ok := r.endedWithSubscription(nr); ok {
 			entry.Delete = ended
 			r.outcomes[nr.name] = entry
@@ -199,6 +151,12 @@ func (r *declaredRun) deleteEach(ctx context.Context) (int, contract.Response) {
 		}
 	}
 
+	outputs = mergeOutputs(outputs, r.deleteOutputs)
+	if err := refuseSecretOutputs(outputs, r.d.Secrets); err != nil {
+		status, resp := r.h.errorResponse(err, r.secrets)
+		resp.Resources = r.outcomes
+		return status, resp
+	}
 	absent := true
 	return http.StatusOK, contract.Response{Absent: &absent, Outputs: outputs, Resources: r.outcomes}
 }
@@ -307,20 +265,7 @@ func (r *declaredRun) settle(ctx context.Context, nr namedResource, want contrac
 }
 
 func (r *declaredRun) observe(ctx context.Context, nr namedResource) (contract.Observation, error) {
-	if nr.observer != nil {
-		return nr.observer.ObserveResource(ctx, r.refs[nr.name])
-	}
-	if ro, ok := nr.resource.(RequestObserver); ok {
-		return ro.ObserveWithRequest(ctx, r.d)
-	}
-	return nr.resource.Observe(ctx, r.d.Identity)
-}
-
-func (r *declaredRun) delete(ctx context.Context, nr namedResource) error {
-	if rd, ok := nr.resource.(RequestDeleter); ok {
-		return rd.DeleteWithRequest(ctx, r.d)
-	}
-	return nr.resource.Delete(ctx, r.d.Identity)
+	return nr.observer.ObserveResource(ctx, r.refs[nr.name])
 }
 
 // observed refuses outputs carrying a request secret rather than reporting them.

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/credrefresh"
+	"github.com/mitstack-eu/operator-kit/v2/credrefresh"
 )
 
 // Identity is the CloudIdentity an operator receives in the signed webhook.

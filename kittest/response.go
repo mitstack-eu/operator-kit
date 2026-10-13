@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // respGoldenEntries fails the test rather than skipping, and reads the goldens embedded in the contract package so an external operator needs no working-directory path.
@@ -264,4 +265,13 @@ func AssertEmitsConformingResponses(t *testing.T, bodies map[string][]byte) {
 			}
 		})
 	}
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

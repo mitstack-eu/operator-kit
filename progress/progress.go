@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/mitstack-eu/operator-kit/events"
-	"github.com/mitstack-eu/operator-kit/safe"
+	"github.com/mitstack-eu/operator-kit/v2/events"
+	"github.com/mitstack-eu/operator-kit/v2/safe"
 )
 
 // Event is one thing that happened to one resource.

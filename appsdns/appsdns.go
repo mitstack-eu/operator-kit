@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/safe"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/safe"
 )
 
 // RecordTTL is short because a replaced box gets a new Elastic IP, and a stale answer would point at an address that is no longer the app's.

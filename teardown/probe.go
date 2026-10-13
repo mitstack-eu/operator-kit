@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mitstack-eu/operator-kit/adopt"
+	"github.com/mitstack-eu/operator-kit/v2/adopt"
 )
 
 // Presence is the evidence behind an `absent` marker.

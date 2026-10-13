@@ -45,33 +45,31 @@ type BuildRequest struct {
 	Summary      json.RawMessage `json:"summary,omitempty"`
 }
 
-// Request's JSON tags mirror the engine's request struct field for field, and a request naming no resource leaves Resource, ResourceInputs, ResourceIdentity and ResourceType empty and runs the verb on every declared resource.
+// Request's JSON tags mirror the engine's request struct field for field, and a request naming no resource leaves Resource, ResourceIdentity and ResourceType empty and runs the verb on every declared resource.
 type Request struct {
-	Operation      string                         `json:"operation"`
-	SubscriptionID string                         `json:"subscriptionId"`
-	IdempotencyKey string                         `json:"idempotencyKey"`
-	BlockID        string                         `json:"blockId"`
-	BlockVersion   string                         `json:"blockVersion"`
-	OrgID          string                         `json:"orgId"`
-	AppID          string                         `json:"appId"`
-	Params         map[string]string              `json:"params"`
-	Instances      map[string]InstanceConfig      `json:"instances,omitempty"`
-	Secrets        map[string]map[string]string   `json:"secrets,omitempty"`
-	OBO            string                         `json:"obo,omitempty"`
-	EventsCallback *EventsCallback                `json:"eventsCallback,omitempty"`
-	SecretInputs   map[string]string              `json:"secretInputs,omitempty"`
-	AppSecrets     map[string]string              `json:"appSecrets,omitempty"`
-	Bindings       map[string]map[string]string   `json:"bindings,omitempty"`
-	BindingsAll    map[string][]map[string]string `json:"bindingsAll,omitempty"`
-	CloudIdentity  *CloudIdentity                 `json:"cloudIdentity,omitempty"`
-	CreatedAt      time.Time                      `json:"createdAt"`
-	Nonce          string                         `json:"nonce"`
-	PriorOutputs   map[string]string              `json:"priorOutputs,omitempty"`
-	BuildRequest   *BuildRequest                  `json:"buildRequest,omitempty"`
-	Resource       string                         `json:"resource,omitempty"`
-	// Deprecated: a mitstack/v1beta resource carries no inputs; the next major release removes ResourceInputs.
-	ResourceInputs   map[string]json.RawMessage `json:"resourceInputs,omitempty"`
-	ResourceIdentity map[string]string          `json:"resourceIdentity,omitempty"`
+	Operation        string                         `json:"operation"`
+	SubscriptionID   string                         `json:"subscriptionId"`
+	IdempotencyKey   string                         `json:"idempotencyKey"`
+	BlockID          string                         `json:"blockId"`
+	BlockVersion     string                         `json:"blockVersion"`
+	OrgID            string                         `json:"orgId"`
+	AppID            string                         `json:"appId"`
+	Params           map[string]string              `json:"params"`
+	Instances        map[string]InstanceConfig      `json:"instances,omitempty"`
+	Secrets          map[string]map[string]string   `json:"secrets,omitempty"`
+	OBO              string                         `json:"obo,omitempty"`
+	EventsCallback   *EventsCallback                `json:"eventsCallback,omitempty"`
+	SecretInputs     map[string]string              `json:"secretInputs,omitempty"`
+	AppSecrets       map[string]string              `json:"appSecrets,omitempty"`
+	Bindings         map[string]map[string]string   `json:"bindings,omitempty"`
+	BindingsAll      map[string][]map[string]string `json:"bindingsAll,omitempty"`
+	CloudIdentity    *CloudIdentity                 `json:"cloudIdentity,omitempty"`
+	CreatedAt        time.Time                      `json:"createdAt"`
+	Nonce            string                         `json:"nonce"`
+	PriorOutputs     map[string]string              `json:"priorOutputs,omitempty"`
+	BuildRequest     *BuildRequest                  `json:"buildRequest,omitempty"`
+	Resource         string                         `json:"resource,omitempty"`
+	ResourceIdentity map[string]string              `json:"resourceIdentity,omitempty"`
 
 	ResourceType      string                      `json:"resourceType,omitempty"`
 	RecordedResources map[string]RecordedResource `json:"recordedResources,omitempty"`
@@ -132,12 +130,7 @@ type CallOutcome struct {
 	Type         string            `json:"type,omitempty"`
 }
 
-type Ensured struct {
-	Identity map[string]string
-	Outputs  map[string]string
-}
-
-// Identity names which subscription an operation targets and where its resource lives, and carries Instances because a region-scoped block reads its region here, the only value Delete and Observe are handed.
+// Identity names which subscription an operation targets and where its resource lives, and carries Instances because a region-scoped block reads its region here.
 type Identity struct {
 	SubscriptionID string
 	BlockID        string
@@ -161,9 +154,7 @@ type Desired struct {
 	BindingsAll  map[string][]map[string]string
 	BuildRequest *BuildRequest
 
-	Resource string
-	// Deprecated: a mitstack/v1beta resource carries no inputs; the next major release removes ResourceInputs.
-	ResourceInputs   map[string]json.RawMessage
+	Resource         string
 	ResourceIdentity map[string]string
 	ResourceType     string
 
@@ -260,10 +251,6 @@ func DecodeRequest(raw []byte) (Request, error) {
 			"operation", req.Operation)
 	}
 
-	if len(req.ResourceInputs) > 0 && req.Resource == "" {
-		return Request{}, fmt.Errorf("contract: envelope field %q needs a non-empty %q naming the resource the inputs are for",
-			"resourceInputs", "resource")
-	}
 	if len(req.ResourceIdentity) > 0 && req.Resource == "" {
 		return Request{}, fmt.Errorf("contract: envelope field %q needs a non-empty %q naming the resource the identity is for",
 			"resourceIdentity", "resource")
@@ -326,7 +313,6 @@ func (r Request) Desired() Desired {
 		BindingsAll:       r.BindingsAll,
 		BuildRequest:      r.BuildRequest,
 		Resource:          r.Resource,
-		ResourceInputs:    r.ResourceInputs,
 		ResourceIdentity:  r.ResourceIdentity,
 		ResourceType:      r.ResourceType,
 		RecordedResources: r.RecordedResources,

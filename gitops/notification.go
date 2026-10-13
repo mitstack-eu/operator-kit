@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/events"
+	"github.com/mitstack-eu/operator-kit/v2/events"
 )
 
 // Notification is the body Argo CD sends when a sync completes, as the

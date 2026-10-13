@@ -68,6 +68,23 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
 
 func isSlug(s string) bool { return slugPattern.MatchString(s) }
 
+func isKebab(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, group := range strings.Split(s, "-") {
+		if group == "" {
+			return false
+		}
+		for _, c := range group {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // ParseBlockID splits a bare slug or @<org slug>/<slug> into namespace and name, trimming nothing, so an id carrying whitespace is refused.
 func ParseBlockID(id string) (namespace, name string, err error) {
 	return parseNamespacedName("block", id)

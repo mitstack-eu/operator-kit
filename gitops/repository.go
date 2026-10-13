@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // ErrStaleBase is wrapped by a Repository's Commit when parent is no longer the tip.

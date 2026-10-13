@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/credrefresh"
+	"github.com/mitstack-eu/operator-kit/v2/credrefresh"
 )
 
 const grantType = "urn:ietf:params:oauth:grant-type:token-exchange"

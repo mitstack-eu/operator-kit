@@ -8,9 +8,9 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/events"
-	"github.com/mitstack-eu/operator-kit/safe"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/events"
+	"github.com/mitstack-eu/operator-kit/v2/safe"
 )
 
 // dispatchRequest runs the verb through the idempotency cache, storing only a settled answer.
@@ -137,10 +137,7 @@ func (h *Handler) dispatchVerb(ctx context.Context, req contract.Request, secret
 
 // observe never retains d, so no Handler field can hand one verb's secrets to a later call.
 func (h *Handler) observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
-	if ro, ok := h.resource.(RequestObserver); ok {
-		return ro.ObserveWithRequest(ctx, d)
-	}
-	return h.resource.Observe(ctx, d.Identity)
+	return h.resource.Observe(ctx, d)
 }
 
 // refuseSecretOutputs inspects only Outputs, since SecretOutputs is where a secret is returned on purpose, and matches exact values so an output merely containing a secret is left alone.
@@ -178,26 +175,16 @@ func (h *Handler) ensureAndSettle(ctx context.Context, d contract.Desired, secre
 	return h.settlePresent(ctx, d, secrets)
 }
 
-// deleteAndSettle gives only a HandoverResource the request's Params; a plain Resource's Delete receives only the Identity.
-//
-// A manifest declaring retainsOnUnsubscribe answers absent:true without polling Observe, since the block keeps the resource by design and Observe would keep reporting Present.
+// deleteAndSettle answers a manifest declaring retainsOnUnsubscribe absent:true without polling Observe, since the block keeps the resource by design and Observe would keep reporting Present.
 func (h *Handler) deleteAndSettle(ctx context.Context, desired contract.Desired, secrets []string) (int, contract.Response) {
-	id := desired.Identity
-
 	if hook, ok := h.hooks[HookBeforeDelete]; ok {
 		if err := hook(ctx, desired); err != nil {
 			return h.errorResponse(err, secrets)
 		}
 	}
 
-	var handoverOutputs map[string]string
-	if hr, ok := h.resource.(HandoverResource); ok {
-		outputs, err := hr.DeleteWithRequest(ctx, desired)
-		if err != nil {
-			return h.errorResponse(err, secrets)
-		}
-		handoverOutputs = outputs
-	} else if err := h.resource.Delete(ctx, id); err != nil {
+	handoverOutputs, err := h.resource.Delete(ctx, desired)
+	if err != nil {
 		return h.errorResponse(err, secrets)
 	}
 
@@ -258,7 +245,7 @@ func (h *Handler) settlePresent(ctx context.Context, d contract.Desired, secrets
 
 // settleAbsent always answers a definite boolean, absent:false with a detail for anything but Absent, including Unknown, and checks ctx.Err() before every attempt like settlePresent.
 //
-// On absent:true, handoverOutputs from a HandoverResource are merged over Observe's outputs; the absent:false answer carries none.
+// On absent:true, the outputs Delete returned are merged over Observe's outputs; the absent:false answer carries none.
 func (h *Handler) settleAbsent(ctx context.Context, d contract.Desired, secrets []string, handoverOutputs map[string]string) (int, contract.Response) {
 	var last contract.Observation
 	attempts := 0
@@ -368,11 +355,6 @@ func (h *Handler) secretsFor(req contract.Request) []string {
 	}
 	if req.EventsCallback != nil && req.EventsCallback.Token != "" {
 		out = append(out, req.EventsCallback.Token)
-	}
-	if req.Resource != "" {
-		if nr, ok := h.declaredResource(req.Resource); ok {
-			out = append(out, secretResourceInputs(nr.declaration, h.secretParams, req.ResourceInputs)...)
-		}
 	}
 	return out
 }

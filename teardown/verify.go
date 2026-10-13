@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/mitstack-eu/operator-kit/events"
+	"github.com/mitstack-eu/operator-kit/v2/events"
 )
 
 // Check asks whether one provider resource of Kind is still present.

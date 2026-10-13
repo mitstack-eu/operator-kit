@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/settle"
+	"github.com/mitstack-eu/operator-kit/v2/settle"
 )
 
 // ProbeTimeout bounds a single probe.

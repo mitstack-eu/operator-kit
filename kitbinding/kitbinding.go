@@ -14,9 +14,12 @@ import (
 )
 
 // HandlerPackage is the import path of the kit's handler package.
-const HandlerPackage = "github.com/mitstack-eu/operator-kit/handler"
+const HandlerPackage = "github.com/mitstack-eu/operator-kit/v2/handler"
 
-// HandlerImportFiles returns the sorted, slash-separated paths under dir of non-test files a default build compiles that import HandlerPackage, and fails the scan on any file it cannot judge.
+// v1HandlerPackage is still bound, since a block on a v1 release keeps working until its next change moves it.
+const v1HandlerPackage = "github.com/mitstack-eu/operator-kit/handler"
+
+// HandlerImportFiles returns the sorted, slash-separated paths under dir of non-test files a default build compiles that import HandlerPackage or its v1 path, and fails the scan on any file it cannot judge.
 func HandlerImportFiles(dir string) ([]string, error) {
 	fset := token.NewFileSet()
 	var found []string
@@ -47,7 +50,7 @@ func HandlerImportFiles(dir string) ([]string, error) {
 		}
 		for _, spec := range f.Imports {
 			p, err := strconv.Unquote(spec.Path.Value)
-			if err == nil && p == HandlerPackage {
+			if err == nil && (p == HandlerPackage || p == v1HandlerPackage) {
 				rel, err := filepath.Rel(dir, path)
 				if err != nil {
 					return fmt.Errorf("%s: %w", path, err)

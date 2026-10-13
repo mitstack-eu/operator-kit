@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/handler"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
 )
 
 const appNamePlaceholder = "{appName}"

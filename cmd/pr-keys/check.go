@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/boardkeys"
+	"github.com/mitstack-eu/operator-kit/v2/boardkeys"
 )
 
 // commit is one commit's subject and body, the shape boardkeys.Message reads.

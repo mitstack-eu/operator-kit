@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/safe"
+	"github.com/mitstack-eu/operator-kit/v2/safe"
 )
 
 // APIGitHubHost is the standard github.com REST API host, always allowed.

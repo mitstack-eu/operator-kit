@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/adopt"
+	"github.com/mitstack-eu/operator-kit/v2/adopt"
 )
 
 // Resource is one leftover discovered in the provider.
