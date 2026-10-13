@@ -23,131 +23,15 @@ func kitModuleDir(t *testing.T) string {
 	return dir
 }
 
-const kitShimGo = `package main
-
-// kitshim.go — MIT-1466.
-//
-// The mitstack trust boundary (Ed25519 webhook signature, replay/skew window,
-// OBO audience binding, the /logs signed GET, the recent-log ring buffer) and
-// the ADR 0042 events channel now have exactly ONE implementation, in the
-// operator-kit module. This file is the operator's thin binding to it.
-//
-// KEEP THIS FILE IDENTICAL ACROSS OPERATORS — scripts/check-operator-kit-pin.sh
-// enforces that, and that an operator declares no local replacement for a
-// kit-owned symbol. Do not add operator-specific code here; put it in the
-// operator's own files.
-
-import (
-	"context"
-	"crypto/ed25519"
-	"net/http"
-	"time"
-
-	"github.com/mitstack-eu/operator-kit/v2/events"
-	"github.com/mitstack-eu/operator-kit/v2/webhook"
-)
-
-var (
-	jwksCache  = map[string]ed25519.PublicKey{}
-	nonceCache = map[string]time.Time{}
-)
-
-var (
-	kitReplay    = webhook.NewReplayOver(&nonceCache)
-	kitKeys      = webhook.NewKeyCacheOver(&jwksCache)
-	kitLogBuffer = webhook.NewLogBuffer(maxRecentLogLines)
-)
-
-const maxRecentLogLines = webhook.MaxRecentLogLines
-
-const replaySkew = webhook.ReplaySkew
-
-func kitDeps(h *Handler) webhook.Deps {
-	return webhook.Deps{
-		JWKSURL:    h.JWKSURL,
-		PublicKey:  h.publicKey,
-		Replay:     kitReplay,
-		WriteError: writeError,
-	}
-}
-
-func authenticate(h *Handler, w http.ResponseWriter, r *http.Request, body []byte) (ed25519.PublicKey, bool) {
-	return webhook.AuthenticateHook(kitDeps(h), w, r, body)
-}
-
-func authenticateLogsGET(h *Handler, w http.ResponseWriter, r *http.Request) (ed25519.PublicKey, bool) {
-	return webhook.AuthenticateLogsGET(kitDeps(h), w, r)
-}
-
-func verifyReplay(body []byte, now time.Time) error { return kitReplay.Verify(body, now) }
-
-func verifyTimestampSkew(ts string, now time.Time) error {
-	return webhook.VerifyTimestampSkew(ts, now)
-}
-
-func verifyEd25519Sig(pub ed25519.PublicKey, body []byte, sigHeader string) bool {
-	return webhook.VerifyEd25519Sig(pub, body, sigHeader)
-}
-
-func publicKeyFromJWKS(jwksJSON []byte, kid string) (ed25519.PublicKey, error) {
-	return webhook.PublicKeyFromJWKS(jwksJSON, kid)
-}
-
-func (h *Handler) publicKey(kid string) (ed25519.PublicKey, error) {
-	return kitKeys.PublicKey(h.JWKSURL, h.Client, kid)
-}
-
-func (h *Handler) verifyEd25519(kid, sigHeader string, body []byte) bool {
-	pub, err := h.publicKey(kid)
+// kitShimCanonical is the shim a legacy block carries byte for byte, so the golden fixture binds to the kit exactly as such a block must.
+func kitShimCanonical(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(kitShimCanonicalFile)
 	if err != nil {
-		return false
+		t.Fatalf("read the canonical shim %s: %v", kitShimCanonicalFile, err)
 	}
-	return webhook.VerifyEd25519Sig(pub, body, sigHeader)
+	return string(raw)
 }
-
-type OBOClaims = webhook.OBOClaims
-
-var ErrOBOExpired = webhook.ErrOBOExpired
-var ErrOBOInvalid = webhook.ErrOBOInvalid
-
-func MintOBO(priv ed25519.PrivateKey, kid string, claims OBOClaims, ttl time.Duration, now time.Time) (string, error) {
-	return webhook.MintOBO(priv, kid, claims, ttl, now)
-}
-
-func VerifyOBO(pub ed25519.PublicKey, token string, now time.Time) (OBOClaims, error) {
-	return webhook.VerifyOBO(pub, token, now)
-}
-
-func appendRecentLog(line string) { kitLogBuffer.Append(line) }
-
-func clearRecentLogs() { kitLogBuffer.Clear() }
-
-func recentLogSnapshot() []string { return kitLogBuffer.Snapshot() }
-
-type recentLogWriter struct{}
-
-func (recentLogWriter) Write(p []byte) (int, error) { return kitLogBuffer.Writer().Write(p) }
-
-func (h *Handler) ServeLogs(w http.ResponseWriter, r *http.Request) {
-	webhook.ServeLogs(kitDeps(h), kitLogBuffer, w, r)
-}
-
-type EventsCallback = events.Callback
-
-func ContextWithEventsEnvelope(ctx context.Context, req request) context.Context {
-	return events.WithEnvelope(ctx, events.Envelope{
-		SubscriptionID: req.SubscriptionID,
-		Operation:      req.Operation,
-		IdempotencyKey: req.IdempotencyKey,
-		Callback:       req.EventsCallback,
-	})
-}
-
-func EmitProgress(ctx context.Context, detail string) error { return events.EmitProgress(ctx, detail) }
-func EmitCompleted(ctx context.Context) error                { return events.EmitCompleted(ctx) }
-func EmitFailed(ctx context.Context, detail string) error    { return events.EmitFailed(ctx, detail) }
-func scrubEventDetail(detail string) string                  { return events.ScrubDetail(detail) }
-`
 
 const handlerGo = `package main
 
@@ -523,7 +407,7 @@ func goldenFixtureFiles(t *testing.T) map[string]string {
 
 	return map[string]string{
 		"go.mod":                       goMod,
-		"kitshim.go":                   kitShimGo,
+		"kitshim.go":                   kitShimCanonical(t),
 		"handler.go":                   handlerGo,
 		"main.go":                      mainGo,
 		"testhelpers_test.go":          testHelpersGo,

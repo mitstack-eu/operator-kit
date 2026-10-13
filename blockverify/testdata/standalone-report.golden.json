@@ -9,7 +9,7 @@
     {
       "name": "trust-plumbing",
       "status": "pass",
-      "detail": "depends on github.com/mitstack-eu/operator-kit at or above the floor v0.1.0, kitshim.go present, no kit-owned symbol redeclared, manifest.yaml present"
+      "detail": "depends on github.com/mitstack-eu/operator-kit at or above the floor v0.1.0, kitshim.go matches the kit's canonical, no kit-owned symbol redeclared, manifest.yaml present"
     },
     {
       "name": "contract",
