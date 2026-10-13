@@ -89,7 +89,7 @@ func (r *declaredRun) ensureEach(ctx context.Context) (int, contract.Response) {
 	var outputs, secretOutputs map[string]string
 	for _, nr := range r.resources {
 		if ctx.Err() != nil {
-			return http.StatusOK, contract.Response{Pending: true, StatusDetail: r.notReached(nr.name), Resources: r.outcomes}
+			return http.StatusOK, contract.Response{Pending: true, StatusDetail: r.notReached(nr.name), Resources: r.outcomes, SecretOutputs: secretOutputs, ResourceSecretOutputs: r.resourceSecretOutputs}
 		}
 		var entry contract.ResourceOutcome
 		obs, attempts, err := r.settle(ctx, nr, contract.Present, &entry)
@@ -99,9 +99,11 @@ func (r *declaredRun) ensureEach(ctx context.Context) (int, contract.Response) {
 		r.outcomes[nr.name] = entry
 		if obs.State != contract.Present {
 			return http.StatusOK, contract.Response{
-				Pending:      true,
-				StatusDetail: safe.Scrub(fmt.Sprintf("resource %q still %s after %d attempts", nr.name, obs.State, attempts), r.secrets...),
-				Resources:    r.outcomes,
+				Pending:               true,
+				StatusDetail:          safe.Scrub(fmt.Sprintf("resource %q still %s after %d attempts", nr.name, obs.State, attempts), r.secrets...),
+				Resources:             r.outcomes,
+				SecretOutputs:         secretOutputs,
+				ResourceSecretOutputs: r.resourceSecretOutputs,
 			}
 		}
 		if r.answers(nr.name) {
@@ -183,7 +185,7 @@ func (r *declaredRun) validateEach(ctx context.Context) (int, contract.Response)
 	states := make([]string, 0, len(r.resources))
 	for _, nr := range r.resources {
 		if ctx.Err() != nil {
-			return http.StatusOK, contract.Response{Pending: true, StatusDetail: r.notReached(nr.name), Resources: r.outcomes}
+			return http.StatusOK, contract.Response{Pending: true, StatusDetail: r.notReached(nr.name), Resources: r.outcomes, SecretOutputs: secretOutputs, ResourceSecretOutputs: r.resourceSecretOutputs}
 		}
 		var entry contract.ResourceOutcome
 		obs, err := r.observe(ctx, nr)
@@ -215,16 +217,17 @@ func (r *declaredRun) validateEach(ctx context.Context) (int, contract.Response)
 	switch len(r.resources) {
 	case present:
 		resp = contract.Observation{State: contract.Present, Outputs: outputs, SecretOutputs: secretOutputs}.Response()
-		resp.ResourceSecretOutputs = r.resourceSecretOutputs
 	case absent:
 		resp = contract.Observation{State: contract.Absent}.Response()
 	default:
 		resp = contract.Response{
-			Pending:      true,
-			StatusDetail: safe.Scrub("resources observed "+strings.Join(states, ", "), r.secrets...),
+			Pending:       true,
+			StatusDetail:  safe.Scrub("resources observed "+strings.Join(states, ", "), r.secrets...),
+			SecretOutputs: secretOutputs,
 		}
 	}
 	resp.Resources = r.outcomes
+	resp.ResourceSecretOutputs = r.resourceSecretOutputs
 	return http.StatusOK, resp
 }
 

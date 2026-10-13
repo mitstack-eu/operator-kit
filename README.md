@@ -394,6 +394,11 @@ its own secret outputs:
 A resource with no secret output has no entry there. No secret output ever
 appears in `resources`, because the engine records that map.
 
+A pending answer still carries `secretOutputs` and `resourceSecretOutputs`
+for each provided resource the verb already observed present. The platform
+stores them once it confirms the remaining resources itself, such as a
+hostname it reads from its own zone.
+
 A resource not present within the verb budget answers `pending:true` naming
 it, and unsubscribe answers `absent:true` only when every resource observes absent.
 The exception is a resource whose type `Config.Types` marks
