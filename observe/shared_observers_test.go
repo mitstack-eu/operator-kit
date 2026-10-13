@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/observe"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/observe"
 )
 
 var (

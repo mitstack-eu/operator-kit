@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/progress"
+	"github.com/mitstack-eu/operator-kit/v2/progress"
 )
 
 func sink() (*[]string, func(string)) {

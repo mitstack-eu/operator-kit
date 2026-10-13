@@ -9,9 +9,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // recordedEvent is decoded independently of the events package so the test proves the wire shape rather than importing its type.

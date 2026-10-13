@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // plainV1Beta returns ADR 0083's worked plain manifest from the kit's

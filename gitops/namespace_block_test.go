@@ -1,70 +1,96 @@
 package gitops_test
 
-// namespace_block_test.go drives the test block, a kubernetes.namespace
-// declared in mitstack/v1beta and served by a gitops.Resource, per resource
-// the way the engine does:
+// namespace_block_test.go serves the test block, a kubernetes.namespace
+// declared in mitstack/v1beta, through handler.New at block level, the way
+// the engine drives it:
 //
-//   - kittest.CheckDeclaredResources, naming the resource with its recorded
-//     cluster input, finds no problem through ensure, observe, a repeated
-//     ensure, delete and the absence proof;
-//   - served through handler.New, one per-resource subscribe sent twice
-//     under one idempotency key commits once and answers identically, and a
-//     second key with the same inputs converges with no second commit;
-//   - a replay under one key after another app's commit moved head answers
-//     the first bytes, first revision included, while a fresh key reports
-//     the new head;
-//   - a Desired rebuilt from the record the first ensure left (its reported
-//     identity and the recorded inputs) replays ensure, observe and delete
-//     to the same answers with no extra commit, and no seeded secret
-//     reaches the record, an answer or a committed file;
+//   - a subscribe commits the app's manifests once through Deploy and
+//     answers the namespace the gitops.Resource observes, and the same
+//     delivery under one idempotency key commits nothing more;
+//   - an unsubscribe commits their removal through Deploy and settles absent;
+//   - a validate naming the resource is served by its gitops.Resource with
+//     the identity and type the engine recorded, while a subscribe or
+//     unsubscribe naming it is refused with a 400 naming it;
 //   - no seeded secret leaks through the handler's responses or logs.
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/gitops"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
-	"github.com/mitstack-eu/operator-kit/webhook"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/gitops"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
-func TestNamespaceBlock_CheckDeclaredResourcesFindsNoProblemDrivingTheNamedResource(t *testing.T) {
-	b := newNamespaceBlock()
-	d := desiredFor("app-alpha")
-	inputs := d.ResourceInputs
-	d.Resource, d.ResourceInputs = "", nil
+// namespaceBlock serves the test block at block level: Ensure and Delete
+// commit the app's manifests, or their removal, and wait for Argo CD
+// through Deploy, and the block's gitops.Resource observes the namespace.
+type namespaceBlock struct{ *gitopsBlock }
 
-	kittest.AssertDeclaredResources(t, kittest.DeclaredResources{
-		Manifest:       readNamespaceManifest(t),
-		Resources:      map[string]handler.DeclaredResource{resourceName: b.resource},
-		Desired:        d,
-		Resource:       resourceName,
-		ResourceInputs: inputs,
-	})
-
-	if got := len(b.repo.Commits()); got != 2 {
-		t.Errorf("Commits = %d, want 2: one ensure commit (the repeat lands nothing) and one delete commit", got)
+func (b namespaceBlock) Ensure(ctx context.Context, d contract.Desired) error {
+	out, err := b.resource.Render(d)
+	if err != nil {
+		return err
 	}
+	return b.deploy(ctx, d, out.App, out.Files, out.App+": update manifests")
 }
 
-// serveNamespace serves b's resource through handler.New behind a fresh
-// kittest signer, with logs as its /logs buffer when non-nil.
+func (b namespaceBlock) Observe(context.Context, contract.Desired) (contract.Observation, error) {
+	return contract.Observation{State: contract.Unknown}, nil
+}
+
+func (b namespaceBlock) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
+	out, err := b.resource.Render(d)
+	if err != nil {
+		return nil, err
+	}
+	removal := make(map[string][]byte, len(out.Files))
+	for path := range out.Files {
+		removal[path] = nil
+	}
+	return nil, b.deploy(ctx, d, out.App, removal, out.App+": remove manifests")
+}
+
+func (b namespaceBlock) deploy(ctx context.Context, d contract.Desired, app string, files map[string][]byte, message string) error {
+	repo, err := b.resource.Repository(ctx, d)
+	if err != nil {
+		return err
+	}
+	notes, err := b.resource.Notifications(ctx, d)
+	if err != nil {
+		return err
+	}
+	out, err := gitops.Deploy(ctx, repo, notes, gitops.BlockDeploy{
+		App: app, Files: files, Message: message, Secrets: gitops.SecretValues(d), Poll: time.Millisecond,
+	})
+	if err != nil {
+		return err
+	}
+	if out.Outcome.Verdict == gitops.VerdictFailed {
+		return handler.Refuse("deploy-failed", "Argo CD's sync of %s failed: %s", out.Revision, out.Outcome.Notification.Message)
+	}
+	return nil
+}
+
+// serveNamespace serves b at block level behind a fresh kittest signer,
+// with logs as its /logs buffer when non-nil.
 func serveNamespace(t *testing.T, b *gitopsBlock, logs *webhook.LogBuffer) (*handler.Handler, *kittest.Signer) {
 	t.Helper()
 	s := kittest.NewSigner(t, "gitops-test-key", 7)
 	h, err := handler.New(handler.Config{
+		Resource:     namespaceBlock{b},
 		Manifest:     readNamespaceManifest(t),
-		Resources:    map[string]handler.DeclaredResource{resourceName: b.resource},
+		Observers:    map[string]handler.Observer{resourceName: b.resource},
 		JWKSURL:      s.JWKSServer(t),
 		Logs:         logs,
 		VerbBudget:   3,
@@ -77,8 +103,8 @@ func serveNamespace(t *testing.T, b *gitopsBlock, logs *webhook.LogBuffer) (*han
 	return h, s
 }
 
-// requestFields is the envelope of a request naming the app's namespace,
-// carrying its recorded cluster input and every kind of secret.
+// requestFields is the envelope of a request for the app, naming no
+// resource and carrying the cluster param and every kind of secret.
 func requestFields(operation, app string) map[string]any {
 	return map[string]any{
 		"operation":      operation,
@@ -87,9 +113,7 @@ func requestFields(operation, app string) map[string]any {
 		"blockVersion":   "1.0.0",
 		"orgId":          "org-1",
 		"appId":          app,
-		"params":         map[string]any{"appName": app},
-		"resource":       resourceName,
-		"resourceInputs": map[string]any{"cluster": "k3s-fsn1"},
+		"params":         map[string]any{"appName": app, "cluster": clusterParam},
 		"secrets": map[string]any{
 			"github":  map[string]any{"token": githubToken},
 			"hetzner": map[string]any{"apiToken": hetznerSecret},
@@ -97,6 +121,16 @@ func requestFields(operation, app string) map[string]any {
 		"secretInputs": map[string]any{"dbPassword": secretInput},
 		"appSecrets":   map[string]any{"STRIPE_KEY": appSecret},
 	}
+}
+
+// namedFields is requestFields naming the app's namespace with the type
+// and identity the engine recorded for it.
+func namedFields(operation, app string) map[string]any {
+	f := requestFields(operation, app)
+	f["resource"] = resourceName
+	f["resourceType"] = resourceType
+	f["resourceIdentity"] = map[string]any{"app": app}
+	return f
 }
 
 // post signs fields as a fresh webhook delivery, with its own nonce and
@@ -122,186 +156,117 @@ func post(t *testing.T, h http.Handler, s *kittest.Signer, fields map[string]any
 	return rec.Code, rec.Body.Bytes()
 }
 
-func subscribeUnder(key string) map[string]any {
-	f := requestFields("subscribe", "app-alpha")
-	f["idempotencyKey"] = key
-	return f
+// expect returns a reader of a post's answer that fails unless its status is
+// want, and decodes it.
+func expect(t *testing.T, want int) func(int, []byte) contract.Response {
+	t.Helper()
+	return func(status int, raw []byte) contract.Response {
+		t.Helper()
+		if status != want {
+			t.Fatalf("status = %d, want %d; body %s", status, want, raw)
+		}
+		resp, err := contract.DecodeResponse(raw)
+		if err != nil {
+			t.Fatalf("decoding the response: %v; body %s", err, raw)
+		}
+		return resp
+	}
 }
 
-// ensuredEntry decodes raw and returns the named resource's ensure entry,
-// failing unless the subscribe settled present.
-func ensuredEntry(t *testing.T, status int, raw []byte) *contract.CallOutcome {
-	t.Helper()
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body %s", status, raw)
+func TestNamespaceBlock_ASubscribeCommitsTheAppsManifestsOnceAndAnswersTheObservedNamespace(t *testing.T) {
+	b := newNamespaceBlock()
+	h, s := serveNamespace(t, b, nil)
+
+	resp := expect(t, http.StatusOK)(post(t, h, s, requestFields("subscribe", "app-alpha")))
+
+	if resp.Pending || !reflect.DeepEqual(resp.Outputs, alphaOutputs()) {
+		t.Errorf("subscribe answered pending %v outputs %v, want settled with %v", resp.Pending, resp.Outputs, alphaOutputs())
 	}
-	resp, err := contract.DecodeResponse(raw)
-	if err != nil {
-		t.Fatalf("decoding the response: %v; body %s", err, raw)
+	if o := resp.Resources[resourceName].Observe; o == nil || o.State != contract.Present {
+		t.Errorf("%s observe = %+v, want present", resourceName, o)
 	}
-	if resp.Pending || resp.Error != "" {
-		t.Fatalf("subscribe did not settle: pending %v error %q; body %s", resp.Pending, resp.Error, raw)
+	commits := b.repo.Commits()
+	if len(commits) != 1 {
+		t.Fatalf("Commits = %d, want 1", len(commits))
 	}
-	entry := resp.Resources[resourceName].Ensure
-	if entry == nil {
-		t.Fatalf("the response has no ensure entry for %s; body %s", resourceName, raw)
-	}
-	if !reflect.DeepEqual(resp.Outputs, alphaOutputs()) {
-		t.Errorf("outputs = %v, want %v", resp.Outputs, alphaOutputs())
-	}
-	return entry
+	wantFilesAt(t, b.repo, commits[0].Revision, renderApp("app-alpha", clusterParam).Files)
 }
 
 func TestNamespaceBlock_ASubscribeSentTwiceUnderOneKeyCommitsOnceAndAnswersIdentically(t *testing.T) {
 	b := newNamespaceBlock()
 	h, s := serveNamespace(t, b, nil)
+	fields := requestFields("subscribe", "app-alpha")
+	fields["idempotencyKey"] = "key-1"
 
-	firstStatus, first := post(t, h, s, subscribeUnder("key-1"))
-	secondStatus, second := post(t, h, s, subscribeUnder("key-1"))
+	firstStatus, first := post(t, h, s, fields)
+	secondStatus, second := post(t, h, s, fields)
 
-	entry := ensuredEntry(t, firstStatus, first)
-	commits := b.repo.Commits()
-	if len(commits) != 1 {
-		t.Fatalf("Commits = %d, want exactly 1", len(commits))
-	}
+	expect(t, http.StatusOK)(firstStatus, first)
 	if secondStatus != firstStatus || string(second) != string(first) {
 		t.Errorf("the second delivery answered %d %s, want the first's %d %s", secondStatus, second, firstStatus, first)
 	}
-	want := map[string]string{"app": "app-alpha", "revision": commits[0].Revision, "paths": alphaPaths}
-	if !reflect.DeepEqual(entry.Identity, want) {
-		t.Errorf("ensure identity = %v, want %v", entry.Identity, want)
+	if got := len(b.repo.Commits()); got != 1 {
+		t.Errorf("Commits = %d, want exactly 1", got)
 	}
 }
 
-func TestNamespaceBlock_AReplayUnderOneKeyAfterHeadMovedAnswersTheFirstBytesAndAFreshKeyReportsTheNewHead(t *testing.T) {
+func TestNamespaceBlock_AnUnsubscribeCommitsTheRemovalAndSettlesAbsent(t *testing.T) {
 	b := newNamespaceBlock()
 	h, s := serveNamespace(t, b, nil)
+	expect(t, http.StatusOK)(post(t, h, s, requestFields("subscribe", "app-alpha")))
 
-	firstStatus, first := post(t, h, s, subscribeUnder("key-1"))
-	firstEntry := ensuredEntry(t, firstStatus, first)
-	ensure(t, b, desiredFor("app-beta")) // another app's commit lands on top
-	moved := b.head(t)
-	if moved == firstEntry.Identity["revision"] {
-		t.Fatalf("head %s did not move past the first subscribe's revision", moved)
-	}
+	resp := expect(t, http.StatusOK)(post(t, h, s, requestFields("unsubscribe", "app-alpha")))
 
-	replayStatus, replay := post(t, h, s, subscribeUnder("key-1"))
-	if replayStatus != firstStatus || string(replay) != string(first) {
-		t.Errorf("the replay under key-1 answered %d %s, want the first's %d %s byte for byte", replayStatus, replay, firstStatus, first)
+	if resp.Absent == nil || !*resp.Absent {
+		t.Fatalf("unsubscribe answered absent %v, want true; detail %q", resp.Absent, resp.StatusDetail)
 	}
-	if got := ensuredEntry(t, replayStatus, replay).Identity["revision"]; got != firstEntry.Identity["revision"] {
-		t.Errorf("the replay under key-1 reports revision %s, want the first's %s, not head %s", got, firstEntry.Identity["revision"], moved)
-	}
-
-	freshStatus, fresh := post(t, h, s, subscribeUnder("key-2"))
-	if got := ensuredEntry(t, freshStatus, fresh).Identity["revision"]; got != moved {
-		t.Errorf("a fresh key reports revision %s, want the new head %s", got, moved)
+	if o := resp.Resources[resourceName].Observe; o == nil || o.State != contract.Absent {
+		t.Errorf("%s observe = %+v, want absent", resourceName, o)
 	}
 	if got := len(b.repo.Commits()); got != 2 {
-		t.Errorf("Commits = %d, want 2: app-alpha's one commit and app-beta's", got)
+		t.Errorf("Commits = %d, want 2: the manifests and their removal", got)
 	}
+	wantFilesAt(t, b.repo, b.head(t), map[string][]byte{alphaNamespacePath: nil, alphaServiceAccountPath: nil})
 }
 
-func TestNamespaceBlock_ASecondKeyWithTheSameInputsConvergesWithNoSecondCommit(t *testing.T) {
+func TestNamespaceBlock_ANamedValidateIsObservedWithTheRecordedIdentityAndType(t *testing.T) {
 	b := newNamespaceBlock()
 	h, s := serveNamespace(t, b, nil)
+	expect(t, http.StatusOK)(post(t, h, s, requestFields("subscribe", "app-alpha")))
 
-	firstStatus, firstRaw := post(t, h, s, subscribeUnder("key-1"))
-	first := ensuredEntry(t, firstStatus, firstRaw)
-	secondStatus, secondRaw := post(t, h, s, subscribeUnder("key-2"))
-	second := ensuredEntry(t, secondStatus, secondRaw)
+	resp := expect(t, http.StatusOK)(post(t, h, s, namedFields("validate", "app-alpha")))
 
-	if got := len(b.repo.Commits()); got != 1 {
-		t.Errorf("Commits = %d, want 1: the second key finds every file at head", got)
+	o := resp.Resources[resourceName].Observe
+	if o == nil || o.State != contract.Present {
+		t.Fatalf("%s observe = %+v, want present", resourceName, o)
 	}
-	if !reflect.DeepEqual(second.Identity, first.Identity) || !reflect.DeepEqual(second.Outputs, first.Outputs) {
-		t.Errorf("the second key reported %v %v, want the first's %v %v", second.Identity, second.Outputs, first.Identity, first.Outputs)
+	if o.Type != resourceType || !reflect.DeepEqual(o.Identity, map[string]string{"app": "app-alpha"}) {
+		t.Errorf("%s observe type, identity = %q, %v; want %q, the recorded {app: app-alpha}", resourceName, o.Type, o.Identity, resourceType)
+	}
+	if got := len(b.repo.Commits()); got != 1 {
+		t.Errorf("Commits = %d, want 1: a validate never commits", got)
 	}
 }
 
-// subscriptionRecord is what the platform keeps for the resource after its
-// first ensure: the subscription, the inputs recorded at subscribe and the
-// identity the ensure reported. It carries no secret.
-type subscriptionRecord struct {
-	Subscription contract.Identity          `json:"subscription"`
-	Resource     string                     `json:"resource"`
-	Inputs       map[string]json.RawMessage `json:"inputs"`
-	Identity     map[string]string          `json:"identity"`
-}
+func TestNamespaceBlock_ANamedSubscribeOrUnsubscribeIsRefusedNamingTheResourceAndCommitsNothing(t *testing.T) {
+	for _, operation := range []string{"subscribe", "unsubscribe"} {
+		t.Run(operation, func(t *testing.T) {
+			b := newNamespaceBlock()
+			h, s := serveNamespace(t, b, nil)
 
-func TestNamespaceBlock_ADesiredRebuiltFromTheRecordAloneReplaysEnsureObserveAndDelete(t *testing.T) {
-	b := newNamespaceBlock()
-	original := desiredFor("app-alpha")
-	ensured := ensure(t, b, original)
-	observed := observe(t, b, original)
+			resp := expect(t, http.StatusBadRequest)(post(t, h, s, namedFields(operation, "app-alpha")))
 
-	raw, err := json.Marshal(subscriptionRecord{
-		Subscription: original.Identity,
-		Resource:     original.Resource,
-		Inputs:       original.ResourceInputs,
-		Identity:     ensured.Identity,
-	})
-	if err != nil {
-		t.Fatalf("encoding the record: %v", err)
-	}
-	var record subscriptionRecord
-	if err := json.Unmarshal(raw, &record); err != nil {
-		t.Fatalf("decoding the record: %v", err)
-	}
-	replay := contract.Desired{
-		Identity:         record.Subscription,
-		Resource:         record.Resource,
-		ResourceInputs:   record.Inputs,
-		ResourceIdentity: record.Identity,
-	}
-
-	reEnsured := ensure(t, b, replay)
-	if !reflect.DeepEqual(reEnsured, ensured) {
-		t.Errorf("replayed ensure = %+v, want the original %+v", reEnsured, ensured)
-	}
-	reObserved := observe(t, b, replay)
-	if !reflect.DeepEqual(reObserved, observed) {
-		t.Errorf("replayed observe = %+v, want the original %+v", reObserved, observed)
-	}
-	if got := len(b.repo.Commits()); got != 1 {
-		t.Errorf("Commits = %d after the replayed ensure and observe, want 1", got)
-	}
-
-	if err := b.resource.DeleteWithRequest(context.Background(), replay); err != nil {
-		t.Fatalf("replayed DeleteWithRequest: %v", err)
-	}
-	if got := len(b.repo.Commits()); got != 2 {
-		t.Errorf("Commits = %d after the replayed delete, want 2", got)
-	}
-	gone := observe(t, b, replay)
-	if gone.State != contract.Absent {
-		t.Errorf("observe after the replayed delete = %+v, want absent", gone)
-	}
-
-	answers := map[string]any{
-		"the record":               record,
-		"the original ensure":      ensured,
-		"the original observe":     observed,
-		"the replayed ensure":      reEnsured,
-		"the replayed observe":     reObserved,
-		"the observe after delete": gone,
-	}
-	for what, v := range answers {
-		text, err := json.Marshal(v)
-		if err != nil {
-			t.Fatalf("encoding %s: %v", what, err)
-		}
-		kittest.AssertNoSecret(t, what, string(text), seededSecrets...)
-	}
-	for _, c := range b.repo.Commits() {
-		for path, content := range c.Changes {
-			kittest.AssertNoSecret(t, "committed file "+path, string(content), seededSecrets...)
-		}
+			if !strings.Contains(resp.Error, `"`+resourceName+`"`) {
+				t.Errorf("error = %q, want it to name %q", resp.Error, resourceName)
+			}
+			if got := len(b.repo.Commits()); got != 0 {
+				t.Errorf("Commits = %d, want 0", got)
+			}
+		})
 	}
 }
 
 func TestNamespaceBlock_LeaksNoSecretThroughTheHandlersResponsesOrLogs(t *testing.T) {
-	broken := requestFields("subscribe", "app-broken")
 	kittest.AssertNoSecretLeak(t, kittest.SecretLeak{
 		Secrets: seededSecrets,
 		Serve: func(logs *webhook.LogBuffer) (http.Handler, *kittest.Signer) {
@@ -317,9 +282,9 @@ func TestNamespaceBlock_LeaksNoSecretThroughTheHandlersResponsesOrLogs(t *testin
 		},
 		Requests: []kittest.LeakRequest{
 			{Name: "subscribe", Body: requestFields("subscribe", "app-alpha")},
-			{Name: "validate", Body: requestFields("validate", "app-alpha")},
+			{Name: "validate", Body: namedFields("validate", "app-alpha")},
 			{Name: "unsubscribe", Body: requestFields("unsubscribe", "app-alpha")},
-			{Name: "subscribe to an unreachable repository", Body: broken, Fails: true},
+			{Name: "subscribe to an unreachable repository", Body: requestFields("subscribe", "app-broken"), Fails: true},
 		},
 	})
 }

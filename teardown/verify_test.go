@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/teardown"
+	"github.com/mitstack-eu/operator-kit/v2/teardown"
 )
 
 func present(kind string, isPresent bool, err error) teardown.Check {

@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // TestServe_UnknownPathIs404 pins that Serve routes only POST /hook and

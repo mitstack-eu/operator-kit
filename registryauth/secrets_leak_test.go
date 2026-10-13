@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/kittest"
-	"github.com/mitstack-eu/operator-kit/registryauth"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/registryauth"
 )
 
 const (

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/cloudid"
+	"github.com/mitstack-eu/operator-kit/v2/cloudid"
 )
 
 func TestProviderARN_IsConstructedNotDiscovered(t *testing.T) {

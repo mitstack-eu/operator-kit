@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/cfnstack"
+	"github.com/mitstack-eu/operator-kit/v2/cfnstack"
 )
 
 var _ cfnstack.Provisioner = (*cfnstack.Stacks)(nil)

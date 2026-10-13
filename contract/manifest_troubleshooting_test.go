@@ -23,7 +23,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // troubleshootingKeys are the keys a troubleshooting rule accepts, in the

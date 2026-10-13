@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/kittest"
-	"github.com/mitstack-eu/operator-kit/webhook"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
 // The trust-boundary scenarios below mirror webhook/authenticate_test.go's

@@ -1,27 +1,27 @@
 package gitops_test
 
 // fixture_test.go is the test block every Resource test drives: one
-// kubernetes.namespace, declared in testdata/kubernetes-namespace, served by
-// a gitops.Resource that renders a Namespace and a ServiceAccount for the
-// app into the cluster's GitOps repository and publishes the namespace and
-// serviceAccount outputs the catalogue requires.
+// kubernetes.namespace, declared in testdata/kubernetes-namespace, whose
+// manifests are the app's Namespace and ServiceAccount in the cluster's
+// GitOps repository, observed by a gitops.Resource that publishes the
+// namespace and serviceAccount outputs.
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/gitops"
-	"github.com/mitstack-eu/operator-kit/gitops/gitopstest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/gitops"
+	"github.com/mitstack-eu/operator-kit/v2/gitops/gitopstest"
 )
 
 const (
 	resourceName = "app-namespace"
-	clusterInput = `"k3s-fsn1"`
+	resourceType = "kubernetes.namespace"
+	clusterParam = "k3s-fsn1"
 
 	githubToken   = "ghs_platformMintedInstallationToken0123"
 	secretInput   = "secret-input-value-4567"
@@ -30,7 +30,6 @@ const (
 
 	alphaNamespacePath      = "apps/app-alpha/namespace.yaml"
 	alphaServiceAccountPath = "apps/app-alpha/serviceaccount.yaml"
-	alphaPaths              = alphaNamespacePath + "," + alphaServiceAccountPath
 )
 
 // seededSecrets is every secret value a Desired from desiredFor carries.
@@ -45,8 +44,8 @@ func readNamespaceManifest(t *testing.T) []byte {
 	return raw
 }
 
-// desiredFor is the Desired a request naming the app's namespace carries:
-// the subscription, the recorded cluster input and every kind of secret.
+// desiredFor is the Desired a request for the app carries: the
+// subscription, the cluster param and every kind of secret.
 func desiredFor(app string) contract.Desired {
 	return contract.Desired{
 		Identity: contract.Identity{
@@ -56,29 +55,22 @@ func desiredFor(app string) contract.Desired {
 			OrgID:          "org-1",
 			AppID:          app,
 		},
-		Params:       map[string]string{"appName": app},
+		Params:       map[string]string{"appName": app, "cluster": clusterParam},
 		SecretInputs: map[string]string{"dbPassword": secretInput},
 		AppSecrets:   map[string]string{"STRIPE_KEY": appSecret},
 		Secrets: map[string]map[string]string{
 			"github":  {"token": githubToken},
 			"hetzner": {"apiToken": hetznerSecret},
 		},
-		Resource:       resourceName,
-		ResourceInputs: map[string]json.RawMessage{"cluster": json.RawMessage(clusterInput)},
 	}
 }
 
 // renderNamespace renders the app's Namespace and ServiceAccount from the
-// recorded cluster input and the app id alone, so a Desired rebuilt from
-// the subscription's record renders the same files.
+// cluster param and the app id alone.
 func renderNamespace(d contract.Desired) (gitops.Rendered, error) {
-	raw, ok := d.ResourceInputs["cluster"]
-	if !ok {
-		return gitops.Rendered{}, errors.New("no cluster input recorded")
-	}
-	var cluster string
-	if err := json.Unmarshal(raw, &cluster); err != nil {
-		return gitops.Rendered{}, fmt.Errorf("cluster input: %w", err)
+	cluster := d.Params["cluster"]
+	if cluster == "" {
+		return gitops.Rendered{}, errors.New("no cluster param")
 	}
 	if d.AppID == "" {
 		return gitops.Rendered{}, errors.New("no app id")
@@ -144,4 +136,43 @@ func (b *gitopsBlock) head(t *testing.T) string {
 		t.Fatalf("Head: %v", err)
 	}
 	return head
+}
+
+// commitApp commits d's render through CommitManifests, as a block-level
+// handler does, and returns the revision that holds it.
+func commitApp(t *testing.T, b *gitopsBlock, d contract.Desired) string {
+	t.Helper()
+	out, err := b.resource.Render(d)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	rev, _, err := gitops.CommitManifests(context.Background(), b.repo, out.Files, out.App+": update manifests", gitops.SecretValues(d))
+	if err != nil {
+		t.Fatalf("CommitManifests: %v", err)
+	}
+	return rev
+}
+
+// removeApp commits the removal of d's rendered paths and returns head.
+func removeApp(t *testing.T, b *gitopsBlock, d contract.Desired) string {
+	t.Helper()
+	out, err := b.resource.Render(d)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	removal := make(map[string][]byte, len(out.Files))
+	for path := range out.Files {
+		removal[path] = nil
+	}
+	rev, _, err := gitops.CommitManifests(context.Background(), b.repo, removal, out.App+": remove manifests", nil)
+	if err != nil {
+		t.Fatalf("CommitManifests of the removal: %v", err)
+	}
+	return rev
+}
+
+// refFor is what a block-level handler hands the observer of the app's
+// namespace.
+func refFor(d contract.Desired) contract.ResourceRef {
+	return contract.ResourceRef{Name: resourceName, Type: resourceType, Identity: map[string]string{"app": d.AppID}, Desired: d}
 }

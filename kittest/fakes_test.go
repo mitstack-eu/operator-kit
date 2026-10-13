@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // A permissive fake makes every test pass, so the fakes must refuse the paths they do not model.

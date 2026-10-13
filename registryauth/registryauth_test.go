@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/registryauth"
+	"github.com/mitstack-eu/operator-kit/v2/registryauth"
 )
 
 // fakeRegistryBins puts recording stubs for aws and docker first on PATH, so a test can assert a credential travelled over stdin and not merely that it was absent from argv.

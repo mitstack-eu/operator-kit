@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 const wantRefusedClass = "secret-in-output"
@@ -23,18 +23,15 @@ type leakyHandoverFake struct {
 
 func (f *leakyHandoverFake) Ensure(ctx context.Context, d contract.Desired) error { return nil }
 
-func (f *leakyHandoverFake) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
+func (f *leakyHandoverFake) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
 	return contract.Observation{State: contract.Absent}, nil
 }
 
-func (f *leakyHandoverFake) Delete(ctx context.Context, id contract.Identity) error { return nil }
-
-func (f *leakyHandoverFake) DeleteWithRequest(ctx context.Context, d contract.Desired) (map[string]string, error) {
+func (f *leakyHandoverFake) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
 	return map[string]string{f.OutputKey: f.OutputValue}, nil
 }
 
 var _ handler.Resource = (*leakyHandoverFake)(nil)
-var _ handler.HandoverResource = (*leakyHandoverFake)(nil)
 
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
@@ -73,7 +70,7 @@ func TestServe_ValidateOutputExactlyMatchingASecretValueIsRefused(t *testing.T) 
 	kittest.AssertNoSecret(t, "log output", logBuf.String(), tokenValue)
 }
 
-func TestServe_UnsubscribeDeleteWithRequestOutputExactlyMatchingASecretValueIsRefused(t *testing.T) {
+func TestServe_UnsubscribeDeleteOutputExactlyMatchingASecretValueIsRefused(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	const tokenValue = "ghp_leakedondelete1234567890"
 	f := &leakyHandoverFake{OutputKey: "leakedOnDelete", OutputValue: tokenValue}

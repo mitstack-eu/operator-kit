@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/registryauth"
+	"github.com/mitstack-eu/operator-kit/v2/registryauth"
 )
 
 func TestLogin_ECR_ContextCancelledMidGetLoginPasswordIsAttributedToTheContext(t *testing.T) {

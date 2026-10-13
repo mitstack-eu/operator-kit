@@ -22,7 +22,7 @@ import (
 	"testing"
 )
 
-const kitHandlerImport = "github.com/mitstack-eu/operator-kit/handler"
+const kitHandlerImport = "github.com/mitstack-eu/operator-kit/v2/handler"
 
 // kitV1ManifestYAML declares the kit/v1 lifecycle contract in the shape
 // postgres-db's manifest uses: a lifecycle mapping nested directly in spec.
@@ -51,7 +51,7 @@ spec:
 // kitV1MainGo binds the block to the kit from production code.
 const kitV1MainGo = `package main
 
-import "github.com/mitstack-eu/operator-kit/handler"
+import "github.com/mitstack-eu/operator-kit/v2/handler"
 
 var _ = handler.New
 
@@ -71,7 +71,7 @@ const kitV1HandlerOnlyInTestGo = `package main
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/handler"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
 )
 
 func TestHandlerIsReachable(t *testing.T) {
@@ -84,8 +84,8 @@ func TestHandlerIsReachable(t *testing.T) {
 func kitV1FixtureFiles(t *testing.T) map[string]string {
 	t.Helper()
 	goMod := "module fixture\n\ngo 1.25\n\n" +
-		"require github.com/mitstack-eu/operator-kit v0.1.0\n\n" +
-		"replace github.com/mitstack-eu/operator-kit => " + kitModuleDir(t) + "\n"
+		"require github.com/mitstack-eu/operator-kit/v2 v2.0.0\n\n" +
+		"replace github.com/mitstack-eu/operator-kit/v2 => " + kitModuleDir(t) + "\n"
 	return map[string]string{
 		"go.mod":        goMod,
 		"main.go":       kitV1MainGo,

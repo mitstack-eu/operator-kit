@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 func awsInstances(region string) map[string]any {
@@ -56,10 +56,10 @@ func (r *regionScopedResource) Ensure(_ context.Context, d contract.Desired) err
 	return nil
 }
 
-func (r *regionScopedResource) Observe(_ context.Context, id contract.Identity) (contract.Observation, error) {
+func (r *regionScopedResource) Observe(_ context.Context, d contract.Desired) (contract.Observation, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.observeIdentities = append(r.observeIdentities, id)
+	r.observeIdentities = append(r.observeIdentities, d.Identity)
 
 	state := r.observeState
 	if state == "" {
@@ -68,17 +68,17 @@ func (r *regionScopedResource) Observe(_ context.Context, id contract.Identity) 
 	return contract.Observation{State: state}, nil
 }
 
-func (r *regionScopedResource) Delete(_ context.Context, id contract.Identity) error {
+func (r *regionScopedResource) Delete(_ context.Context, d contract.Desired) (map[string]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.deleteIdentities = append(r.deleteIdentities, id)
+	r.deleteIdentities = append(r.deleteIdentities, d.Identity)
 
-	region := instanceRegion(id.Instances)
+	region := instanceRegion(d.Instances)
 	if region == "" {
-		return nil
+		return nil, nil
 	}
 	delete(r.provisioned, region)
-	return nil
+	return nil, nil
 }
 
 func (r *regionScopedResource) regions() []string {
@@ -210,7 +210,7 @@ func (r *priorOutputsResource) Ensure(_ context.Context, d contract.Desired) err
 	return nil
 }
 
-func (r *priorOutputsResource) Observe(_ context.Context, _ contract.Identity) (contract.Observation, error) {
+func (r *priorOutputsResource) Observe(_ context.Context, _ contract.Desired) (contract.Observation, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.provisioned) == 0 {
@@ -219,17 +219,17 @@ func (r *priorOutputsResource) Observe(_ context.Context, _ contract.Identity) (
 	return contract.Observation{State: contract.Present}, nil
 }
 
-func (r *priorOutputsResource) Delete(_ context.Context, id contract.Identity) error {
+func (r *priorOutputsResource) Delete(_ context.Context, d contract.Desired) (map[string]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.deleteIdentities = append(r.deleteIdentities, id)
+	r.deleteIdentities = append(r.deleteIdentities, d.Identity)
 
-	region := id.PriorOutputs["region"]
+	region := d.PriorOutputs["region"]
 	if region == "" {
-		return nil
+		return nil, nil
 	}
 	delete(r.provisioned, region)
-	return nil
+	return nil, nil
 }
 
 func (r *priorOutputsResource) count() int {

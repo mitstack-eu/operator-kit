@@ -1,16 +1,11 @@
 package gitops_test
 
-// resource_test.go pins gitops.Resource, one declared resource served
-// through the kit's per-resource hooks:
+// resource_test.go pins gitops.Resource, the observer of one declared
+// resource whose manifests a block-level handler commits:
 //
-//   - EnsureWithReport renders, refuses a secret in any rendered file as a
-//     secret-in-manifest refusal and a path holding a comma as an
-//     invalid-manifest-path refusal, commits through CommitManifests, and
-//     reports the app, the revision and the sorted paths; an unchanged
-//     ensure reports the recorded revision while its files still match, and
-//     head otherwise;
-//   - Observe first checks head: files at head that differ from the render,
-//     or stand only in part, are unknown naming the paths, and an empty
+//   - ObserveResource renders from the request the ref carries;
+//   - it first checks head: files at head that differ from the render, or
+//     stand only in part, are unknown naming the paths, and an empty
 //     repository is absent with no notification read. Otherwise it reads
 //     the app's newest notification, whatever its revision, and checks the
 //     files at that notification's revision: when they match what head
@@ -18,213 +13,65 @@ package gitops_test
 //     absent, pending is unknown, failed is an error); when they do not,
 //     Argo CD has not yet reported a revision carrying the change, which is
 //     unknown. No notification at all is unknown. It never takes the
-//     revision to judge from ResourceIdentity;
-//   - Delete commits removal of the recorded paths, or the rendered ones
-//     when none are recorded, and commits nothing when they are already
-//     gone;
-//   - a bare Observe or Delete builds its Desired from the identity alone;
-//   - one app's ensure and delete never touch another app's paths.
+//     revision to judge from the ref's identity;
+//   - another app's commits never change what one app observes.
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/gitops"
-	"github.com/mitstack-eu/operator-kit/handler"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/gitops"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
 )
 
-var (
-	_ handler.DeclaredResource  = (*gitops.Resource)(nil)
-	_ handler.ReportingResource = (*gitops.Resource)(nil)
-	_ handler.RequestObserver   = (*gitops.Resource)(nil)
-	_ handler.RequestDeleter    = (*gitops.Resource)(nil)
-)
-
-func ensure(t *testing.T, b *gitopsBlock, d contract.Desired) contract.Ensured {
-	t.Helper()
-	got, err := b.resource.EnsureWithReport(context.Background(), d)
-	if err != nil {
-		t.Fatalf("EnsureWithReport: %v", err)
-	}
-	return got
-}
+var _ handler.Observer = (*gitops.Resource)(nil)
 
 func observe(t *testing.T, b *gitopsBlock, d contract.Desired) contract.Observation {
 	t.Helper()
-	obs, err := b.resource.ObserveWithRequest(context.Background(), d)
+	obs, err := b.resource.ObserveResource(context.Background(), refFor(d))
 	if err != nil {
-		t.Fatalf("ObserveWithRequest: %v", err)
+		t.Fatalf("ObserveResource: %v", err)
 	}
 	return obs
 }
 
-func TestResource_EnsureWithReportCommitsTheRenderedFilesAndReportsAppRevisionAndSortedPaths(t *testing.T) {
-	b := newNamespaceBlock()
-
-	got := ensure(t, b, desiredFor("app-alpha"))
-
-	commits := b.repo.Commits()
-	if len(commits) != 1 {
-		t.Fatalf("Commits = %d, want 1", len(commits))
-	}
-	want := contract.Ensured{
-		Identity: map[string]string{"app": "app-alpha", "revision": commits[0].Revision, "paths": alphaPaths},
-		Outputs:  alphaOutputs(),
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("EnsureWithReport = %+v, want %+v", got, want)
-	}
-	wantFilesAt(t, b.repo, commits[0].Revision, renderApp("app-alpha", "k3s-fsn1").Files)
+func onCluster(d contract.Desired, cluster string) contract.Desired {
+	d.Params = map[string]string{"appName": d.Params["appName"], "cluster": cluster}
+	return d
 }
 
-func TestResource_EnsureCommitsTheSameWayEnsureWithReportDoes(t *testing.T) {
-	b := newNamespaceBlock()
+func TestResource_ObserveResourceRendersFromTheRequestTheRefCarries(t *testing.T) {
+	var seen []contract.Desired
+	b := newBlock(func(d contract.Desired) (gitops.Rendered, error) {
+		seen = append(seen, d)
+		return renderNamespace(d)
+	}, "app-alpha")
+	commitApp(t, b, desiredFor("app-alpha"))
+	seen = nil
+	ref := refFor(desiredFor("app-alpha"))
 
-	if err := b.resource.Ensure(context.Background(), desiredFor("app-alpha")); err != nil {
-		t.Fatalf("Ensure: %v", err)
+	obs, err := b.resource.ObserveResource(context.Background(), ref)
+
+	if err != nil || obs.State != contract.Present || !reflect.DeepEqual(obs.Outputs, alphaOutputs()) {
+		t.Fatalf("ObserveResource = %+v, %v, want present with %v", obs, err, alphaOutputs())
 	}
-	if got := len(b.repo.Commits()); got != 1 {
-		t.Fatalf("Commits = %d, want 1", got)
+	if len(seen) == 0 {
+		t.Fatal("ObserveResource never rendered")
 	}
-	wantFilesAt(t, b.repo, b.head(t), renderApp("app-alpha", "k3s-fsn1").Files)
-}
-
-func TestResource_ARepeatedEnsureCommitsNothingAndReportsTheSameRevision(t *testing.T) {
-	b := newNamespaceBlock()
-	first := ensure(t, b, desiredFor("app-alpha"))
-
-	second := ensure(t, b, desiredFor("app-alpha"))
-
-	if got := len(b.repo.Commits()); got != 1 {
-		t.Errorf("Commits = %d, want 1: an unchanged ensure lands nothing", got)
-	}
-	if !reflect.DeepEqual(second, first) {
-		t.Errorf("second EnsureWithReport = %+v, want the first's %+v", second, first)
-	}
-}
-
-func TestResource_AnUnchangedEnsureReportsTheRecordedRevisionWhileItsFilesStillMatch(t *testing.T) {
-	b := newNamespaceBlock()
-	first := ensure(t, b, desiredFor("app-alpha"))
-	ensure(t, b, desiredFor("app-beta")) // head moves past app-alpha's commit
-
-	recorded := desiredFor("app-alpha")
-	recorded.ResourceIdentity = first.Identity
-	got := ensure(t, b, recorded)
-
-	if got.Identity["revision"] != first.Identity["revision"] {
-		t.Errorf("revision = %q, want the recorded %q: nothing changed and its files still match", got.Identity["revision"], first.Identity["revision"])
-	}
-	if n := len(b.repo.Commits()); n != 2 {
-		t.Errorf("Commits = %d, want 2", n)
-	}
-
-	unrecorded := ensure(t, b, desiredFor("app-alpha"))
-	if head := b.head(t); unrecorded.Identity["revision"] != head {
-		t.Errorf("with no recorded identity, revision = %q, want head %q", unrecorded.Identity["revision"], head)
-	}
-}
-
-func TestResource_AnUnchangedEnsureReportsHeadWhenTheRecordedRevisionsFilesNoLongerMatch(t *testing.T) {
-	b := newNamespaceBlock()
-	stale := ensure(t, b, desiredFor("app-alpha"))
-	moved := desiredFor("app-alpha")
-	moved.ResourceInputs["cluster"] = []byte(`"k3s-nbg1"`)
-	ensure(t, b, moved)
-
-	again := desiredFor("app-alpha")
-	again.ResourceInputs["cluster"] = []byte(`"k3s-nbg1"`)
-	again.ResourceIdentity = stale.Identity
-	got := ensure(t, b, again)
-
-	if head := b.head(t); got.Identity["revision"] != head {
-		t.Errorf("revision = %q, want head %q: the recorded revision holds other content", got.Identity["revision"], head)
-	}
-	if n := len(b.repo.Commits()); n != 2 {
-		t.Errorf("Commits = %d, want 2", n)
-	}
-}
-
-// withExtraFile wraps render to add one more file, as a block that put a
-// value where it does not belong would.
-func withExtraFile(render func(contract.Desired) (gitops.Rendered, error), path string, content func(contract.Desired) []byte) func(contract.Desired) (gitops.Rendered, error) {
-	return func(d contract.Desired) (gitops.Rendered, error) {
-		r, err := render(d)
-		if err != nil {
-			return r, err
+	for _, d := range seen {
+		if !reflect.DeepEqual(d, ref.Desired) {
+			t.Errorf("Render was handed %+v, want the request the ref carries, %+v", d, ref.Desired)
 		}
-		r.Files[path] = content(d)
-		return r, nil
-	}
-}
-
-func TestResource_EnsureRefusesASecretInARenderedFileAsSecretInManifestAndCommitsNothing(t *testing.T) {
-	const leaky = "apps/app-alpha/pull-secret.yaml"
-	for name, c := range map[string]struct {
-		secret  string
-		content func(contract.Desired) []byte
-	}{
-		"the github token verbatim": {githubToken, func(d contract.Desired) []byte {
-			return []byte("auth: " + d.Secrets["github"]["token"] + "\n")
-		}},
-		"a secret input base64-encoded": {secretInput, func(d contract.Desired) []byte {
-			return []byte("data:\n  password: " + base64.StdEncoding.EncodeToString([]byte(d.SecretInputs["dbPassword"])) + "\n")
-		}},
-		"an app secret verbatim": {appSecret, func(d contract.Desired) []byte {
-			return []byte("STRIPE_KEY: " + d.AppSecrets["STRIPE_KEY"] + "\n")
-		}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			b := newBlock(withExtraFile(renderNamespace, leaky, c.content), "app-alpha")
-
-			_, err := b.resource.EnsureWithReport(context.Background(), desiredFor("app-alpha"))
-
-			var refused *handler.Refused
-			if !errors.As(err, &refused) || refused.Class != "secret-in-manifest" {
-				t.Fatalf("err = %v, want a *handler.Refused of class secret-in-manifest", err)
-			}
-			if !strings.Contains(err.Error(), leaky) {
-				t.Errorf("error %q does not name the path %s", err, leaky)
-			}
-			if strings.Contains(err.Error(), c.secret) || strings.Contains(err.Error(), base64.StdEncoding.EncodeToString([]byte(c.secret))) {
-				t.Error("the refusal carries the secret value")
-			}
-			if got := len(b.repo.Commits()); got != 0 {
-				t.Errorf("Commits = %d, want 0", got)
-			}
-		})
-	}
-}
-
-func TestResource_EnsureRefusesARenderedPathHoldingACommaAsInvalidManifestPathAndCommitsNothing(t *testing.T) {
-	const comma = "apps/app-alpha/role,binding.yaml"
-	b := newBlock(withExtraFile(renderNamespace, comma, func(contract.Desired) []byte {
-		return []byte("kind: RoleBinding\n")
-	}), "app-alpha")
-
-	_, err := b.resource.EnsureWithReport(context.Background(), desiredFor("app-alpha"))
-
-	var refused *handler.Refused
-	if !errors.As(err, &refused) || refused.Class != "invalid-manifest-path" {
-		t.Fatalf("err = %v, want a *handler.Refused of class invalid-manifest-path: the identity joins paths with commas", err)
-	}
-	if !strings.Contains(err.Error(), comma) {
-		t.Errorf("error %q does not name the path %s", err, comma)
-	}
-	if got := len(b.repo.Commits()); got != 0 {
-		t.Errorf("Commits = %d, want 0", got)
 	}
 }
 
 func TestResource_ObserveIsPresentWithTheOutputsWhenTheFilesStandAtHeadAndItsDeploySucceeded(t *testing.T) {
 	b := newNamespaceBlock()
-	ensure(t, b, desiredFor("app-alpha"))
+	commitApp(t, b, desiredFor("app-alpha"))
 
 	obs := observe(t, b, desiredFor("app-alpha"))
 
@@ -242,7 +89,7 @@ func TestResource_ObserveIsUnknownWithADetailWhileHeadsDeployIsPendingOrUnreport
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := newBlock(renderNamespace)
-			rev := ensure(t, b, desiredFor("app-alpha")).Identity["revision"]
+			rev := commitApp(t, b, desiredFor("app-alpha"))
 			seed(b, rev)
 
 			obs := observe(t, b, desiredFor("app-alpha"))
@@ -256,13 +103,13 @@ func TestResource_ObserveIsUnknownWithADetailWhileHeadsDeployIsPendingOrUnreport
 
 func TestResource_ObserveFailsCarryingPhaseHealthAndMessageWhenHeadsDeployFailed(t *testing.T) {
 	b := newBlock(renderNamespace)
-	rev := ensure(t, b, desiredFor("app-alpha")).Identity["revision"]
+	rev := commitApp(t, b, desiredFor("app-alpha"))
 	b.notes.Set(gitops.Notification{App: "app-alpha", Revision: rev, Phase: "Failed", Health: "Degraded", Message: "namespace quota exceeded"})
 
-	_, err := b.resource.ObserveWithRequest(context.Background(), desiredFor("app-alpha"))
+	_, err := b.resource.ObserveResource(context.Background(), refFor(desiredFor("app-alpha")))
 
 	if err == nil {
-		t.Fatal("ObserveWithRequest returned no error for a failed deploy")
+		t.Fatal("ObserveResource returned no error for a failed deploy")
 	}
 	for _, want := range []string{"Failed", "Degraded", "namespace quota exceeded"} {
 		if !strings.Contains(err.Error(), want) {
@@ -271,20 +118,20 @@ func TestResource_ObserveFailsCarryingPhaseHealthAndMessageWhenHeadsDeployFailed
 	}
 }
 
-func TestResource_ObserveJudgesTheNewestNotificationNotTheRevisionResourceIdentityRecords(t *testing.T) {
+func TestResource_ObserveJudgesTheNewestNotificationNotTheRevisionTheRefsIdentityRecords(t *testing.T) {
 	b := newBlock(renderNamespace)
-	stale := ensure(t, b, desiredFor("app-alpha"))
-	moved := desiredFor("app-alpha")
-	moved.ResourceInputs["cluster"] = []byte(`"k3s-nbg1"`)
-	head := ensure(t, b, moved).Identity["revision"]
-	b.notes.Set(gitops.Notification{App: "app-alpha", Revision: stale.Identity["revision"], Phase: "Failed", Health: "Degraded"})
+	stale := commitApp(t, b, desiredFor("app-alpha"))
+	moved := onCluster(desiredFor("app-alpha"), "k3s-nbg1")
+	head := commitApp(t, b, moved)
+	b.notes.Set(gitops.Notification{App: "app-alpha", Revision: stale, Phase: "Failed", Health: "Degraded"})
 	b.notes.Set(gitops.Notification{App: "app-alpha", Revision: head, Phase: "Succeeded", Health: "Healthy"})
+	ref := refFor(moved)
+	ref.Identity = map[string]string{"app": "app-alpha", "revision": stale}
 
-	moved.ResourceIdentity = stale.Identity
-	obs := observe(t, b, moved)
+	obs, err := b.resource.ObserveResource(context.Background(), ref)
 
-	if obs.State != contract.Present {
-		t.Errorf("Observe = %+v, want present: head %s holds the files and its deploy succeeded", obs, head)
+	if err != nil || obs.State != contract.Present {
+		t.Errorf("ObserveResource = %+v, %v, want present: head %s holds the files and its deploy succeeded", obs, err, head)
 	}
 }
 
@@ -301,10 +148,10 @@ func TestResource_ObserveIsAbsentOnAnEmptyRepository(t *testing.T) {
 
 func TestResource_ObserveIsPresentWhenTheOnlyNotificationNamesALaterRevisionStillCarryingTheFiles(t *testing.T) {
 	b := newBlock(renderNamespace)
-	ensure(t, b, desiredFor("app-alpha"))
-	later := ensure(t, b, desiredFor("app-beta")).Identity["revision"] // another app's commit lands after ours
+	commitApp(t, b, desiredFor("app-alpha"))
+	later := commitApp(t, b, desiredFor("app-beta")) // another app's commit lands after ours
 	b.notes.Set(gitops.Notification{App: "app-alpha", Project: "app-alpha", Revision: later, Phase: "Succeeded", Health: "Healthy"})
-	ensure(t, b, desiredFor("app-gamma")) // head moves on again, with no notification for it yet
+	commitApp(t, b, desiredFor("app-gamma")) // head moves on again, with no notification for it yet
 
 	obs := observe(t, b, desiredFor("app-alpha"))
 
@@ -315,68 +162,61 @@ func TestResource_ObserveIsPresentWhenTheOnlyNotificationNamesALaterRevisionStil
 
 func TestResource_ObserveIsUnknownWhenTheNewestNotificationNamesARevisionOlderThanTheChange(t *testing.T) {
 	b := newBlock(renderNamespace)
-	older := ensure(t, b, desiredFor("app-alpha")).Identity["revision"]
+	older := commitApp(t, b, desiredFor("app-alpha"))
 	b.notes.Set(gitops.Notification{App: "app-alpha", Project: "app-alpha", Revision: older, Phase: "Succeeded", Health: "Healthy"})
-	changed := desiredFor("app-alpha")
-	changed.ResourceInputs["cluster"] = []byte(`"k3s-nbg1"`)
-	ensure(t, b, changed)
+	changed := onCluster(desiredFor("app-alpha"), "k3s-nbg1")
+	commitApp(t, b, changed)
 
-	obs, err := b.resource.ObserveWithRequest(context.Background(), changed)
+	obs, err := b.resource.ObserveResource(context.Background(), refFor(changed))
 
 	if err != nil {
-		t.Fatalf("ObserveWithRequest: %v, want unknown, not an error", err)
+		t.Fatalf("ObserveResource: %v, want unknown, not an error", err)
 	}
 	if obs.State != contract.Unknown || !strings.Contains(obs.StatusDetail, "Argo CD") {
 		t.Errorf("Observe = %+v, want unknown with a detail saying Argo CD has not yet reported a revision carrying the change", obs)
 	}
 }
 
-func TestResource_ObserveAfterDeleteIsAbsentWhenTheOnlyNotificationNamesALaterRevisionWithoutTheFiles(t *testing.T) {
+func TestResource_ObserveAfterRemovalIsAbsentWhenTheOnlyNotificationNamesALaterRevisionWithoutTheFiles(t *testing.T) {
 	b := newBlock(renderNamespace)
-	ensure(t, b, desiredFor("app-alpha"))
-	if err := b.resource.DeleteWithRequest(context.Background(), desiredFor("app-alpha")); err != nil {
-		t.Fatalf("DeleteWithRequest: %v", err)
-	}
-	later := ensure(t, b, desiredFor("app-beta")).Identity["revision"]
+	commitApp(t, b, desiredFor("app-alpha"))
+	removeApp(t, b, desiredFor("app-alpha"))
+	later := commitApp(t, b, desiredFor("app-beta"))
 	b.notes.Set(gitops.Notification{App: "app-alpha", Project: "app-alpha", Revision: later, Phase: "Succeeded", Health: "Healthy"})
-	ensure(t, b, desiredFor("app-gamma")) // head moves on again, with no notification for it yet
+	commitApp(t, b, desiredFor("app-gamma")) // head moves on again, with no notification for it yet
 
 	if obs := observe(t, b, desiredFor("app-alpha")); obs.State != contract.Absent {
 		t.Errorf("Observe = %+v, want absent: Argo CD synced %s, which no longer carries our files", obs, later)
 	}
 }
 
-func TestResource_ObserveAfterDeleteIsUnknownWhenTheNewestNotificationNamesARevisionStillCarryingTheFiles(t *testing.T) {
+func TestResource_ObserveAfterRemovalIsUnknownWhenTheNewestNotificationNamesARevisionStillCarryingTheFiles(t *testing.T) {
 	b := newBlock(renderNamespace)
-	before := ensure(t, b, desiredFor("app-alpha")).Identity["revision"]
+	before := commitApp(t, b, desiredFor("app-alpha"))
 	b.notes.Set(gitops.Notification{App: "app-alpha", Project: "app-alpha", Revision: before, Phase: "Succeeded", Health: "Healthy"})
-	if err := b.resource.DeleteWithRequest(context.Background(), desiredFor("app-alpha")); err != nil {
-		t.Fatalf("DeleteWithRequest: %v", err)
-	}
+	removeApp(t, b, desiredFor("app-alpha"))
 
-	obs, err := b.resource.ObserveWithRequest(context.Background(), desiredFor("app-alpha"))
+	obs, err := b.resource.ObserveResource(context.Background(), refFor(desiredFor("app-alpha")))
 
 	if err != nil {
-		t.Fatalf("ObserveWithRequest: %v, want unknown, not an error", err)
+		t.Fatalf("ObserveResource: %v, want unknown, not an error", err)
 	}
 	if obs.State != contract.Unknown || !strings.Contains(obs.StatusDetail, "Argo CD") {
 		t.Errorf("Observe = %+v, want unknown with a detail saying Argo CD has not yet reported a revision carrying the removal", obs)
 	}
 }
 
-func TestResource_ObserveAfterDeleteIsAbsentOnceHeadsDeploySucceeded(t *testing.T) {
+func TestResource_ObserveAfterRemovalIsAbsentOnceHeadsDeploySucceeded(t *testing.T) {
 	b := newNamespaceBlock()
-	ensure(t, b, desiredFor("app-alpha"))
-	if err := b.resource.DeleteWithRequest(context.Background(), desiredFor("app-alpha")); err != nil {
-		t.Fatalf("DeleteWithRequest: %v", err)
-	}
+	commitApp(t, b, desiredFor("app-alpha"))
+	removeApp(t, b, desiredFor("app-alpha"))
 
 	if obs := observe(t, b, desiredFor("app-alpha")); obs.State != contract.Absent {
 		t.Errorf("Observe = %+v, want absent", obs)
 	}
 }
 
-func TestResource_ObserveAfterDeleteIsUnknownWhilePendingAndFailsWhenTheDeployFailed(t *testing.T) {
+func TestResource_ObserveAfterRemovalIsUnknownWhilePendingAndFailsWhenTheDeployFailed(t *testing.T) {
 	for _, c := range []struct {
 		name          string
 		phase, health string
@@ -388,15 +228,13 @@ func TestResource_ObserveAfterDeleteIsUnknownWhilePendingAndFailsWhenTheDeployFa
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			b := newBlock(renderNamespace)
-			ensure(t, b, desiredFor("app-alpha"))
-			if err := b.resource.DeleteWithRequest(context.Background(), desiredFor("app-alpha")); err != nil {
-				t.Fatalf("DeleteWithRequest: %v", err)
-			}
+			commitApp(t, b, desiredFor("app-alpha"))
+			removeApp(t, b, desiredFor("app-alpha"))
 			if c.phase != "" {
 				b.notes.Set(gitops.Notification{App: "app-alpha", Revision: b.head(t), Phase: c.phase, Health: c.health, Message: "prune failed"})
 			}
 
-			obs, err := b.resource.ObserveWithRequest(context.Background(), desiredFor("app-alpha"))
+			obs, err := b.resource.ObserveResource(context.Background(), refFor(desiredFor("app-alpha")))
 
 			if c.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "prune failed") {
@@ -413,7 +251,7 @@ func TestResource_ObserveAfterDeleteIsUnknownWhilePendingAndFailsWhenTheDeployFa
 
 func TestResource_ObserveIsUnknownNamingThePathWhenOnlySomeFilesStand(t *testing.T) {
 	b := newNamespaceBlock()
-	rev := ensure(t, b, desiredFor("app-alpha")).Identity["revision"]
+	rev := commitApp(t, b, desiredFor("app-alpha"))
 	if _, err := b.repo.Commit(context.Background(), rev, map[string][]byte{alphaServiceAccountPath: nil}, "hand edit"); err != nil {
 		t.Fatalf("hand edit: %v", err)
 	}
@@ -427,7 +265,7 @@ func TestResource_ObserveIsUnknownNamingThePathWhenOnlySomeFilesStand(t *testing
 
 func TestResource_ObserveIsUnknownNamingThePathWhenAFileStandsWithOtherContent(t *testing.T) {
 	b := newNamespaceBlock()
-	rev := ensure(t, b, desiredFor("app-alpha")).Identity["revision"]
+	rev := commitApp(t, b, desiredFor("app-alpha"))
 	if _, err := b.repo.Commit(context.Background(), rev, map[string][]byte{alphaNamespacePath: []byte("kind: Namespace\n# drifted\n")}, "hand edit"); err != nil {
 		t.Fatalf("hand edit: %v", err)
 	}
@@ -439,133 +277,44 @@ func TestResource_ObserveIsUnknownNamingThePathWhenAFileStandsWithOtherContent(t
 	}
 }
 
-// identityRender renders from the app id alone and records each Desired it
-// is handed, for the calls that receive only an Identity.
-type identityRender struct{ seen []contract.Desired }
-
-func (r *identityRender) render(d contract.Desired) (gitops.Rendered, error) {
-	r.seen = append(r.seen, d)
-	if d.AppID == "" {
-		return gitops.Rendered{}, errors.New("no app id")
-	}
-	return renderApp(d.AppID, "k3s-fsn1"), nil
-}
-
-func TestResource_ObserveWithTheIdentityAloneRendersFromADesiredBuiltFromIt(t *testing.T) {
-	r := &identityRender{}
-	b := newBlock(r.render, "app-alpha")
-	ensure(t, b, desiredFor("app-alpha"))
-	id := desiredFor("app-alpha").Identity
-	r.seen = nil
-
-	obs, err := b.resource.Observe(context.Background(), id)
-
-	if err != nil || obs.State != contract.Present || !reflect.DeepEqual(obs.Outputs, alphaOutputs()) {
-		t.Fatalf("Observe = %+v, %v, want present with %v", obs, err, alphaOutputs())
-	}
-	if len(r.seen) == 0 {
-		t.Fatal("Observe never rendered")
-	}
-	for _, d := range r.seen {
-		if !reflect.DeepEqual(d, contract.Desired{Identity: id}) {
-			t.Errorf("Render was handed %+v, want a Desired carrying the identity alone", d)
-		}
-	}
-}
-
-func TestResource_DeleteWithTheIdentityAloneRemovesTheRenderedPaths(t *testing.T) {
-	r := &identityRender{}
-	b := newBlock(r.render, "app-alpha")
-	ensure(t, b, desiredFor("app-alpha"))
-
-	if err := b.resource.Delete(context.Background(), desiredFor("app-alpha").Identity); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	wantFilesAt(t, b.repo, b.head(t), map[string][]byte{alphaNamespacePath: nil, alphaServiceAccountPath: nil})
-}
-
-func TestResource_DeleteWithRequestRemovesThePathsTheRecordedIdentityNamesWithoutRendering(t *testing.T) {
+func TestResource_ObserveFailsNamingTheRenderWhenTheRequestCannotBeRendered(t *testing.T) {
 	b := newNamespaceBlock()
-	reported := ensure(t, b, desiredFor("app-alpha"))
-	b.resource.Render = func(contract.Desired) (gitops.Rendered, error) {
-		return gitops.Rendered{}, errors.New("the render's inputs are gone")
-	}
-
 	d := desiredFor("app-alpha")
-	d.ResourceIdentity = reported.Identity
-	if err := b.resource.DeleteWithRequest(context.Background(), d); err != nil {
-		t.Fatalf("DeleteWithRequest: %v", err)
-	}
+	d.Params = map[string]string{"appName": "app-alpha"}
 
-	commits := b.repo.Commits()
-	if len(commits) != 2 {
-		t.Fatalf("Commits = %d, want 2", len(commits))
-	}
-	var removed []string
-	for path, content := range commits[1].Changes {
-		if content != nil {
-			t.Errorf("the delete commit writes %s, want it to only remove paths", path)
-		}
-		removed = append(removed, path)
-	}
-	sort.Strings(removed)
-	if want := []string{alphaNamespacePath, alphaServiceAccountPath}; !reflect.DeepEqual(removed, want) {
-		t.Errorf("the delete commit removes %q, want %q", removed, want)
-	}
-}
+	_, err := b.resource.ObserveResource(context.Background(), refFor(d))
 
-func TestResource_DeleteWithRequestRemovesTheRenderedPathsWhenNoneAreRecorded(t *testing.T) {
-	b := newNamespaceBlock()
-	ensure(t, b, desiredFor("app-alpha"))
-
-	if err := b.resource.DeleteWithRequest(context.Background(), desiredFor("app-alpha")); err != nil {
-		t.Fatalf("DeleteWithRequest: %v", err)
-	}
-	if got := len(b.repo.Commits()); got != 2 {
-		t.Errorf("Commits = %d, want 2", got)
-	}
-	wantFilesAt(t, b.repo, b.head(t), map[string][]byte{alphaNamespacePath: nil, alphaServiceAccountPath: nil})
-}
-
-func TestResource_DeleteOfAResourceAlreadyGoneSucceedsWithNoCommit(t *testing.T) {
-	b := newNamespaceBlock()
-	if err := b.resource.DeleteWithRequest(context.Background(), desiredFor("app-alpha")); err != nil {
-		t.Fatalf("DeleteWithRequest on an empty repository: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "rendering") || !strings.Contains(err.Error(), "no cluster param") {
+		t.Errorf("ObserveResource error = %v, want one saying the render failed and why", err)
 	}
 	if got := len(b.repo.Commits()); got != 0 {
-		t.Errorf("Commits = %d after deleting nothing, want 0", got)
-	}
-
-	ensure(t, b, desiredFor("app-alpha"))
-	for i := 1; i <= 2; i++ {
-		if err := b.resource.DeleteWithRequest(context.Background(), desiredFor("app-alpha")); err != nil {
-			t.Fatalf("delete %d: %v", i, err)
-		}
-	}
-	if got := len(b.repo.Commits()); got != 2 {
-		t.Errorf("Commits = %d, want 2: the second delete finds the paths gone and lands nothing", got)
+		t.Errorf("Commits = %d, want 0: an observe never writes", got)
 	}
 }
 
-func TestResource_OneAppsEnsureAndDeleteNeverTouchAnotherAppsPaths(t *testing.T) {
+func TestResource_AnotherAppsCommitsLeaveTheObservedAppPresent(t *testing.T) {
 	b := newNamespaceBlock()
-	ensure(t, b, desiredFor("app-alpha"))
-	alpha := renderApp("app-alpha", "k3s-fsn1").Files
+	commitApp(t, b, desiredFor("app-alpha"))
+	alpha := renderApp("app-alpha", clusterParam).Files
 
-	ensure(t, b, desiredFor("app-beta"))
-	if err := b.resource.DeleteWithRequest(context.Background(), desiredFor("app-beta")); err != nil {
-		t.Fatalf("DeleteWithRequest(app-beta): %v", err)
-	}
+	commitApp(t, b, desiredFor("app-beta"))
+	removeApp(t, b, desiredFor("app-beta"))
 
-	for _, c := range b.repo.Commits()[1:] {
-		for path := range c.Changes {
-			if !strings.HasPrefix(path, "apps/app-beta/") {
-				t.Errorf("app-beta's commit %q touches %s", c.Message, path)
-			}
-		}
-	}
 	wantFilesAt(t, b.repo, b.head(t), alpha)
 	if obs := observe(t, b, desiredFor("app-alpha")); obs.State != contract.Present {
 		t.Errorf("app-alpha observed %+v after app-beta came and went, want present", obs)
+	}
+}
+
+func TestResource_ARepositoryThatCannotBeReachedFailsTheObserve(t *testing.T) {
+	b := newNamespaceBlock()
+	b.resource.Repository = func(context.Context, contract.Desired) (gitops.Repository, error) {
+		return nil, errors.New("the GitOps repository is unreachable")
+	}
+
+	_, err := b.resource.ObserveResource(context.Background(), refFor(desiredFor("app-alpha")))
+
+	if err == nil || !strings.Contains(err.Error(), "unreachable") {
+		t.Errorf("ObserveResource error = %v, want the unreachable repository named", err)
 	}
 }

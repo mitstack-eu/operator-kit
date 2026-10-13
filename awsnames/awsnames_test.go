@@ -3,7 +3,7 @@ package awsnames_test
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/awsnames"
+	"github.com/mitstack-eu/operator-kit/v2/awsnames"
 )
 
 func TestNames_MatchWhatTheEnginesActuallyCreate(t *testing.T) {

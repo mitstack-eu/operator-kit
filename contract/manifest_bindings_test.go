@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 const (
@@ -227,17 +227,9 @@ func snapshotOf(t *testing.T, types string) contract.TypeSnapshot {
 	return snap
 }
 
-// The kit's own catalogue gives aws.ec2-instance a publicIp output and holds
-// no aws.s3-bucket. A snapshot that says otherwise decides both bindings, so
-// the outputs CheckBinding reads are the snapshot's.
-func TestCheckBinding_ReadsOutputsFromTheSnapshotNotTheKitsCatalogue(t *testing.T) {
-	kitInstance, ok := contract.LookupResourceType("aws.ec2-instance")
-	if !ok || !strings.Contains(strings.Join(kitInstance.Outputs, ","), "publicIp") {
-		t.Fatalf("the kit's catalogue gives aws.ec2-instance outputs %q, so a refusal of publicIp would prove nothing", kitInstance.Outputs)
-	}
-	if _, ok := contract.LookupResourceType("aws.s3-bucket"); ok {
-		t.Fatal("the kit's catalogue holds aws.s3-bucket, so accepting its output would prove nothing")
-	}
+// A snapshot decides both bindings, so the outputs CheckBinding reads are the
+// snapshot's.
+func TestCheckBinding_ReadsEachOutputFromTheSnapshot(t *testing.T) {
 	snap := snapshotOf(t,
 		`{"id": "aws.ec2-instance", "capability": "aws", "kind": "host", "scope": "per-app", "pricing": {"priced": false},`+
 			` "outputs": [{"name": "hostId", "secret": false, "required": true}], "version": 1},`+

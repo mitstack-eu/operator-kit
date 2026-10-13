@@ -1,9 +1,9 @@
 package contract_test
 
 // resource_identity_request_test.go pins the request half of handing a named
-// resource's later verbs what its ensure stored: a request naming one
-// resource may carry, beside that resource's recorded inputs, the identity
-// its ensure stored under "resourceIdentity", an object of strings, and
+// resource's observe what its ensure stored: a request naming one resource
+// may carry the identity its ensure stored under "resourceIdentity", an
+// object of strings, and
 // Desired carries it across to the resource's handler. An identity with no
 // resource to bind it to is refused, naming both fields, and the envelope
 // schema declares the field optional and dependent on "resource". A request
@@ -17,17 +17,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // namedResourceIdentity is the identity the named resource's ensure stored.
 var namedResourceIdentity = map[string]string{"groupId": "sg-0abc", "vpcId": "vpc-0abc"}
 
-func TestDecodeRequest_ReadsTheNamedResourcesInputsAndStoredIdentityBackOnDesired(t *testing.T) {
+func TestDecodeRequest_ReadsTheNamedResourcesStoredIdentityBackOnDesired(t *testing.T) {
 	raw := mutateSubscribeGolden(t, func(m map[string]any) {
-		m["operation"] = "unsubscribe"
+		m["operation"] = "validate"
 		m["resource"] = "firewall"
-		m["resourceInputs"] = namedResourceInputs
 		m["resourceIdentity"] = namedResourceIdentity
 	})
 
@@ -43,7 +42,6 @@ func TestDecodeRequest_ReadsTheNamedResourcesInputsAndStoredIdentityBackOnDesire
 	if d.Resource != "firewall" {
 		t.Errorf("Desired().Resource = %q, want %q", d.Resource, "firewall")
 	}
-	wantRawInputs(t, "Desired().ResourceInputs", d.ResourceInputs)
 	if !reflect.DeepEqual(d.ResourceIdentity, namedResourceIdentity) {
 		t.Errorf("Desired().ResourceIdentity = %v, want %v", d.ResourceIdentity, namedResourceIdentity)
 	}
@@ -263,8 +261,8 @@ func TestEnvelopeSchema_DeclaresTheBlockLevelFieldsAndRaisesItsMinorVersion(t *t
 	if err := json.Unmarshal(contract.EnvelopeSchema, &doc); err != nil {
 		t.Fatalf("contract.EnvelopeSchema is not valid JSON: %v", err)
 	}
-	if doc["version"] != "1.3.0" {
-		t.Errorf("envelope.schema.json version = %v, want 1.3.0: it gains optional fields, a minor change from 1.2.0", doc["version"])
+	if doc["version"] != "1.4.0" {
+		t.Errorf("envelope.schema.json version = %v, want 1.4.0: it drops resourceInputs, which the engine never sends, a minor change from 1.3.0", doc["version"])
 	}
 	if req, ok := doc["required"].([]any); ok {
 		for _, r := range req {

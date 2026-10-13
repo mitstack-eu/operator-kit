@@ -9,7 +9,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 func TestRun_PrintsTheGeneratedManifestSchema(t *testing.T) {

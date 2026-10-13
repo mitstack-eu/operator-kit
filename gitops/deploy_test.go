@@ -17,12 +17,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/gitops"
-	"github.com/mitstack-eu/operator-kit/gitops/gitopstest"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
-	"github.com/mitstack-eu/operator-kit/webhook"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/gitops"
+	"github.com/mitstack-eu/operator-kit/v2/gitops/gitopstest"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
 // failingNotes answers a failed sync for any revision. gitopstest seeds a
@@ -155,11 +155,13 @@ func (b *deployBlock) Ensure(ctx context.Context, d contract.Desired) error {
 	return nil
 }
 
-func (b *deployBlock) Observe(context.Context, contract.Identity) (contract.Observation, error) {
+func (b *deployBlock) Observe(context.Context, contract.Desired) (contract.Observation, error) {
 	return contract.Observation{State: contract.Unknown}, nil
 }
 
-func (b *deployBlock) Delete(context.Context, contract.Identity) error { return nil }
+func (b *deployBlock) Delete(context.Context, contract.Desired) (map[string]string, error) {
+	return nil, nil
+}
 
 // namespaceInRepo observes the namespace as present once its file stands at
 // the repository's head.

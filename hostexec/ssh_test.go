@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/hostexec"
+	"github.com/mitstack-eu/operator-kit/v2/hostexec"
 )
 
 func TestSSHRun_IdentityFileIsWrittenWithMode0600(t *testing.T) {

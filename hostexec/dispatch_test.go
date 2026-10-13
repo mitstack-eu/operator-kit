@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/hostexec"
+	"github.com/mitstack-eu/operator-kit/v2/hostexec"
 )
 
 func TestRun_UnknownKindNamesTheKindInTheError(t *testing.T) {

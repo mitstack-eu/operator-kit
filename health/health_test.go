@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/health"
+	"github.com/mitstack-eu/operator-kit/v2/health"
 )
 
 func check(s health.Status) health.Check {

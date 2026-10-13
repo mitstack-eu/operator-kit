@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/webhook"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
 type sampleResource struct{}
@@ -20,11 +20,13 @@ func (sampleResource) Ensure(_ context.Context, d contract.Desired) error {
 	return fmt.Errorf("upstream refused API token %s", d.Secrets["api"]["token"])
 }
 
-func (sampleResource) Observe(context.Context, contract.Identity) (contract.Observation, error) {
+func (sampleResource) Observe(context.Context, contract.Desired) (contract.Observation, error) {
 	return contract.Observation{State: contract.Absent}, nil
 }
 
-func (sampleResource) Delete(context.Context, contract.Identity) error { return nil }
+func (sampleResource) Delete(context.Context, contract.Desired) (map[string]string, error) {
+	return nil, nil
+}
 
 func newHandler(jwksURL string, logs *webhook.LogBuffer) (http.Handler, error) {
 	h, err := handler.New(handler.Config{Resource: sampleResource{}, JWKSURL: jwksURL, Logs: logs})

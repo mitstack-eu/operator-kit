@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/awsnames"
+	"github.com/mitstack-eu/operator-kit/v2/awsnames"
 )
 
 var cfnStackNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)

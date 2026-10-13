@@ -7,7 +7,7 @@ package contract_test
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // requireRegistered fails the test when name does not resolve through the

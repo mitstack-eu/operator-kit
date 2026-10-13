@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 func readManifestGolden(t *testing.T, name string) []byte {
@@ -155,9 +155,6 @@ func requireRequirements(t *testing.T, got []contract.ManifestRequirement, want 
 		}
 		if ref := g.Reference(); ref != w.reference {
 			t.Errorf("spec.requires[%d].Reference() = %q, want %q", i, ref, w.reference)
-		}
-		if g.Kind != "" || g.In != nil {
-			t.Errorf("spec.requires[%d] kind, in = %q, %q; want both empty, since ADR 0085 retires them", i, g.Kind, g.In)
 		}
 	}
 }

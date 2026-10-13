@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/adopt"
+	"github.com/mitstack-eu/operator-kit/v2/adopt"
 )
 
 func TestIdentity_TagsCarryTheAppIdAndOwner(t *testing.T) {

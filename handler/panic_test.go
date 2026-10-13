@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // A panic is a fault in the block, not a refusal, so it answers HTTP 500 with an "error" and no "refused:<class>" statusDetail.
@@ -53,14 +53,14 @@ func (r *panickingResource) Ensure(ctx context.Context, d contract.Desired) erro
 	panic(r.panicValue())
 }
 
-func (r *panickingResource) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
+func (r *panickingResource) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
 	r.mu.Lock()
 	r.observeCall++
 	r.mu.Unlock()
 	panic(r.panicValue())
 }
 
-func (r *panickingResource) Delete(ctx context.Context, id contract.Identity) error {
+func (r *panickingResource) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
 	r.mu.Lock()
 	r.deleteCalls++
 	r.mu.Unlock()
@@ -177,7 +177,7 @@ func waitForSingleFlightWaiters(t *testing.T, want int, timeout time.Duration) {
 		n := runtime.Stack(buf, true)
 		got := 0
 		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
-			if strings.Contains(g, "operator-kit/handler.(*idempotencyCache).") &&
+			if strings.Contains(g, "operator-kit/v2/handler.(*idempotencyCache).") &&
 				strings.Contains(g, "sync.(*WaitGroup).Wait") &&
 				!strings.Contains(g, "(*panickingResource).Ensure") {
 				got++

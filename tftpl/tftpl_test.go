@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/tftpl"
+	"github.com/mitstack-eu/operator-kit/v2/tftpl"
 )
 
 func TestRender_SubstitutesPlaceholders(t *testing.T) {

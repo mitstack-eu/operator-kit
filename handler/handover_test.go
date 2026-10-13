@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // handoverFake snapshots then destroys, and a SnapshotErr aborts before DestroyCalls is incremented, since a teardown after a failed snapshot destroys data the platform promised to carry forward; it is local because kittest.FakeResource is not extended.
@@ -18,17 +18,16 @@ type handoverFake struct {
 	SnapshotErr error
 	SnapshotID  string
 
-	LastDesired            contract.Desired
-	DeleteWithRequestCalls int
-	SnapshotCalls          int
-	DestroyCalls           int
-	ObserveCalls           int
-	DeleteCalls            int
+	LastDesired   contract.Desired
+	DeleteCalls   int
+	SnapshotCalls int
+	DestroyCalls  int
+	ObserveCalls  int
 }
 
 func (f *handoverFake) Ensure(ctx context.Context, d contract.Desired) error { return nil }
 
-func (f *handoverFake) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
+func (f *handoverFake) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
 	f.ObserveCalls++
 	state := contract.Absent
 	if f.Count > 0 {
@@ -37,15 +36,8 @@ func (f *handoverFake) Observe(ctx context.Context, id contract.Identity) (contr
 	return contract.Observation{State: state}, nil
 }
 
-// Delete must never be called once the Handler sees the fake implements HandoverResource.
-func (f *handoverFake) Delete(ctx context.Context, id contract.Identity) error {
+func (f *handoverFake) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
 	f.DeleteCalls++
-	f.Count = 0
-	return nil
-}
-
-func (f *handoverFake) DeleteWithRequest(ctx context.Context, d contract.Desired) (map[string]string, error) {
-	f.DeleteWithRequestCalls++
 	f.LastDesired = d
 
 	if d.Params["dataHandover"] == "snapshot" {
@@ -67,9 +59,8 @@ func (f *handoverFake) DeleteWithRequest(ctx context.Context, d contract.Desired
 }
 
 var _ handler.Resource = (*handoverFake)(nil)
-var _ handler.HandoverResource = (*handoverFake)(nil)
 
-func TestServe_UnsubscribeDeleteWithRequestReceivesDataHandoverParam(t *testing.T) {
+func TestServe_UnsubscribeDeleteReceivesDataHandoverParam(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &handoverFake{Count: 1, SnapshotID: "snap-123"}
 	h := newHandler(t, f, s)
@@ -83,14 +74,14 @@ func TestServe_UnsubscribeDeleteWithRequestReceivesDataHandoverParam(t *testing.
 	}
 	assertConforms(t, raw)
 
-	if f.DeleteWithRequestCalls != 1 {
-		t.Fatalf("DeleteWithRequestCalls = %d, want 1", f.DeleteWithRequestCalls)
+	if f.DeleteCalls != 1 {
+		t.Fatalf("DeleteCalls = %d, want 1", f.DeleteCalls)
 	}
 	if got := f.LastDesired.Params["dataHandover"]; got != "snapshot" {
-		t.Errorf("DeleteWithRequest saw Params[dataHandover] = %q, want %q", got, "snapshot")
+		t.Errorf("Delete saw Params[dataHandover] = %q, want %q", got, "snapshot")
 	}
 	if f.SnapshotCalls != 1 {
-		t.Errorf("SnapshotCalls = %d, want 1 — the param must have driven the snapshot step", f.SnapshotCalls)
+		t.Errorf("SnapshotCalls = %d, want 1 — the param must have driven the snapshot", f.SnapshotCalls)
 	}
 }
 
@@ -117,7 +108,7 @@ func TestServe_UnsubscribeSnapshotIdLandsInOutputsBesideAbsentTrue(t *testing.T)
 	}
 }
 
-// DestroyCalls and DeleteCalls are tracked apart from SnapshotCalls so a handler that ran the plain Delete fallback, or ignored DeleteWithRequest's error and settled, is still caught.
+// DestroyCalls is tracked apart from SnapshotCalls so a handler that ignored Delete's error and settled is still caught.
 func TestServe_UnsubscribeFailedSnapshotAbortsBeforeDestroy(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &handoverFake{Count: 1, SnapshotErr: errors.New("handover: snapshot did not complete")}
@@ -139,15 +130,12 @@ func TestServe_UnsubscribeFailedSnapshotAbortsBeforeDestroy(t *testing.T) {
 	if f.DestroyCalls != 0 {
 		t.Errorf("DestroyCalls = %d, want 0 — a failed snapshot must abort before anything is destroyed", f.DestroyCalls)
 	}
-	if f.DeleteCalls != 0 {
-		t.Errorf("DeleteCalls = %d, want 0 — the plain Delete fallback must never run once HandoverResource handled the request", f.DeleteCalls)
-	}
 	if f.ObserveCalls != 0 {
 		t.Errorf("ObserveCalls = %d, want 0 — settle must never run after an aborted delete", f.ObserveCalls)
 	}
 }
 
-func TestServe_UnsubscribeDeleteWithRequestReceivesTheUnsubscribeSecrets(t *testing.T) {
+func TestServe_UnsubscribeDeleteReceivesTheUnsubscribeSecrets(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	const tokenValue = "tok-unsubscribe-delete-request-3a7d"
 	f := &handoverFake{Count: 1}
@@ -162,10 +150,10 @@ func TestServe_UnsubscribeDeleteWithRequestReceivesTheUnsubscribeSecrets(t *test
 	}
 	assertConforms(t, raw)
 
-	if f.DeleteWithRequestCalls != 1 {
-		t.Fatalf("DeleteWithRequestCalls = %d, want 1", f.DeleteWithRequestCalls)
+	if f.DeleteCalls != 1 {
+		t.Fatalf("DeleteCalls = %d, want 1", f.DeleteCalls)
 	}
 	if got := f.LastDesired.Secrets["github"]["token"]; got != tokenValue {
-		t.Errorf(`DeleteWithRequest saw Secrets["github"]["token"] = %q, want %q`, got, tokenValue)
+		t.Errorf(`Delete saw Secrets["github"]["token"] = %q, want %q`, got, tokenValue)
 	}
 }

@@ -8,12 +8,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// requestObserverFake mirrors kittest.FakeResource but implements handler.RequestObserver, which the shared fake is not edited to do; with PresentAfter or AbsentAfter set to N, ObserveWithRequest reports the target state only on the Nth call.
+// requestObserverFake mirrors kittest.FakeResource but keeps the request each Observe is handed, which the shared fake is not edited to do; with PresentAfter or AbsentAfter set to N, Observe reports the target state only on the Nth call.
 type requestObserverFake struct {
 	mu sync.Mutex
 
@@ -24,12 +24,11 @@ type requestObserverFake struct {
 	SecretOutputs map[string]string
 	StatusDetail  string
 
-	LastDesired             contract.Desired
-	SecretsSeen             []map[string]map[string]string
-	ObserveWithRequestCalls int
-	ObserveCalls            int
-	EnsureCalls             int
-	DeleteCalls             int
+	LastDesired  contract.Desired
+	SecretsSeen  []map[string]map[string]string
+	ObserveCalls int
+	EnsureCalls  int
+	DeleteCalls  int
 }
 
 func (f *requestObserverFake) Ensure(ctx context.Context, d contract.Desired) error {
@@ -39,27 +38,19 @@ func (f *requestObserverFake) Ensure(ctx context.Context, d contract.Desired) er
 	return nil
 }
 
-// Observe must never be called once the Handler sees the fake implements RequestObserver.
-func (f *requestObserverFake) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.ObserveCalls++
-	return contract.Observation{State: contract.Present}, nil
-}
-
-func (f *requestObserverFake) Delete(ctx context.Context, id contract.Identity) error {
+func (f *requestObserverFake) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.DeleteCalls++
-	return nil
+	return nil, nil
 }
 
-func (f *requestObserverFake) ObserveWithRequest(ctx context.Context, d contract.Desired) (contract.Observation, error) {
+func (f *requestObserverFake) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
 	f.mu.Lock()
-	f.ObserveWithRequestCalls++
+	f.ObserveCalls++
 	f.LastDesired = d
 	f.SecretsSeen = append(f.SecretsSeen, d.Secrets)
-	n := f.ObserveWithRequestCalls
+	n := f.ObserveCalls
 	f.mu.Unlock()
 
 	state := contract.Present
@@ -82,9 +73,8 @@ func (f *requestObserverFake) ObserveWithRequest(ctx context.Context, d contract
 }
 
 var _ handler.Resource = (*requestObserverFake)(nil)
-var _ handler.RequestObserver = (*requestObserverFake)(nil)
 
-func TestServe_ValidateObserveWithRequestReceivesTheValidateRequestSecrets(t *testing.T) {
+func TestServe_ValidateObserveReceivesTheValidateRequestSecrets(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	const tokenValue = "tok-validate-observes-9f3a"
 	f := &requestObserverFake{}
@@ -99,14 +89,33 @@ func TestServe_ValidateObserveWithRequestReceivesTheValidateRequestSecrets(t *te
 	}
 	assertConforms(t, raw)
 
-	if f.ObserveWithRequestCalls != 1 {
-		t.Fatalf("ObserveWithRequestCalls = %d, want exactly 1", f.ObserveWithRequestCalls)
-	}
-	if f.ObserveCalls != 0 {
-		t.Errorf("ObserveCalls = %d, want 0 — the plain Observe must never run once RequestObserver is implemented", f.ObserveCalls)
+	if f.ObserveCalls != 1 {
+		t.Fatalf("ObserveCalls = %d, want exactly 1", f.ObserveCalls)
 	}
 	if got := f.LastDesired.Secrets["github"]["token"]; got != tokenValue {
-		t.Errorf(`ObserveWithRequest saw Secrets["github"]["token"] = %q, want %q`, got, tokenValue)
+		t.Errorf(`Observe saw Secrets["github"]["token"] = %q, want %q`, got, tokenValue)
+	}
+}
+
+func TestServe_ValidateObserveReceivesTheRequestsParams(t *testing.T) {
+	s := kittest.NewSigner(t, "kid-1", 7)
+	f := &requestObserverFake{}
+	h := newHandler(t, f, s)
+
+	status, raw := postHook(t, h, s, envelope(t, s, "nonce-observe-validate-params", map[string]any{
+		"operation": "validate",
+		"params":    map[string]string{"region": "eu-central-1"},
+	}))
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", status, raw)
+	}
+	assertConforms(t, raw)
+
+	if f.ObserveCalls != 1 {
+		t.Fatalf("ObserveCalls = %d, want exactly 1", f.ObserveCalls)
+	}
+	if got := f.LastDesired.Params["region"]; got != "eu-central-1" {
+		t.Errorf(`Observe saw Params["region"] = %q, want %q`, got, "eu-central-1")
 	}
 }
 
@@ -126,8 +135,8 @@ func TestServe_SubscribeSettlePollsEachReceiveTheSubscribeSecrets(t *testing.T) 
 	}
 	assertConforms(t, raw)
 
-	if f.ObserveWithRequestCalls < 2 {
-		t.Fatalf("ObserveWithRequestCalls = %d, want at least 2 settle polls", f.ObserveWithRequestCalls)
+	if f.ObserveCalls < 2 {
+		t.Fatalf("ObserveCalls = %d, want at least 2 settle polls", f.ObserveCalls)
 	}
 	for i, secrets := range f.SecretsSeen {
 		if got := secrets["github"]["token"]; got != tokenValue {
@@ -152,8 +161,8 @@ func TestServe_UnsubscribeSettlePollsEachReceiveTheUnsubscribeSecrets(t *testing
 	}
 	assertConforms(t, raw)
 
-	if f.ObserveWithRequestCalls < 2 {
-		t.Fatalf("ObserveWithRequestCalls = %d, want at least 2 settle polls", f.ObserveWithRequestCalls)
+	if f.ObserveCalls < 2 {
+		t.Fatalf("ObserveCalls = %d, want at least 2 settle polls", f.ObserveCalls)
 	}
 	for i, secrets := range f.SecretsSeen {
 		if got := secrets["github"]["token"]; got != tokenValue {
@@ -162,8 +171,7 @@ func TestServe_UnsubscribeSettlePollsEachReceiveTheUnsubscribeSecrets(t *testing
 	}
 }
 
-// kittest.FakeResource does not implement RequestObserver, so this is the plain-Resource control case.
-func TestServe_PlainResourceObserveIsUnaffectedWhenSecretsArePresent(t *testing.T) {
+func TestServe_ASubscribeCarryingSecretsObservesOnceAndAnswersTheBlocksOutputs(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	f := &kittest.FakeResource{Outputs: map[string]string{"url": "https://example.test"}}
 	h := newHandler(t, f, s)
@@ -177,14 +185,14 @@ func TestServe_PlainResourceObserveIsUnaffectedWhenSecretsArePresent(t *testing.
 	assertConforms(t, raw)
 
 	if f.ObserveCalls != 1 {
-		t.Errorf("ObserveCalls = %d, want exactly 1 — a plain Resource must keep being observed the old way", f.ObserveCalls)
+		t.Errorf("ObserveCalls = %d, want exactly 1", f.ObserveCalls)
 	}
 	if f.EnsureCalls != 1 {
 		t.Errorf("EnsureCalls = %d, want exactly 1", f.EnsureCalls)
 	}
 	resp := decodeResponse(t, raw)
 	if resp.Outputs["url"] != "https://example.test" {
-		t.Errorf("Outputs[url] = %q, want the block's own output, unaffected by the new interface", resp.Outputs["url"])
+		t.Errorf("Outputs[url] = %q, want the block's own output", resp.Outputs["url"])
 	}
 }
 
@@ -204,7 +212,7 @@ func TestServe_PollSecretsFromOneVerbNeverReachALaterUnrelatedRequest(t *testing
 		t.Fatalf("first request: status = %d, body: %s", status1, raw1)
 	}
 	if got := f.LastDesired.Secrets["github"]["token"]; got != tokenValue {
-		t.Fatalf("first request did not reach ObserveWithRequest with its own secret: got %q", got)
+		t.Fatalf("first request did not reach Observe with its own secret: got %q", got)
 	}
 
 	status2, raw2 := postHook(t, h, s, envelope(t, s, "nonce-scope-b", map[string]any{
@@ -249,8 +257,8 @@ func TestServe_IdempotencyCacheNeverStoresOrLeaksVerbSecrets(t *testing.T) {
 	if !bytes.Equal(raw1, raw2) {
 		t.Errorf("replay body = %s, want the exact first-delivery body %s", raw2, raw1)
 	}
-	if f.ObserveWithRequestCalls != 1 {
-		t.Errorf("ObserveWithRequestCalls = %d, want exactly 1 — the replay must never call the Resource again", f.ObserveWithRequestCalls)
+	if f.ObserveCalls != 1 {
+		t.Errorf("ObserveCalls = %d, want exactly 1 — the replay must never call the Resource again", f.ObserveCalls)
 	}
 
 	kittest.AssertNoSecret(t, "first delivery response body", string(raw1), tokenValue)

@@ -12,9 +12,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/appsdns"
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
+	"github.com/mitstack-eu/operator-kit/v2/appsdns"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
 )
 
 var _ handler.Observer = appsdns.Zone{}

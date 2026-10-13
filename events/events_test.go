@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/events"
+	"github.com/mitstack-eu/operator-kit/v2/events"
 )
 
 func TestEmit_NoOpsWithoutACallback(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/ghapi"
+	"github.com/mitstack-eu/operator-kit/v2/ghapi"
 )
 
 // --- The legitimate case: resolves to the allowlist entry -------------------

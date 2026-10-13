@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 const blockLevelManifest = `apiVersion: mitstack/v1beta
@@ -87,9 +87,12 @@ func (c *fakeCloud) stands(name string) bool {
 	return c.present[name]
 }
 
+// blockResource returns deleteOutputs from each Delete and keeps the request each Delete is handed.
 type blockResource struct {
 	cloud                                  *fakeCloud
 	ensureCalls, observeCalls, deleteCalls int
+	deleteOutputs                          map[string]string
+	deleted                                []contract.Desired
 }
 
 func (b *blockResource) Ensure(ctx context.Context, d contract.Desired) error {
@@ -98,15 +101,16 @@ func (b *blockResource) Ensure(ctx context.Context, d contract.Desired) error {
 	return nil
 }
 
-func (b *blockResource) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
+func (b *blockResource) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
 	b.observeCalls++
 	return contract.Observation{State: contract.Unknown}, nil
 }
 
-func (b *blockResource) Delete(ctx context.Context, id contract.Identity) error {
+func (b *blockResource) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
 	b.deleteCalls++
+	b.deleted = append(b.deleted, d)
 	b.cloud.deleteAll()
-	return nil
+	return b.deleteOutputs, nil
 }
 
 type reportingBlock struct {
@@ -544,10 +548,10 @@ func (b *clockedBlock) Ensure(ctx context.Context, d contract.Desired) error {
 	return err
 }
 
-func (b *clockedBlock) Delete(ctx context.Context, id contract.Identity) error {
-	err := b.blockResource.Delete(ctx, id)
+func (b *clockedBlock) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
+	outputs, err := b.blockResource.Delete(ctx, d)
 	b.deletedAt = b.clock.advance()
-	return err
+	return outputs, err
 }
 
 // Each observe is handed the clock's reading once the block-level call returned, since it settles that verb.
@@ -614,6 +618,9 @@ func TestBlockLevel_RefusesANamedSubscribeUpgradeOrUnsubscribe(t *testing.T) {
 			}
 			if !strings.Contains(resp.Error, "block-level handler") {
 				t.Errorf("error = %q, want it to say the block creates and deletes its resources through its block-level handler", resp.Error)
+			}
+			if !strings.Contains(resp.Error, `"b"`) {
+				t.Errorf("error = %q, want it to name the resource \"b\"", resp.Error)
 			}
 			if block.ensureCalls+block.deleteCalls != 0 {
 				t.Errorf("a refused %s ran Ensure %d and Delete %d times", op, block.ensureCalls, block.deleteCalls)
@@ -812,11 +819,6 @@ func TestNew_RefusesATypeObserversConfigTheBlockCannotBack(t *testing.T) {
 		{"a nil observer under a resource type id", func(cfg *handler.Config) {
 			cfg.TypeObservers["aws.vpc"] = nil
 		}, []string{`"aws.vpc"`, "Config.TypeObservers"}},
-		{"type observers beside per-resource handlers", func(cfg *handler.Config) {
-			cfg.Observers = nil
-			cfg.Resource = nil
-			cfg.Resources = map[string]handler.DeclaredResource{"a": &kittest.FakeResource{}}
-		}, []string{"Config.TypeObservers", "Config.Resources"}},
 		{"type observers with no manifest", func(cfg *handler.Config) { cfg.Observers = nil; cfg.Manifest = nil }, []string{"Config.TypeObservers", "Config.Manifest"}},
 		{"type observers under a v1alpha manifest", func(cfg *handler.Config) { cfg.Observers = nil; cfg.Manifest = []byte(manifestWithNoHooksKey) }, []string{"Config.TypeObservers", "Config.Manifest"}},
 	}
@@ -889,13 +891,6 @@ func TestNew_RefusesAnObserverConfigTheManifestCannotBack(t *testing.T) {
 		{"an observer for an undeclared resource", func(cfg *handler.Config) {
 			cfg.Observers["c"] = &fakeObserver{name: "c", cloud: cloud}
 		}, []string{`"c"`}},
-		{"observers beside per-resource handlers", func(cfg *handler.Config) {
-			cfg.Resource = nil
-			cfg.Resources = map[string]handler.DeclaredResource{
-				"aws.vpc": &kittest.FakeResource{}, "aws.ec2-instance": &kittest.FakeResource{},
-				"a": &kittest.FakeResource{}, "b": &kittest.FakeResource{},
-			}
-		}, nil},
 		{"observers with no manifest", func(cfg *handler.Config) { cfg.Manifest = nil }, nil},
 		{"observers under a v1alpha manifest", func(cfg *handler.Config) { cfg.Manifest = []byte(manifestWithNoHooksKey) }, nil},
 	}
@@ -1104,9 +1099,9 @@ func (o *standingObserver) count() int {
 
 type failingDeleteBlock struct{ *blockResource }
 
-func (b failingDeleteBlock) Delete(ctx context.Context, id contract.Identity) error {
+func (b failingDeleteBlock) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
 	b.deleteCalls++
-	return errors.New("the GitHub API answered 502")
+	return nil, errors.New("the GitHub API answered 502")
 }
 
 func contributionConfig(manifest string, obs map[string]handler.Observer, types contract.TypeSnapshot) func(*handler.Config) {
@@ -1210,5 +1205,223 @@ func TestBlockLevel_UnsubscribeCountsNoMarkedResourceAbsentWhenTheBlocksDeleteFa
 	}
 	if d := resp.Resources[contributionType].Delete; d != nil && d.State == contract.Absent {
 		t.Errorf("resource %q delete = %+v, want it not counted absent", contributionType, *d)
+	}
+}
+
+func TestBlockLevel_UnsubscribeHandsTheBlocksDeleteTheRequestAndMergesItsOutputsIntoTheAbsentAnswer(t *testing.T) {
+	cloud := newFakeCloud()
+	cloud.createAll()
+	block := &blockResource{cloud: cloud, deleteOutputs: map[string]string{"dataSnapshotId": "snap-0abc"}}
+
+	status, resp := serveBlockLevel(t, block, blockObservers(cloud), "unsubscribe", map[string]any{
+		"recordedResources": recordedAll(),
+		"params":            map[string]string{"dataHandover": "snapshot"},
+	})
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response %+v", status, resp)
+	}
+	if resp.Absent == nil || !*resp.Absent {
+		t.Fatalf("absent = %v, want true: every resource is gone", resp.Absent)
+	}
+	if got := resp.Outputs["dataSnapshotId"]; got != "snap-0abc" {
+		t.Errorf(`outputs["dataSnapshotId"] = %q, want the %q the block's Delete returned; outputs %v`, got, "snap-0abc", resp.Outputs)
+	}
+	if len(block.deleted) != 1 || block.deleted[0].Params["dataHandover"] != "snapshot" {
+		t.Errorf("Delete was handed %+v, want one call carrying the request's params", block.deleted)
+	}
+}
+
+func TestBlockLevel_AnUnsubscribeLeavingAResourceStandingAnswersNoDeleteOutputs(t *testing.T) {
+	cloud := newFakeCloud()
+	cloud.createAll()
+	cloud.standsAfterDelete["b"] = true
+	block := &blockResource{cloud: cloud, deleteOutputs: map[string]string{"dataSnapshotId": "snap-0abc"}}
+
+	status, resp := serveBlockLevel(t, block, blockObservers(cloud), "unsubscribe", map[string]any{"recordedResources": recordedAll()})
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response %+v", status, resp)
+	}
+	if resp.Absent == nil || *resp.Absent {
+		t.Fatalf("absent = %v, want false: b still stands", resp.Absent)
+	}
+	if len(resp.Outputs) != 0 {
+		t.Errorf("outputs = %v, want none until the block settles absent", resp.Outputs)
+	}
+}
+
+func TestBlockLevel_RefusesADeleteOutputCarryingARequestSecret(t *testing.T) {
+	const token = "ghp_delete-output-leak-8c41d2e9"
+	cloud := newFakeCloud()
+	cloud.createAll()
+	block := &blockResource{cloud: cloud, deleteOutputs: map[string]string{"leaked": token}}
+
+	status, resp := serveBlockLevel(t, block, blockObservers(cloud), "unsubscribe", map[string]any{
+		"recordedResources": recordedAll(),
+		"secrets":           map[string]any{"github": map[string]any{"token": token}},
+	})
+
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; response %+v", status, resp)
+	}
+	if got := handler.RefusedClass(resp.StatusDetail); got != "secret-in-output" {
+		t.Errorf("refusal class = %q, want secret-in-output", got)
+	}
+	if strings.Contains(resp.Error+resp.StatusDetail, token) {
+		t.Error("the refusal carries the secret value")
+	}
+	if resp.Absent != nil && *resp.Absent {
+		t.Error("absent = true, want no absence claimed beside a refused output")
+	}
+}
+
+// fixedObserver answers one observation for every call.
+type fixedObserver struct{ obs contract.Observation }
+
+func (o fixedObserver) ObserveResource(context.Context, contract.ResourceRef) (contract.Observation, error) {
+	return o.obs, nil
+}
+
+// serveBlockLevelObservers serves one verb over r with obs under the block-level manifest, on ctx.
+func serveBlockLevelObservers(t *testing.T, ctx context.Context, r handler.Resource, obs map[string]handler.Observer, operation string, extra map[string]any) (int, contract.Response) {
+	t.Helper()
+	s := kittest.NewSigner(t, "kid-block-level-observers", 19)
+	h, err := handler.New(blockLevelConfig(t, s, r, obs))
+	if err != nil {
+		t.Fatalf("handler.New: %v", err)
+	}
+	fields := map[string]any{"operation": operation}
+	for k, v := range extra {
+		fields[k] = v
+	}
+	status, raw := postHookWithContext(t, h, s, envelope(t, s, "nonce-block-level-observers-"+operation, fields), ctx)
+	assertConforms(t, raw)
+	return status, decodeResponse(t, raw)
+}
+
+func presentObservers(cloud *fakeCloud) map[string]handler.Observer {
+	cloud.createAll()
+	return asObservers(blockObservers(cloud))
+}
+
+func TestBlockLevel_ALaterProvidedResourceWinsAnOutputBothProduce(t *testing.T) {
+	cloud := newFakeCloud()
+	obs := presentObservers(cloud)
+	obs["aws.ec2-instance"] = fixedObserver{contract.Observation{State: contract.Present, Outputs: map[string]string{"shared": "from-instance"}}}
+	obs["a"] = fixedObserver{contract.Observation{State: contract.Present, Outputs: map[string]string{"shared": "from-a"}}}
+
+	status, resp := serveBlockLevelObservers(t, context.Background(), &blockResource{cloud: cloud}, obs, "subscribe", nil)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response %+v", status, resp)
+	}
+	if got := resp.Outputs["shared"]; got != "from-a" {
+		t.Errorf(`outputs["shared"] = %q, want %q: a is declared after aws.ec2-instance`, got, "from-a")
+	}
+}
+
+func TestBlockLevel_ScrubsRequestSecretsFromEveryResourceEntry(t *testing.T) {
+	const token = "ghp_status-detail-leak-5b72fa10"
+	cloud := newFakeCloud()
+	obs := presentObservers(cloud)
+	obs["a"] = fixedObserver{contract.Observation{State: contract.Present, StatusDetail: "role assumed with " + token}}
+
+	status, resp := serveBlockLevelObservers(t, context.Background(), &blockResource{cloud: cloud}, obs, "validate", map[string]any{
+		"secrets": map[string]any{"github": map[string]any{"token": token}},
+	})
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response %+v", status, resp)
+	}
+	o := resp.Resources["a"].Observe
+	if o == nil || strings.Contains(o.StatusDetail, token) || !strings.Contains(o.StatusDetail, "[REDACTED]") {
+		t.Errorf("a observe = %+v, want its statusDetail scrubbed of the request secret", o)
+	}
+}
+
+func TestBlockLevel_RefusesAnObservedOutputCarryingARequestSecret(t *testing.T) {
+	const token = "ghp_observed-output-leak-3e9d7c21"
+	cloud := newFakeCloud()
+	obs := presentObservers(cloud)
+	obs["a"] = fixedObserver{contract.Observation{State: contract.Present, Outputs: map[string]string{"leaked": token}}}
+
+	status, resp := serveBlockLevelObservers(t, context.Background(), &blockResource{cloud: cloud}, obs, "validate", map[string]any{
+		"secrets": map[string]any{"github": map[string]any{"token": token}},
+	})
+
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; response %+v", status, resp)
+	}
+	if got := handler.RefusedClass(resp.StatusDetail); got != "secret-in-output" {
+		t.Errorf("refusal class = %q, want secret-in-output", got)
+	}
+	if o := resp.Resources["a"].Observe; o == nil || o.Error == "" {
+		t.Errorf("a observe = %+v, want the refusal recorded under it", o)
+	}
+	if strings.Contains(resp.Error+resp.StatusDetail, token) {
+		t.Error("the refusal carries the secret value")
+	}
+}
+
+// cancellingObserver cancels the request context once it reports settledOn, so the verb sees a done context only after this resource settled.
+type cancellingObserver struct {
+	handler.Observer
+	settledOn contract.State
+	cancel    context.CancelFunc
+}
+
+func (o cancellingObserver) ObserveResource(ctx context.Context, r contract.ResourceRef) (contract.Observation, error) {
+	obs, err := o.Observer.ObserveResource(ctx, r)
+	if err == nil && obs.State == o.settledOn {
+		o.cancel()
+	}
+	return obs, err
+}
+
+func TestBlockLevel_StopsBeforeTheNextResourceOnceTheContextIsDone(t *testing.T) {
+	cases := []struct {
+		operation  string
+		cancelling string
+		settledOn  contract.State
+		notReached string
+	}{
+		{"subscribe", "aws.vpc", contract.Present, "aws.ec2-instance"},
+		{"validate", "aws.vpc", contract.Present, "aws.ec2-instance"},
+		{"unsubscribe", "b", contract.Absent, "a"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.operation, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cloud := newFakeCloud()
+			fakes := blockObservers(cloud)
+			if tc.operation != "subscribe" {
+				cloud.createAll()
+			}
+			obs := asObservers(fakes)
+			obs[tc.cancelling] = cancellingObserver{Observer: fakes[tc.cancelling], settledOn: tc.settledOn, cancel: cancel}
+
+			status, resp := serveBlockLevelObservers(t, ctx, &blockResource{cloud: cloud}, obs, tc.operation, map[string]any{"recordedResources": recordedAll()})
+
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200; response %+v", status, resp)
+			}
+			if !strings.Contains(resp.StatusDetail, `"`+tc.notReached+`"`) {
+				t.Errorf("statusDetail = %q, want it to name %q, the first resource not reached", resp.StatusDetail, tc.notReached)
+			}
+			if got := len(resp.Resources); got != 1 || resp.Resources[tc.cancelling].Observe == nil {
+				t.Errorf("resources = %+v, want only %q, the one reached", resp.Resources, tc.cancelling)
+			}
+			if calls := fakes[tc.notReached].calls(); len(calls) != 0 {
+				t.Errorf("%q observed %d time(s), want none after the context was done", tc.notReached, len(calls))
+			}
+			if tc.operation == "unsubscribe" && (resp.Absent == nil || *resp.Absent) {
+				t.Errorf("absent = %v, want false: %q was never proven absent", resp.Absent, tc.notReached)
+			}
+			if tc.operation != "unsubscribe" && !resp.Pending {
+				t.Errorf("pending = false, want true: %q was never reached", tc.notReached)
+			}
+		})
 	}
 }

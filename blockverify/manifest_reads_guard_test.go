@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	kitContractPath = "github.com/mitstack-eu/operator-kit/contract"
-	kitHandlerPath  = "github.com/mitstack-eu/operator-kit/handler"
-	kitBlockverify  = "github.com/mitstack-eu/operator-kit/blockverify"
+	kitContractPath = "github.com/mitstack-eu/operator-kit/v2/contract"
+	kitHandlerPath  = "github.com/mitstack-eu/operator-kit/v2/handler"
+	kitBlockverify  = "github.com/mitstack-eu/operator-kit/v2/blockverify"
 )
 
 type guardPackage struct {
@@ -653,8 +653,8 @@ const guardPreamble = `import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
 )
 
 var _ = bytes.Contains
@@ -672,7 +672,7 @@ const guardHandlerPreamble = `import (
 	"bytes"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 var _ = bytes.Contains

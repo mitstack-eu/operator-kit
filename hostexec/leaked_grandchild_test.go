@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/hostexec"
+	"github.com/mitstack-eu/operator-kit/v2/hostexec"
 )
 
 func TestSSHRun_SuccessfulExitIsNotFailedByALeakedGrandchildHoldingTheStderrPipeOpen(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/handover"
+	"github.com/mitstack-eu/operator-kit/v2/handover"
 )
 
 // fakeAPI is a scriptable EC2 stand-in; states is consumed one per poll.

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // Every function below is exercised from a working directory unrelated to this repository, because the goldens are embedded rather than read from a path relative to the caller.

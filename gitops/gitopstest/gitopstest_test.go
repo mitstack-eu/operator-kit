@@ -22,8 +22,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/gitops"
-	"github.com/mitstack-eu/operator-kit/gitops/gitopstest"
+	"github.com/mitstack-eu/operator-kit/v2/gitops"
+	"github.com/mitstack-eu/operator-kit/v2/gitops/gitopstest"
 )
 
 var (

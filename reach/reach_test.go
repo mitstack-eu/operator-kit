@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/reach"
+	"github.com/mitstack-eu/operator-kit/v2/reach"
 )
 
 func TestKeys_AreTheAdvertisedContract(t *testing.T) {

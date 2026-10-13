@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/registryauth"
+	"github.com/mitstack-eu/operator-kit/v2/registryauth"
 )
 
 func TestLogin_RejectsAHostBeginningWithADashBeforeSpawningAnySubprocess(t *testing.T) {

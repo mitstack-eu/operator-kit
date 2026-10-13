@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/delivery"
+	"github.com/mitstack-eu/operator-kit/v2/delivery"
 )
 
 func readGolden(t *testing.T) []byte {

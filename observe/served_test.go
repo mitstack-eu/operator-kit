@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
-	"github.com/mitstack-eu/operator-kit/observe"
-	"github.com/mitstack-eu/operator-kit/webhook"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/observe"
+	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
 const hostBlockManifest = `apiVersion: mitstack/v1beta
@@ -53,13 +53,13 @@ func (b hostBlock) EnsureResources(ctx context.Context, d contract.Desired) ([]c
 	return []contract.CreatedResource{{Name: "aws.ec2-instance", Type: "aws.ec2-instance", Identity: map[string]string{"instanceId": "i-0fixture"}}}, nil
 }
 
-func (b hostBlock) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
+func (b hostBlock) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
 	return contract.Observation{State: contract.Unknown}, nil
 }
 
-func (b hostBlock) Delete(ctx context.Context, id contract.Identity) error {
+func (b hostBlock) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
 	b.api.lose("i-0fixture")
-	return nil
+	return nil, nil
 }
 
 func TestEC2Instance_ServedThroughTheHandlerObservesTheInstanceTheBlockReported(t *testing.T) {

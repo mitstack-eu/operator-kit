@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // parseNameFunc is the shape ParseBlockID and ParseCapabilityID share.
@@ -260,37 +260,6 @@ func TestParseResourceTypeID_RefusesEveryOtherForm(t *testing.T) {
 		}
 		if ns != "" || capability != "" || name != "" {
 			t.Errorf("%s %q refused but returned (%q, %q, %q), want all empty", label, id, ns, capability, name)
-		}
-	}
-}
-
-// Every catalogue entry is a community type: its ID parses with no
-// namespace, into its own place and the name after the dot, and that
-// place is a valid community slug.
-func TestResourceTypes_EveryIDIsACommunityTypeOfItsOwnPlace(t *testing.T) {
-	for _, rt := range catalogue(t) {
-		ns, capability, name, err := contract.ParseResourceTypeID(rt.ID)
-		if err != nil {
-			t.Errorf("ParseResourceTypeID(%q) error = %v, want the catalogue entry accepted", rt.ID, err)
-			continue
-		}
-		if ns != "" {
-			t.Errorf("ParseResourceTypeID(%q) namespace = %q, want \"\" for a community type", rt.ID, ns)
-		}
-		if capability != rt.Place() {
-			t.Errorf("ParseResourceTypeID(%q) capability = %q, want the entry's own %q", rt.ID, capability, rt.Place())
-		}
-		if want := strings.TrimPrefix(rt.ID, rt.Place()+"."); name != want {
-			t.Errorf("ParseResourceTypeID(%q) name = %q, want %q", rt.ID, name, want)
-		}
-
-		capNS, capName, err := contract.ParseCapabilityID(rt.Place())
-		if err != nil {
-			t.Errorf("ParseCapabilityID(%q) error = %v, want the catalogue's place accepted", rt.Place(), err)
-			continue
-		}
-		if capNS != "" || capName != rt.Place() {
-			t.Errorf("ParseCapabilityID(%q) = (%q, %q), want (%q, %q)", rt.Place(), capNS, capName, "", rt.Place())
 		}
 	}
 }

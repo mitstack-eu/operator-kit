@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // A workflow step is a shell script nothing else type-checks, so these tests prove the helper reads and runs it.

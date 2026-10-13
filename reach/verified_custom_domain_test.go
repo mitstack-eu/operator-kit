@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/reach"
+	"github.com/mitstack-eu/operator-kit/v2/reach"
 )
 
 type fakeResolver struct {

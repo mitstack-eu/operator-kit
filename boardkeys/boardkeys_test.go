@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/boardkeys"
+	"github.com/mitstack-eu/operator-kit/v2/boardkeys"
 )
 
 func keysEqual(got, want []string) bool {

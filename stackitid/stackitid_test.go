@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/stackitid"
+	"github.com/mitstack-eu/operator-kit/v2/stackitid"
 )
 
 const (

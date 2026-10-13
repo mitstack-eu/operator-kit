@@ -80,10 +80,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
-	"github.com/mitstack-eu/operator-kit/observe"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/observe"
 )
 
 type misbehave struct {
@@ -206,15 +206,11 @@ func (b *block) PlanReplacements(ctx context.Context, d contract.Desired) ([]str
 	return nil, nil
 }
 
-func (b *block) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
+func (b *block) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
 	return contract.Observation{State: contract.Unknown}, nil
 }
 
-func (b *block) Delete(ctx context.Context, id contract.Identity) error {
-	return b.DeleteWithRequest(ctx, contract.Desired{Identity: id})
-}
-
-func (b *block) DeleteWithRequest(ctx context.Context, d contract.Desired) error {
+func (b *block) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for name, r := range b.created {
@@ -225,7 +221,7 @@ func (b *block) DeleteWithRequest(ctx context.Context, d contract.Desired) error
 		delete(b.created, name)
 	}
 	b.p.remove("state-bucket")
-	return nil
+	return nil, nil
 }
 
 type providerObserver struct {
@@ -328,8 +324,8 @@ func blockFixture(t *testing.T, manifest, testGo string) string {
 		t.Fatalf("reading the platform's type snapshot fixture: %v", err)
 	}
 	goMod := "module fixture\n\ngo 1.25\n\n" +
-		"require github.com/mitstack-eu/operator-kit v0.1.0\n\n" +
-		"replace github.com/mitstack-eu/operator-kit => " + kitModuleDir(t) + "\n"
+		"require github.com/mitstack-eu/operator-kit/v2 v2.0.0\n\n" +
+		"replace github.com/mitstack-eu/operator-kit/v2 => " + kitModuleDir(t) + "\n"
 	return newFixtureFrom(t, map[string]string{
 		"go.mod":             goMod,
 		"main.go":            resourcesFixtureMainGo,

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/ghapi"
+	"github.com/mitstack-eu/operator-kit/v2/ghapi"
 )
 
 // A malformed variable name must never reach the PATCH fallback's URL path, an ambiguous 422 must fail rather than PATCH, and baseCommit's decodes must be bounded.

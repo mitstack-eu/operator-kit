@@ -16,7 +16,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/ghapi"
+	"github.com/mitstack-eu/operator-kit/v2/ghapi"
 )
 
 // Full commit SHAs the revision tests address commits by.

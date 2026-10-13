@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/reach"
+	"github.com/mitstack-eu/operator-kit/v2/reach"
 )
 
 func TestTrustedAppURL_AcceptsThePlatformAppsDomain(t *testing.T) {

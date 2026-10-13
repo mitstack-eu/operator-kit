@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // TestServe_SubscribePresentWithinBudgetAnswers200AbsentFalse pins the
@@ -115,10 +115,12 @@ type cancelAfterNObserves struct {
 	reportState  contract.State
 }
 
-func (c *cancelAfterNObserves) Ensure(context.Context, contract.Desired) error  { return nil }
-func (c *cancelAfterNObserves) Delete(context.Context, contract.Identity) error { return nil }
+func (c *cancelAfterNObserves) Ensure(context.Context, contract.Desired) error { return nil }
+func (c *cancelAfterNObserves) Delete(context.Context, contract.Desired) (map[string]string, error) {
+	return nil, nil
+}
 
-func (c *cancelAfterNObserves) Observe(context.Context, contract.Identity) (contract.Observation, error) {
+func (c *cancelAfterNObserves) Observe(context.Context, contract.Desired) (contract.Observation, error) {
 	c.mu.Lock()
 	c.observeCalls++
 	n := c.observeCalls

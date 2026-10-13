@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/events"
+	"github.com/mitstack-eu/operator-kit/v2/events"
 )
 
 func TestEnvelopeFrom_ReturnsTheEnvelopeWithEnvelopeStashed(t *testing.T) {

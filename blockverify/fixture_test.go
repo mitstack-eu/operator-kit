@@ -43,8 +43,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/events"
-	"github.com/mitstack-eu/operator-kit/webhook"
+	"github.com/mitstack-eu/operator-kit/v2/events"
+	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
 var (
@@ -285,7 +285,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 func newHandler(t *testing.T) (*Handler, *kittest.Signer) {
@@ -330,7 +330,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 func TestContract_DecodesEveryValidGolden(t *testing.T) {
@@ -385,7 +385,7 @@ const secretsLeakTestGo = `package main
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // TestNoSecretLeak proves the fixture operator never echoes a received
@@ -468,8 +468,8 @@ ENTRYPOINT ["/usr/local/bin/fixture"]
 func goldenFixtureFiles(t *testing.T) map[string]string {
 	t.Helper()
 	goMod := "module fixture\n\ngo 1.25\n\n" +
-		"require github.com/mitstack-eu/operator-kit v0.1.0\n\n" +
-		"replace github.com/mitstack-eu/operator-kit => " + kitModuleDir(t) + "\n"
+		"require github.com/mitstack-eu/operator-kit/v2 v2.0.0\n\n" +
+		"replace github.com/mitstack-eu/operator-kit/v2 => " + kitModuleDir(t) + "\n"
 
 	return map[string]string{
 		"go.mod":                       goMod,

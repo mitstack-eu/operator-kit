@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // The two deliveries use different nonces, as a genuine retry would, since a repeated nonce is rejected by the replay guard regardless of idempotencyKey.
@@ -126,11 +126,13 @@ func (f *flakyResource) Ensure(context.Context, contract.Desired) error {
 	return nil
 }
 
-func (f *flakyResource) Observe(context.Context, contract.Identity) (contract.Observation, error) {
+func (f *flakyResource) Observe(context.Context, contract.Desired) (contract.Observation, error) {
 	return contract.Observation{State: contract.Present}, nil
 }
 
-func (f *flakyResource) Delete(context.Context, contract.Identity) error { return nil }
+func (f *flakyResource) Delete(context.Context, contract.Desired) (map[string]string, error) {
+	return nil, nil
+}
 
 func (f *flakyResource) calls() int {
 	f.mu.Lock()
@@ -187,11 +189,13 @@ func (r *blockingResource) Ensure(ctx context.Context, d contract.Desired) error
 	return nil
 }
 
-func (r *blockingResource) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
+func (r *blockingResource) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
 	return contract.Observation{State: contract.Present}, nil
 }
 
-func (r *blockingResource) Delete(ctx context.Context, id contract.Identity) error { return nil }
+func (r *blockingResource) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
+	return nil, nil
+}
 
 func (r *blockingResource) calls() int {
 	r.mu.Lock()

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // A harness is only worth having if it FAILS on the defects it claims to catch.

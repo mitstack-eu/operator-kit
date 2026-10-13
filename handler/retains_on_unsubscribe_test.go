@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // manifestWithRetains writes the value verbatim so a test can hand it a non-boolean.
@@ -41,32 +41,27 @@ spec:
     hooks: []
 `
 
-// retainsHandoverFake keeps reporting Present after DeleteWithRequest succeeded, and Delete errors if called since a HandoverResource must never fall back to it.
+// retainsHandoverFake keeps reporting Present after its Delete succeeded and returned its handover outputs.
 type retainsHandoverFake struct {
 	Outputs map[string]string
 
-	DeleteWithRequestCalls int
-	ObserveCalls           int
+	DeleteCalls  int
+	ObserveCalls int
 }
 
 func (f *retainsHandoverFake) Ensure(ctx context.Context, d contract.Desired) error { return nil }
 
-func (f *retainsHandoverFake) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
+func (f *retainsHandoverFake) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
 	f.ObserveCalls++
 	return contract.Observation{State: contract.Present}, nil
 }
 
-func (f *retainsHandoverFake) Delete(ctx context.Context, id contract.Identity) error {
-	return errors.New("retainsHandoverFake: Delete must never be called once HandoverResource is implemented")
-}
-
-func (f *retainsHandoverFake) DeleteWithRequest(ctx context.Context, d contract.Desired) (map[string]string, error) {
-	f.DeleteWithRequestCalls++
+func (f *retainsHandoverFake) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
+	f.DeleteCalls++
 	return f.Outputs, nil
 }
 
 var _ handler.Resource = (*retainsHandoverFake)(nil)
-var _ handler.HandoverResource = (*retainsHandoverFake)(nil)
 
 func TestServe_UnsubscribeAbsentTrueAfterOneDeleteZeroObserveWhenManifestDeclaresRetainsOnUnsubscribe(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
@@ -214,11 +209,11 @@ func TestServe_UnsubscribeHandoverOutputsLandInAbsentTrueWithZeroObserveWhenReta
 	if got := resp.Outputs["dataSnapshotId"]; got != "snap-789" {
 		t.Errorf(`Outputs["dataSnapshotId"] = %q, want %q`, got, "snap-789")
 	}
-	if f.DeleteWithRequestCalls != 1 {
-		t.Errorf("DeleteWithRequestCalls = %d, want 1", f.DeleteWithRequestCalls)
+	if f.DeleteCalls != 1 {
+		t.Errorf("DeleteCalls = %d, want 1", f.DeleteCalls)
 	}
 	if f.ObserveCalls != 0 {
-		t.Errorf("ObserveCalls = %d, want 0 — a declared retainsOnUnsubscribe handler must never poll Observe, HandoverResource included", f.ObserveCalls)
+		t.Errorf("ObserveCalls = %d, want 0 — a declared retainsOnUnsubscribe handler must never poll Observe, a Delete returning outputs included", f.ObserveCalls)
 	}
 }
 

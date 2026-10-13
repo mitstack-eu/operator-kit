@@ -12,10 +12,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
-	"github.com/mitstack-eu/operator-kit/observe"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/observe"
 )
 
 const hostBlockManifest = `apiVersion: mitstack/v1beta
@@ -202,15 +202,11 @@ func (b *fakeBlock) PlanReplacements(ctx context.Context, d contract.Desired) ([
 	return nil, nil
 }
 
-func (b *fakeBlock) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
+func (b *fakeBlock) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
 	return contract.Observation{State: contract.Unknown}, nil
 }
 
-func (b *fakeBlock) Delete(ctx context.Context, id contract.Identity) error {
-	return b.DeleteWithRequest(ctx, contract.Desired{Identity: id})
-}
-
-func (b *fakeBlock) DeleteWithRequest(ctx context.Context, d contract.Desired) error {
+func (b *fakeBlock) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for name, r := range b.created {
@@ -224,13 +220,12 @@ func (b *fakeBlock) DeleteWithRequest(ctx context.Context, d contract.Desired) e
 		b.p.remove(part.ID)
 	}
 	b.p.remove("state-bucket")
-	return nil
+	return nil, nil
 }
 
 var (
 	_ handler.ResourceReporter   = (*fakeBlock)(nil)
 	_ handler.ReplacementPlanner = (*fakeBlock)(nil)
-	_ handler.RequestDeleter     = (*fakeBlock)(nil)
 )
 
 type providerObserver struct {
@@ -280,11 +275,11 @@ func (o byTypeObserver) ObserveResource(ctx context.Context, r contract.Resource
 type silentBlock struct{ b *fakeBlock }
 
 func (s silentBlock) Ensure(ctx context.Context, d contract.Desired) error { return s.b.Ensure(ctx, d) }
-func (s silentBlock) Observe(ctx context.Context, id contract.Identity) (contract.Observation, error) {
-	return s.b.Observe(ctx, id)
+func (s silentBlock) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
+	return s.b.Observe(ctx, d)
 }
-func (s silentBlock) Delete(ctx context.Context, id contract.Identity) error {
-	return s.b.Delete(ctx, id)
+func (s silentBlock) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
+	return s.b.Delete(ctx, d)
 }
 
 // rememberingObserver never asks the provider.

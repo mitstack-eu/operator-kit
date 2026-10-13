@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/credrefresh"
+	"github.com/mitstack-eu/operator-kit/v2/credrefresh"
 )
 
 type cred struct {

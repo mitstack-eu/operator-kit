@@ -3,7 +3,7 @@ package ghapi_test
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/ghapi"
+	"github.com/mitstack-eu/operator-kit/v2/ghapi"
 )
 
 // SafeRepo validates the operator-supplied "owner/name" repo param so it

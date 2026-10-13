@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/contract"
-	"github.com/mitstack-eu/operator-kit/handler"
-	"github.com/mitstack-eu/operator-kit/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 // The idempotency cache stores only a settled answer. A validate is a probe
@@ -174,7 +174,7 @@ type blockingObserveResource struct {
 
 func (r *blockingObserveResource) Ensure(context.Context, contract.Desired) error { return nil }
 
-func (r *blockingObserveResource) Observe(context.Context, contract.Identity) (contract.Observation, error) {
+func (r *blockingObserveResource) Observe(context.Context, contract.Desired) (contract.Observation, error) {
 	r.mu.Lock()
 	r.observeCalls++
 	r.mu.Unlock()
@@ -183,7 +183,9 @@ func (r *blockingObserveResource) Observe(context.Context, contract.Identity) (c
 	return contract.Observation{State: contract.Present}, nil
 }
 
-func (r *blockingObserveResource) Delete(context.Context, contract.Identity) error { return nil }
+func (r *blockingObserveResource) Delete(context.Context, contract.Desired) (map[string]string, error) {
+	return nil, nil
+}
 
 func (r *blockingObserveResource) calls() int {
 	r.mu.Lock()

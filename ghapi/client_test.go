@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/ghapi"
+	"github.com/mitstack-eu/operator-kit/v2/ghapi"
 )
 
 // newTestClient points a Client at an httptest fixture. Client.Base is a

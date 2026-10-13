@@ -11,7 +11,7 @@ package contract_test
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/contract"
+	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 // verifyHead is a spec.requires entry with a verify probe, ready for one
