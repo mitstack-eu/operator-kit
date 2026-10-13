@@ -6,6 +6,16 @@ own repository, and where CI runs it for you. Every check the platform holds a
 block to lives in this kit, so the verdict you get locally is the verdict the
 platform reads.
 
+House terms are defined in
+[the workspace glossary](https://github.com/mitstack-eu/mitstack-workspace/blob/main/docs/glossary.md).
+The ones this page leans on are these. A block is a managed service defined by
+its `manifest.yaml`, and its operator is the Go program in the block's
+repository that serves the lifecycle calls. The kit is this module,
+`github.com/mitstack-eu/operator-kit/v2`, which every operator imports for
+the webhook contract and the checks below. An attestation is the platform's
+signed record that a block passed every suite, which the catalog shows as a
+verified badge.
+
 ## What blockverify judges
 
 `blockverify` runs eight suites over one block's directory, in this order. A
@@ -24,14 +34,20 @@ reason.
 | `manifest` | The manifest parses strictly, and every output and read resolves through the kit's resource registry |
 | `naming` | When the manifest declares `spec.naming.appName`, its `maxLength` equals the smallest room any name derived from it leaves under its provider's limit |
 
-A legacy block is one whose manifest declares no `spec.lifecycle.contract`. A
-`kit/v1` block declares `contract: kit/v1` and lets the kit serve its lifecycle
-route.
+A legacy block is one whose manifest declares no `spec.lifecycle.contract`,
+so its operator serves the lifecycle route itself and binds to the kit through
+a copied `kitshim.go`. A `kit/v1` block declares `contract: kit/v1` and lets
+the kit's `handler` package serve its lifecycle route.
+
+The floor is the oldest kit release your `go.mod` may require, and today it
+is `v0.1.0`. It moves only by a deliberate decision, so a new kit release
+never fails a block that has not picked it up yet.
 
 ## Run it locally
 
-The kit is a private module, so Go needs your GitHub credential to fetch it.
-Set this once, in the shell you run the checks from:
+The kit is a private module, so Go needs a GitHub credential that can read
+`mitstack-eu/operator-kit`. Put a token with that read access in
+`GITHUB_TOKEN`, then set this once, in the shell you run the checks from:
 
 ```sh
 export GOPRIVATE=github.com/mitstack-eu
@@ -39,7 +55,8 @@ git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".ins
 ```
 
 Then run the suites from your block's directory, naming the kit release to
-run:
+run. `--standalone` tells `blockverify` to judge that one directory on its
+own, and it is the only mode the command has:
 
 ```sh
 go run github.com/mitstack-eu/operator-kit/v2/blockverify@v2.1.0 --standalone .
@@ -49,7 +66,8 @@ The version is required because `go run` with `@` builds the command outside
 your block's module, so your own `go.mod` cannot choose it. `v2.1.0` is the
 first release that carries every block check, and a later tag works the same
 way. The run takes about a minute, mostly spent compiling and running your
-tests. A passing block ends with a line like this:
+tests. A passing block ends with a line like this, where `kit v0.1.0` is the
+floor the suites held your `go.mod` to, not the release you ran:
 
 ```text
 VERDICT: PASS — 8 suite(s), kit v0.1.0, standalone mode
