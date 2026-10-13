@@ -1,14 +1,6 @@
 package contract_test
 
-// resource_identity_request_test.go pins the request half of handing a named
-// resource's observe what its ensure stored: a request naming one resource
-// may carry the identity its ensure stored under "resourceIdentity", an
-// object of strings, and
-// Desired carries it across to the resource's handler. An identity with no
-// resource to bind it to is refused, naming both fields, and the envelope
-// schema declares the field optional and dependent on "resource". A request
-// naming no resource decodes to no identity, so every request golden keeps
-// the outcome request_goldens_pin_test.go pins for it.
+// A request naming one resource carries its stored identity and type across to Desired, and one naming none carries what the engine recorded.
 
 import (
 	"encoding/json"

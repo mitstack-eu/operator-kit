@@ -1,9 +1,6 @@
 package contract_test
 
-// resource_request_schema_test.go pins that the two schemas declare the
-// fields that concern one declared resource: the envelope declares
-// "resource" as optional, and the response declares the identity an ensure
-// stored as an object of strings on the ensure outcome.
+// The envelope declares "resource" optional, and the response declares an ensure's identity as an object of strings.
 
 import (
 	"encoding/json"

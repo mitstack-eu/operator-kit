@@ -1,17 +1,6 @@
 package gitops_test
 
-// namespace_block_test.go serves the test block, a kubernetes.namespace
-// declared in mitstack/v1beta, through handler.New at block level, the way
-// the engine drives it:
-//
-//   - a subscribe commits the app's manifests once through Deploy and
-//     answers the namespace the gitops.Resource observes, and the same
-//     delivery under one idempotency key commits nothing more;
-//   - an unsubscribe commits their removal through Deploy and settles absent;
-//   - a validate naming the resource is served by its gitops.Resource with
-//     the identity and type the engine recorded, while a subscribe or
-//     unsubscribe naming it is refused with a 400 naming it;
-//   - no seeded secret leaks through the handler's responses or logs.
+// The test block, served at block level, commits and removes through Deploy and serves a named validate through its gitops.Resource.
 
 import (
 	"context"
@@ -32,9 +21,7 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
-// namespaceBlock serves the test block at block level: Ensure and Delete
-// commit the app's manifests, or their removal, and wait for Argo CD
-// through Deploy, and the block's gitops.Resource observes the namespace.
+// namespaceBlock ships its manifests, or their removal, through Deploy, and its gitops.Resource observes the namespace.
 type namespaceBlock struct{ *gitopsBlock }
 
 func (b namespaceBlock) Ensure(ctx context.Context, d contract.Desired) error {
@@ -82,8 +69,6 @@ func (b namespaceBlock) deploy(ctx context.Context, d contract.Desired, app stri
 	return nil
 }
 
-// serveNamespace serves b at block level behind a fresh kittest signer,
-// with logs as its /logs buffer when non-nil.
 func serveNamespace(t *testing.T, b *gitopsBlock, logs *webhook.LogBuffer) (*handler.Handler, *kittest.Signer) {
 	t.Helper()
 	s := kittest.NewSigner(t, "gitops-test-key", 7)
@@ -103,8 +88,6 @@ func serveNamespace(t *testing.T, b *gitopsBlock, logs *webhook.LogBuffer) (*han
 	return h, s
 }
 
-// requestFields is the envelope of a request for the app, naming no
-// resource and carrying the cluster param and every kind of secret.
 func requestFields(operation, app string) map[string]any {
 	return map[string]any{
 		"operation":      operation,
@@ -123,8 +106,6 @@ func requestFields(operation, app string) map[string]any {
 	}
 }
 
-// namedFields is requestFields naming the app's namespace with the type
-// and identity the engine recorded for it.
 func namedFields(operation, app string) map[string]any {
 	f := requestFields(operation, app)
 	f["resource"] = resourceName
@@ -133,8 +114,7 @@ func namedFields(operation, app string) map[string]any {
 	return f
 }
 
-// post signs fields as a fresh webhook delivery, with its own nonce and
-// OBO token, and returns the handler's status and exact response bytes.
+// post signs fields as a fresh delivery with its own nonce and OBO token.
 func post(t *testing.T, h http.Handler, s *kittest.Signer, fields map[string]any) (int, []byte) {
 	t.Helper()
 	body := make(map[string]any, len(fields)+1)
@@ -156,8 +136,7 @@ func post(t *testing.T, h http.Handler, s *kittest.Signer, fields map[string]any
 	return rec.Code, rec.Body.Bytes()
 }
 
-// expect returns a reader of a post's answer that fails unless its status is
-// want, and decodes it.
+// expect fails unless a post answered want, and decodes the answer.
 func expect(t *testing.T, want int) func(int, []byte) contract.Response {
 	t.Helper()
 	return func(status int, raw []byte) contract.Response {

@@ -1,22 +1,12 @@
 package main
 
-// resources_suite_test.go pins which blocks the resources suite applies to:
-// for a block whose manifest is mitstack/v1beta, the suite requires a
-// TestDeclaredResources test that calls kittest.AssertBlock, and a manifest
-// that is not mitstack/v1beta declares no resources, so the suite is
-// skipped. resources_block_suite_test.go pins what a run of that test
-// proves.
-//
-// Each fixture below is a compiling module written as literal strings into
-// t.TempDir(), replacing the kit module with this checkout the way
-// fixture_test.go does.
+// The resources suite requires a v1beta block's TestDeclaredResources to call kittest.AssertBlock, and skips any other manifest.
 
 import (
 	"strings"
 	"testing"
 )
 
-// resourcesFixtureManifest declares network then instance.
 const resourcesFixtureManifest = `apiVersion: mitstack/v1beta
 type: block
 metadata:

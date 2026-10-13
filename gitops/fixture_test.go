@@ -1,10 +1,6 @@
 package gitops_test
 
-// fixture_test.go is the test block every Resource test drives: one
-// kubernetes.namespace, declared in testdata/kubernetes-namespace, whose
-// manifests are the app's Namespace and ServiceAccount in the cluster's
-// GitOps repository, observed by a gitops.Resource that publishes the
-// namespace and serviceAccount outputs.
+// The test block is one kubernetes.namespace whose Namespace and ServiceAccount a block-level handler commits and a gitops.Resource observes.
 
 import (
 	"context"
@@ -32,7 +28,6 @@ const (
 	alphaServiceAccountPath = "apps/app-alpha/serviceaccount.yaml"
 )
 
-// seededSecrets is every secret value a Desired from desiredFor carries.
 var seededSecrets = []string{githubToken, secretInput, appSecret, hetznerSecret}
 
 func readNamespaceManifest(t *testing.T) []byte {
@@ -44,8 +39,6 @@ func readNamespaceManifest(t *testing.T) []byte {
 	return raw
 }
 
-// desiredFor is the Desired a request for the app carries: the
-// subscription, the cluster param and every kind of secret.
 func desiredFor(app string) contract.Desired {
 	return contract.Desired{
 		Identity: contract.Identity{
@@ -65,8 +58,6 @@ func desiredFor(app string) contract.Desired {
 	}
 }
 
-// renderNamespace renders the app's Namespace and ServiceAccount from the
-// cluster param and the app id alone.
 func renderNamespace(d contract.Desired) (gitops.Rendered, error) {
 	cluster := d.Params["cluster"]
 	if cluster == "" {
@@ -96,16 +87,13 @@ func alphaOutputs() map[string]string {
 	return map[string]string{"namespace": "app-alpha", "serviceAccount": "app-alpha-runtime"}
 }
 
-// gitopsBlock is the test block's resource over one fake repository and one
-// fake notification source.
 type gitopsBlock struct {
 	repo     *gitopstest.Repository
 	notes    *gitopstest.Notifications
 	resource *gitops.Resource
 }
 
-// newBlock builds the block with render, over a notification source that
-// answers Succeeded and Healthy for every revision of each autoApps app.
+// newBlock builds the block over a notification source answering Succeeded and Healthy for every revision of each autoApps app.
 func newBlock(render func(contract.Desired) (gitops.Rendered, error), autoApps ...string) *gitopsBlock {
 	b := &gitopsBlock{repo: gitopstest.NewRepository(), notes: gitopstest.NewNotifications()}
 	for _, app := range autoApps {
@@ -123,8 +111,6 @@ func newBlock(render func(contract.Desired) (gitops.Rendered, error), autoApps .
 	return b
 }
 
-// newNamespaceBlock is the namespace block whose deploys of app-alpha and
-// app-beta all succeed.
 func newNamespaceBlock() *gitopsBlock {
 	return newBlock(renderNamespace, "app-alpha", "app-beta")
 }
@@ -138,8 +124,7 @@ func (b *gitopsBlock) head(t *testing.T) string {
 	return head
 }
 
-// commitApp commits d's render through CommitManifests, as a block-level
-// handler does, and returns the revision that holds it.
+// commitApp commits d's render through CommitManifests, as a block-level handler does, and returns the revision holding it.
 func commitApp(t *testing.T, b *gitopsBlock, d contract.Desired) string {
 	t.Helper()
 	out, err := b.resource.Render(d)
@@ -153,7 +138,6 @@ func commitApp(t *testing.T, b *gitopsBlock, d contract.Desired) string {
 	return rev
 }
 
-// removeApp commits the removal of d's rendered paths and returns head.
 func removeApp(t *testing.T, b *gitopsBlock, d contract.Desired) string {
 	t.Helper()
 	out, err := b.resource.Render(d)
@@ -171,8 +155,6 @@ func removeApp(t *testing.T, b *gitopsBlock, d contract.Desired) string {
 	return rev
 }
 
-// refFor is what a block-level handler hands the observer of the app's
-// namespace.
 func refFor(d contract.Desired) contract.ResourceRef {
 	return contract.ResourceRef{Name: resourceName, Type: resourceType, Identity: map[string]string{"app": d.AppID}, Desired: d}
 }
