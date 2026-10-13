@@ -159,12 +159,12 @@ type fakeGitHub struct {
 	hooks     map[string][]observe.GitHubWebhook
 	secrets   map[string][]string
 	variables map[string][]string
-	commits   map[string][]observe.GitHubCommit
+	commits   map[string][]observe.GitHubCommitPaths
 	err       error
 	asked     []string
 }
 
-func (f *fakeGitHub) RepositoriesWithTopic(_ context.Context, _ contract.Desired, topic string) ([]observe.GitHubRepository, error) {
+func (f *fakeGitHub) RepositoriesWithTopic(_ context.Context, _ contract.Desired, topic string) ([]observe.GitHubRepositoryTopics, error) {
 	f.asked = append(f.asked, topic)
 	if f.err != nil {
 		return nil, f.err
@@ -174,9 +174,9 @@ func (f *fakeGitHub) RepositoriesWithTopic(_ context.Context, _ contract.Desired
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	out := make([]observe.GitHubRepository, 0, len(names))
+	out := make([]observe.GitHubRepositoryTopics, 0, len(names))
 	for _, name := range names {
-		out = append(out, observe.GitHubRepository{FullName: name, Topics: f.topics[name]})
+		out = append(out, observe.GitHubRepositoryTopics{FullName: name, Topics: f.topics[name]})
 	}
 	return out, nil
 }
@@ -193,7 +193,7 @@ func (f *fakeGitHub) ActionsVariableNames(_ context.Context, _ contract.Desired,
 	return f.variables[repo], f.err
 }
 
-func (f *fakeGitHub) Commits(_ context.Context, _ contract.Desired, repo string) ([]observe.GitHubCommit, error) {
+func (f *fakeGitHub) Commits(_ context.Context, _ contract.Desired, repo string) ([]observe.GitHubCommitPaths, error) {
 	return f.commits[repo], f.err
 }
 
@@ -223,7 +223,7 @@ func ghWorld() *fakeGitHub {
 			"acme/app":      {"MITSTACK_APP_REPO", "UNHANDED_VARIABLE"},
 			"acme/other-ci": {"MITSTACK_APP_ID"},
 		},
-		commits: map[string][]observe.GitHubCommit{
+		commits: map[string][]observe.GitHubCommitPaths{
 			"acme/app-ci": {
 				{Message: "mitstack: seed managed CI pipeline" + ghTrailer, Paths: []string{".github/workflows/build.yml", ".github/workflows/dispatch.yml"}},
 				{Message: "docs: a person's commit", Paths: []string{"README.md"}},
