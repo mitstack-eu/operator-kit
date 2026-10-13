@@ -743,3 +743,104 @@ func TestCheckBlock_PassesTheCfnBlockWhoseDeployAndPushRolesAreParts(t *testing.
 
 	wantNoProblems(t, problems)
 }
+
+const repoHostBlockManifest = `apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: host-block
+  name: Host Block
+spec:
+  version: 1.0.0
+  requires:
+    - { name: app-repo, type: github.repository }
+  resources:
+    - aws.ec2-instance
+    - aws.ebs-volume
+  provides: [aws.ec2-instance]
+  lifecycle:
+    endpoint: https://host-block.example/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
+`
+
+// recordingLister is a kit lister over the fake provider that keeps each Desired it is handed.
+type recordingLister struct {
+	p    *fakeProvider
+	seen *[]contract.Desired
+}
+
+func (l recordingLister) ListTagged(ctx context.Context, d contract.Desired, subscriptionID string) ([]observe.Tagged, error) {
+	*l.seen = append(*l.seen, d)
+	return l.p.ListTagged(ctx, subscriptionID)
+}
+
+// listedHostBlock is the host block bound to an app repository, its provider served through kittest.ListerProvider.
+func listedHostBlock(t *testing.T) (*fakeBlock, kittest.Block, *[]contract.Desired) {
+	t.Helper()
+	b, in := hostBlock(t)
+	seen := &[]contract.Desired{}
+	in.Manifest = []byte(repoHostBlockManifest)
+	in.Requirements = map[string]map[string]map[string]string{
+		"app-repo": {"github.repository": {"repo": "acme/app"}},
+	}
+	in.Provider = kittest.ListerProvider{Lister: recordingLister{p: b.p, seen: seen}, Loser: b.p}
+	return b, in, seen
+}
+
+func TestCheckBlock_HandsTheAdaptedListerTheGuardsDesiredWithItsRepositoryBinding(t *testing.T) {
+	_, in, seen := listedHostBlock(t)
+
+	problems := kittest.CheckBlock(in)
+
+	wantNoProblems(t, problems)
+	if len(*seen) == 0 {
+		t.Fatal("CheckBlock never called the lister served through kittest.ListerProvider")
+	}
+	for _, d := range *seen {
+		if d.SubscriptionID != "sub-block" || d.OrgID != "org-1" {
+			t.Errorf("the lister was handed subscription %q of org %q; want the guard's sub-block of org-1", d.SubscriptionID, d.OrgID)
+		}
+		if got := d.RequirementTypes["app-repo"]; got != "github.repository" {
+			t.Errorf("the lister was handed requirement app-repo of type %q; want github.repository", got)
+		}
+		if got := d.Bindings["app-repo"]["repo"]; got != "acme/app" {
+			t.Errorf("the lister was handed app-repo bound to %q; want acme/app, the github.repository binding the guard holds", got)
+		}
+		if len(d.RecordedResources) != 2 {
+			t.Errorf("the lister was handed %d recorded resources; want the guard's Desired after subscribe, recording both", len(d.RecordedResources))
+		}
+	}
+}
+
+func TestCheckBlock_ThroughTheAdaptedListerFailsATaggedResourceTheManifestDoesNotDeclare(t *testing.T) {
+	b, in, _ := listedHostBlock(t)
+	b.extraTagged = true
+
+	problems := kittest.CheckBlock(in)
+
+	wantProblemNaming(t, problems, `resource "state-bucket"`, "aws.s3-bucket")
+}
+
+func TestCheckBlock_ThroughTheAdaptedListerLosesEachResourceThroughTheLoser(t *testing.T) {
+	b, in, _ := listedHostBlock(t)
+	in.Observers["aws.ec2-instance"] = rememberingObserver{b: b, name: "aws.ec2-instance"}
+
+	problems := kittest.CheckBlock(in)
+
+	wantProblemNaming(t, problems, `resource "aws.ec2-instance"`, "provider")
+}
+
+func TestListerProvider_RefusesAListingWithoutTheGuardsDesired(t *testing.T) {
+	p := newFakeProvider()
+	var seen []contract.Desired
+	provider := kittest.ListerProvider{Lister: recordingLister{p: p, seen: &seen}, Loser: p}
+
+	_, err := provider.ListTagged(context.Background(), "sub-block")
+
+	if err == nil {
+		t.Error("ListerProvider.ListTagged with a subscription id alone returned no error; its lister needs the Desired only the tagging guard hands it")
+	}
+	if len(seen) != 0 {
+		t.Errorf("ListerProvider.ListTagged called its lister with %+v; want no call without the guard's Desired", seen)
+	}
+}
