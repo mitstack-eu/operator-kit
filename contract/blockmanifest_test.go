@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mitstack-eu/operator-kit/contract"
 )
@@ -877,5 +878,48 @@ func TestManifestLifecycle_NeedsCredentialRefreshMarshalsUnderItsOptionalKey(t *
 
 	if got, want := f.Tag.Get("json"), "needsCredentialRefresh,omitempty"; got != want {
 		t.Errorf("ManifestLifecycle.NeedsCredentialRefresh json tag = %q, want %q", got, want)
+	}
+}
+
+func lifecycleSettleBudget(t *testing.T, b *contract.BlockManifest) time.Duration {
+	t.Helper()
+	f := reflect.ValueOf(b.Spec.Lifecycle).FieldByName("SettleBudget")
+	if !f.IsValid() {
+		t.Fatal("ManifestLifecycle has no SettleBudget field")
+	}
+	if f.Type() != reflect.TypeOf(time.Duration(0)) {
+		t.Fatalf("ManifestLifecycle.SettleBudget type = %v, want time.Duration", f.Type())
+	}
+	return time.Duration(f.Int())
+}
+
+func TestParseManifest_V1BetaReadsSettleBudgetAsAnOptionalLifecycleDuration(t *testing.T) {
+	for _, tc := range []struct {
+		label, line string
+		want        time.Duration
+	}{
+		{"absent reads zero", "", 0},
+		{"75m reads 75 minutes", "    settleBudget: 75m\n", 75 * time.Minute},
+		{"a quoted 1h30m reads 90 minutes", "    settleBudget: \"1h30m\"\n", 90 * time.Minute},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			raw := editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n"+tc.line)
+
+			b := parseBeta(t, raw)
+
+			if got := lifecycleSettleBudget(t, b); got != tc.want {
+				t.Errorf("spec.lifecycle.settleBudget after %q = %v, want %v", tc.line, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseManifest_V1BetaRefusesASettleBudgetThatIsNotAPositiveDuration(t *testing.T) {
+	for _, value := range []string{"0s", "-5m", "soon", "30"} {
+		t.Run("refuses "+value, func(t *testing.T) {
+			raw := editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    settleBudget: "+value+"\n")
+
+			requireRefusedNaming(t, raw, "spec.lifecycle.settleBudget", "positive duration")
+		})
 	}
 }
