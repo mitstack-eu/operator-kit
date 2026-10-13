@@ -24,8 +24,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/events"
-	"github.com/mitstack-eu/operator-kit/webhook"
+	"github.com/mitstack-eu/operator-kit/v2/events"
+	"github.com/mitstack-eu/operator-kit/v2/webhook"
 )
 
 // Process-scoped state, matching what the copied files kept in package globals:
