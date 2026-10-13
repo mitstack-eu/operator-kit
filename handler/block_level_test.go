@@ -963,18 +963,24 @@ func (o secretObserver) ObserveResource(ctx context.Context, r contract.Resource
 
 func serveRoleBlock(t *testing.T, operation string, arns map[string]map[string]string) (int, contract.Response) {
 	t.Helper()
+	observers := map[string]handler.Observer{}
+	for name, secrets := range arns {
+		observers[name] = secretObserver{secrets}
+	}
+	return serveRoleBlockObservers(t, context.Background(), operation, observers)
+}
+
+func serveRoleBlockObservers(t *testing.T, ctx context.Context, operation string, observers map[string]handler.Observer) (int, contract.Response) {
+	t.Helper()
 	s := kittest.NewSigner(t, "kid-role-block", 19)
 	cfg := baseConfig(t, &blockResource{cloud: newFakeCloud()}, s)
 	cfg.Manifest = []byte(roleBlockManifest)
-	cfg.Observers = map[string]handler.Observer{}
-	for name, secrets := range arns {
-		cfg.Observers[name] = secretObserver{secrets}
-	}
+	cfg.Observers = observers
 	h, err := handler.New(cfg)
 	if err != nil {
 		t.Fatalf("handler.New: %v", err)
 	}
-	status, raw := postHook(t, h, s, envelope(t, s, "nonce-role-block-"+operation, map[string]any{"operation": operation}))
+	status, raw := postHookWithContext(t, h, s, envelope(t, s, "nonce-role-block-"+operation, map[string]any{"operation": operation}), ctx)
 	assertConforms(t, raw)
 	return status, decodeResponse(t, raw)
 }
@@ -1037,6 +1043,49 @@ func TestBlockLevel_AProvidedResourceReportingNoSecretOutputHasNoEntryInTheAnswe
 	want := map[string]map[string]string{"deploy-role": {"roleArn": "arn:aws:iam::1:role/deploy"}}
 	if !reflect.DeepEqual(resp.ResourceSecretOutputs, want) {
 		t.Errorf("ResourceSecretOutputs = %v, want %v", resp.ResourceSecretOutputs, want)
+	}
+}
+
+func TestBlockLevel_APendingAnswerCarriesTheSecretOutputsOfEachProvidedResourceAlreadyObservedPresent(t *testing.T) {
+	const deployArn = "arn:aws:iam::1:role/deploy"
+	cases := []struct {
+		name      string
+		operation string
+		ended     bool
+	}{
+		{"subscribe with a later resource unknown", "subscribe", false},
+		{"validate with a later resource unknown", "validate", false},
+		{"subscribe ended before the later resource", "subscribe", true},
+		{"validate ended before the later resource", "validate", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var deploy handler.Observer = secretObserver{map[string]string{"roleArn": deployArn}}
+			if tc.ended {
+				deploy = cancellingObserver{Observer: deploy, settledOn: contract.Present, cancel: cancel}
+			}
+			observers := map[string]handler.Observer{
+				"deploy-role":   deploy,
+				"ecr-push-role": fixedObserver{contract.Observation{State: contract.Unknown}},
+				"audit-role":    secretObserver{map[string]string{"roleArn": "arn:aws:iam::1:role/audit"}},
+			}
+
+			status, resp := serveRoleBlockObservers(t, ctx, tc.operation, observers)
+
+			if status != http.StatusOK || !resp.Pending {
+				t.Fatalf("status, pending = %d, %v; want 200 and pending; response %+v", status, resp.Pending, resp)
+			}
+			wantByResource := map[string]map[string]string{"deploy-role": {"roleArn": deployArn}}
+			if !reflect.DeepEqual(resp.ResourceSecretOutputs, wantByResource) {
+				t.Errorf("ResourceSecretOutputs = %v, want %v: deploy-role was observed present before the answer went pending", resp.ResourceSecretOutputs, wantByResource)
+			}
+			wantMerged := map[string]string{"roleArn": deployArn}
+			if !reflect.DeepEqual(resp.SecretOutputs, wantMerged) {
+				t.Errorf("SecretOutputs = %v, want %v: the merged map the platform judges and stores by name", resp.SecretOutputs, wantMerged)
+			}
+		})
 	}
 }
 
