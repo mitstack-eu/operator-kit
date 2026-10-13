@@ -9,6 +9,7 @@ package contract_test
 // field.
 
 import (
+	"encoding/json"
 	"reflect"
 	"slices"
 	"strings"
@@ -928,4 +929,53 @@ func TestParseManifest_V1AlphaRefusesSettleBudgetAsAnUnknownLifecycleKey(t *test
 	raw := []byte(alphaHead + "  lifecycle:\n    endpoint: https://fixture.example.test/hook\n    settleBudget: 75m\n")
 
 	requireRefusedNaming(t, raw, "spec.lifecycle.settleBudget")
+}
+
+func TestManifestLifecycle_MarshalsSettleBudgetAsTheDurationStringParseManifestReads(t *testing.T) {
+	b := parseBeta(t, editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    settleBudget: 75m\n"))
+
+	raw, err := json.Marshal(b.Spec.Lifecycle)
+
+	if err != nil {
+		t.Fatalf("json.Marshal(ManifestLifecycle): %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("ManifestLifecycle JSON %s is not an object: %v", raw, err)
+	}
+	written, ok := fields["settleBudget"].(string)
+	if !ok || written != "1h15m0s" {
+		t.Fatalf("ManifestLifecycle JSON settleBudget = %#v, want \"1h15m0s\" (%s)", fields["settleBudget"], raw)
+	}
+	reparsed := parseBeta(t, editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    settleBudget: "+written+"\n"))
+	if got := lifecycleSettleBudget(t, reparsed); got != 75*time.Minute {
+		t.Errorf("spec.lifecycle.settleBudget after re-reading %q = %v, want %v", written, got, 75*time.Minute)
+	}
+}
+
+func TestManifestLifecycle_JSONRoundTripKeepsTheSettleBudget(t *testing.T) {
+	for _, tc := range []struct {
+		label, line string
+	}{
+		{"absent stays absent", ""},
+		{"75m stays 75 minutes", "    settleBudget: 75m\n"},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			want := parseBeta(t, editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n"+tc.line)).Spec.Lifecycle
+
+			raw, err := json.Marshal(want)
+			if err != nil {
+				t.Fatalf("json.Marshal(ManifestLifecycle): %v", err)
+			}
+			var got contract.ManifestLifecycle
+			err = json.Unmarshal(raw, &got)
+
+			if err != nil {
+				t.Fatalf("json.Unmarshal(%s): %v", raw, err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("ManifestLifecycle after a JSON round trip through %s = %+v, want %+v", raw, got, want)
+			}
+		})
+	}
 }
