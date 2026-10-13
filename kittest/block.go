@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -24,6 +25,39 @@ import (
 type Provider interface {
 	ListTagged(ctx context.Context, subscriptionID string) ([]observe.Tagged, error)
 	Lose(ctx context.Context, r contract.CreatedResource) error
+}
+
+type Loser interface {
+	Lose(ctx context.Context, r contract.CreatedResource) error
+}
+
+// ListerProvider serves a kit lister to the tagging guard, which hands it the Desired it holds, and loses each resource through Loser.
+type ListerProvider struct {
+	Lister observe.TaggedLister
+	Loser  Loser
+}
+
+// ListTagged refuses, since a lister such as observe.GitHubTagged reads the requirement bindings only the guard's Desired holds.
+func (p ListerProvider) ListTagged(context.Context, string) ([]observe.Tagged, error) {
+	return nil, errors.New("a ListerProvider lists only through the tagging guard, which hands its lister the Desired holding the requirement bindings")
+}
+
+func (p ListerProvider) Lose(ctx context.Context, r contract.CreatedResource) error {
+	if p.Loser == nil {
+		return errors.New("the ListerProvider has no Loser to lose a resource through")
+	}
+	return p.Loser.Lose(ctx, r)
+}
+
+func (p ListerProvider) listTaggedWith(ctx context.Context, d contract.Desired) ([]observe.Tagged, error) {
+	if p.Lister == nil {
+		return nil, errors.New("the ListerProvider has no Lister")
+	}
+	return p.Lister.ListTagged(ctx, d, d.SubscriptionID)
+}
+
+type desiredLister interface {
+	listTaggedWith(ctx context.Context, d contract.Desired) ([]observe.Tagged, error)
 }
 
 // Block is what a block served through one block-level handler supplies to have its guards checked.
@@ -328,7 +362,13 @@ func (c *blockCheck) requiredOutputs(resp contract.Response, operation string) {
 }
 
 func (c *blockCheck) taggedMatchDeclared() {
-	tagged, err := c.in.Provider.ListTagged(context.Background(), c.desired.SubscriptionID)
+	var tagged []observe.Tagged
+	var err error
+	if l, ok := c.in.Provider.(desiredLister); ok {
+		tagged, err = l.listTaggedWith(context.Background(), c.desired)
+	} else {
+		tagged, err = c.in.Provider.ListTagged(context.Background(), c.desired.SubscriptionID)
+	}
 	if err != nil {
 		c.problem("listing what carries the subscription's id failed: %v", err)
 		return
