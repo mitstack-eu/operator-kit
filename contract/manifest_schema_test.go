@@ -252,16 +252,9 @@ func TestManifestSchema_LifecycleListsSettleBudgetAsAnOptionalString(t *testing.
 	doc := schemaDoc(t)
 
 	lifecycle := schemaAt(t, doc, doc, "properties", "spec", "properties", "lifecycle")
+	budget := schemaAt(t, doc, lifecycle, "properties", "settleBudget")
 
-	props, _ := lifecycle["properties"].(map[string]any)
-	prop, ok := props["settleBudget"].(map[string]any)
-	if !ok {
-		t.Fatalf("schema spec.lifecycle properties = %q, want settleBudget among them", sortedKeys(props))
-	}
-	if prop["type"] != "string" {
-		t.Errorf("schema spec.lifecycle.settleBudget type = %v, want string", prop["type"])
-	}
-	if required := sortedStrings(lifecycle["required"]); slices.Contains(required, "settleBudget") {
-		t.Errorf("schema spec.lifecycle requires %q, want settleBudget optional", required)
+	if budget["type"] != "string" || slices.Contains(sortedStrings(lifecycle["required"]), "settleBudget") {
+		t.Errorf("schema spec.lifecycle.settleBudget = %v with required %v, want an optional string", budget, lifecycle["required"])
 	}
 }

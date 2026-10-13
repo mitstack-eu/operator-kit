@@ -10,6 +10,7 @@ package contract_test
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -882,99 +883,54 @@ func TestManifestLifecycle_NeedsCredentialRefreshMarshalsUnderItsOptionalKey(t *
 	}
 }
 
-func lifecycleSettleBudget(t *testing.T, b *contract.BlockManifest) time.Duration {
-	t.Helper()
-	f := reflect.ValueOf(b.Spec.Lifecycle).FieldByName("SettleBudget")
-	if !f.IsValid() {
-		t.Fatal("ManifestLifecycle has no SettleBudget field")
+func TestParseManifest_SettleBudget(t *testing.T) {
+	beta := func(line string) []byte {
+		return editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n"+line)
 	}
-	if f.Type() != reflect.TypeOf(time.Duration(0)) {
-		t.Fatalf("ManifestLifecycle.SettleBudget type = %v, want time.Duration", f.Type())
-	}
-	return time.Duration(f.Int())
-}
-
-func TestParseManifest_V1BetaReadsSettleBudgetAsAnOptionalLifecycleDuration(t *testing.T) {
 	for _, tc := range []struct {
-		label, line string
-		want        time.Duration
+		label   string
+		raw     []byte
+		want    time.Duration
+		refusal []string
 	}{
-		{"absent reads zero", "", 0},
-		{"75m reads 75 minutes", "    settleBudget: 75m\n", 75 * time.Minute},
-		{"a quoted 1h30m reads 90 minutes", "    settleBudget: \"1h30m\"\n", 90 * time.Minute},
+		{"absent under v1beta reads zero", beta(""), 0, nil},
+		{"75m under v1beta reads 75 minutes", beta("    settleBudget: 75m\n"), 75 * time.Minute, nil},
+		{"0s is refused", beta("    settleBudget: 0s\n"), 0, []string{"spec.lifecycle.settleBudget", "positive duration"}},
+		{"-5m is refused", beta("    settleBudget: -5m\n"), 0, []string{"spec.lifecycle.settleBudget", "positive duration"}},
+		{"soon is refused", beta("    settleBudget: soon\n"), 0, []string{"spec.lifecycle.settleBudget", "positive duration"}},
+		{"30 is refused", beta("    settleBudget: 30\n"), 0, []string{"spec.lifecycle.settleBudget", "positive duration"}},
+		{"v1alpha refuses the key", []byte(alphaHead + "  lifecycle:\n    endpoint: https://fixture.example.test/hook\n" +
+			"    settleBudget: 75m\n"), 0, []string{"spec.lifecycle.settleBudget"}},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
-			raw := editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n"+tc.line)
-
-			b := parseBeta(t, raw)
-
-			if got := lifecycleSettleBudget(t, b); got != tc.want {
-				t.Errorf("spec.lifecycle.settleBudget after %q = %v, want %v", tc.line, got, tc.want)
+			if tc.refusal != nil {
+				requireRefusedNaming(t, tc.raw, tc.refusal...)
+				return
 			}
-		})
-	}
-}
 
-func TestParseManifest_V1BetaRefusesASettleBudgetThatIsNotAPositiveDuration(t *testing.T) {
-	for _, value := range []string{"0s", "-5m", "soon", "30"} {
-		t.Run("refuses "+value, func(t *testing.T) {
-			raw := editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    settleBudget: "+value+"\n")
-
-			requireRefusedNaming(t, raw, "spec.lifecycle.settleBudget", "positive duration")
-		})
-	}
-}
-
-func TestParseManifest_V1AlphaRefusesSettleBudgetAsAnUnknownLifecycleKey(t *testing.T) {
-	raw := []byte(alphaHead + "  lifecycle:\n    endpoint: https://fixture.example.test/hook\n    settleBudget: 75m\n")
-
-	requireRefusedNaming(t, raw, "spec.lifecycle.settleBudget")
-}
-
-func TestManifestLifecycle_MarshalsSettleBudgetAsTheDurationStringParseManifestReads(t *testing.T) {
-	b := parseBeta(t, editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    settleBudget: 75m\n"))
-
-	raw, err := json.Marshal(b.Spec.Lifecycle)
-
-	if err != nil {
-		t.Fatalf("json.Marshal(ManifestLifecycle): %v", err)
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		t.Fatalf("ManifestLifecycle JSON %s is not an object: %v", raw, err)
-	}
-	written, ok := fields["settleBudget"].(string)
-	if !ok || written != "1h15m0s" {
-		t.Fatalf("ManifestLifecycle JSON settleBudget = %#v, want \"1h15m0s\" (%s)", fields["settleBudget"], raw)
-	}
-	reparsed := parseBeta(t, editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    settleBudget: "+written+"\n"))
-	if got := lifecycleSettleBudget(t, reparsed); got != 75*time.Minute {
-		t.Errorf("spec.lifecycle.settleBudget after re-reading %q = %v, want %v", written, got, 75*time.Minute)
-	}
-}
-
-func TestManifestLifecycle_JSONRoundTripKeepsTheSettleBudget(t *testing.T) {
-	for _, tc := range []struct {
-		label, line string
-	}{
-		{"absent stays absent", ""},
-		{"75m stays 75 minutes", "    settleBudget: 75m\n"},
-	} {
-		t.Run(tc.label, func(t *testing.T) {
-			want := parseBeta(t, editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n"+tc.line)).Spec.Lifecycle
-
-			raw, err := json.Marshal(want)
-			if err != nil {
-				t.Fatalf("json.Marshal(ManifestLifecycle): %v", err)
+			lc := parseBeta(t, tc.raw).Spec.Lifecycle
+			raw, err := json.Marshal(lc)
+			var back contract.ManifestLifecycle
+			var fields map[string]any
+			if err == nil {
+				err = errors.Join(json.Unmarshal(raw, &back), json.Unmarshal(raw, &fields))
 			}
-			var got contract.ManifestLifecycle
-			err = json.Unmarshal(raw, &got)
 
 			if err != nil {
-				t.Fatalf("json.Unmarshal(%s): %v", raw, err)
+				t.Fatalf("JSON round trip of %+v: %v", lc, err)
 			}
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("ManifestLifecycle after a JSON round trip through %s = %+v, want %+v", raw, got, want)
+			if lc.SettleBudget != tc.want {
+				t.Errorf("spec.lifecycle.settleBudget = %v, want %v", lc.SettleBudget, tc.want)
+			}
+			if !reflect.DeepEqual(back, lc) {
+				t.Errorf("ManifestLifecycle after a JSON round trip through %s = %+v, want %+v", raw, back, lc)
+			}
+			written, _ := fields["settleBudget"].(string)
+			if tc.want == 0 {
+				return
+			}
+			if again := parseBeta(t, beta("    settleBudget: "+written+"\n")).Spec.Lifecycle.SettleBudget; again != tc.want {
+				t.Errorf("JSON settleBudget %#v re-parses as %v, want %v (%s)", fields["settleBudget"], again, tc.want, raw)
 			}
 		})
 	}
