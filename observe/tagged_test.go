@@ -238,17 +238,25 @@ func ghWorld() *fakeGitHub {
 			"acme/untagged": {
 				{Message: "mitstack: seed" + ghTrailer, Paths: []string{"stray.yml"}},
 			},
+			"acme/app-gitops":         {{Message: "shop: deploy" + ghTrailer, Paths: []string{"deployment.json"}}},
+			"acme/app-gitops-removed": {{Message: "shop: deploy" + ghTrailer}, {Message: "shop: remove the app" + ghTrailer}},
 		},
 	}
 }
 
+// ghDesired binds the app repository, a runner, and two GitOps repositories another subscription created and marked.
 func ghDesired() contract.Desired {
 	return contract.Desired{
-		Identity:         contract.Identity{SubscriptionID: ghSub},
-		RequirementTypes: map[string]string{"app-repo": "github.repository", "runner": "github.self-hosted-runner"},
+		Identity: contract.Identity{SubscriptionID: ghSub},
+		RequirementTypes: map[string]string{
+			"app-repo": "github.repository", "runner": "github.self-hosted-runner",
+			"gitops": "github.gitops-repository", "gitops-removed": "github.gitops-repository",
+		},
 		Bindings: map[string]map[string]string{
-			"app-repo": {"repo": "acme/app"},
-			"runner":   {"repo": "acme/elsewhere"},
+			"app-repo":       {"repo": "acme/app"},
+			"runner":         {"repo": "acme/elsewhere"},
+			"gitops":         {"repo": "acme/app-gitops"},
+			"gitops-removed": {"repo": "acme/app-gitops-removed"},
 		},
 	}
 }
@@ -313,6 +321,8 @@ func TestGitHubTagged_ListsWhatCountsAsTheSubscriptions(t *testing.T) {
 				{"a file committed under the trailer of an id this one prefixes", observe.Tagged{Type: "github.workflow-file", ID: "acme/app-ci/longer.yml"}, false},
 				{"a file whose commit names the trailer in its subject, not its closing trailer block", observe.Tagged{Type: "github.workflow-file", ID: "acme/app-ci/subject.yml"}, false},
 				{"a file committed under the trailer on a repository neither tagged nor bound", observe.Tagged{Type: "github.workflow-file", ID: "acme/untagged/stray.yml"}, false},
+				{"a file a trailer commit wrote on the bound GitOps repository", observe.Tagged{Type: "github.workflow-file", ID: "acme/app-gitops/deployment.json"}, true},
+				{"the bound GitOps repository, which another subscription created", observe.Tagged{Type: "github.repository", ID: "acme/app-gitops"}, false},
 			},
 		},
 		{
@@ -331,6 +341,8 @@ func TestGitHubTagged_ListsWhatCountsAsTheSubscriptions(t *testing.T) {
 				{"a file a trailer commit wrote, which the commit type stands for", observe.Tagged{Type: "github.workflow-file", ID: "acme/app-ci/.github/workflows/build.yml"}, false},
 				{"a trailer commit on a repository neither tagged nor bound", observe.Tagged{Type: "github.scaffold-commit", ID: "acme/untagged"}, false},
 				{"a commit on another subscription's repository", observe.Tagged{Type: "github.scaffold-commit", ID: "acme/other-ci"}, false},
+				{"the trailer commit on the bound GitOps repository", observe.Tagged{Type: "github.scaffold-commit", ID: "acme/app-gitops"}, true},
+				{"trailer commits whose every file the branch no longer holds", observe.Tagged{Type: "github.scaffold-commit", ID: "acme/app-gitops-removed"}, false},
 			},
 		},
 	}
@@ -384,48 +396,6 @@ func TestGitHubTagged_ReportsATaggedRepositoryAsTheTypeTheBlockNames(t *testing.
 	}
 	if countTagged(got, observe.Tagged{Type: "github.gitops-repository", ID: "acme/app-ci"}) != 1 || countTagged(got, observe.Tagged{Type: "github.repository", ID: "acme/app-ci"}) != 0 {
 		t.Errorf("with RepositoryType github.gitops-repository, ListTagged = %+v; want acme/app-ci reported once, as that type alone", got)
-	}
-}
-
-func TestGitHubTagged_CountsTheTrailerCommitsOnTheGitOpsRepositoryARequirementBindsButNotTheRepository(t *testing.T) {
-	api := ghWorld()
-	api.topics["acme/app-gitops"] = []string{"mitstack-sub-5a5a5a5a5a5a"}
-	api.commits["acme/app-gitops"] = []observe.GitHubCommitPaths{{Message: "shop: deploy" + ghTrailer, Paths: []string{"deployment.json"}}}
-	d := ghDesired()
-	d.RequirementTypes["gitops"] = "github.gitops-repository"
-	d.Bindings["gitops"] = map[string]string{"repo": "acme/app-gitops"}
-	lister := ghLister(api)
-	lister.RepositoryType, lister.CommitType = "github.gitops-repository", "github.gitops-commit"
-
-	got, err := lister.ListTagged(context.Background(), d, ghSub)
-
-	if err != nil {
-		t.Fatalf("ListTagged: %v", err)
-	}
-	commits := observe.Tagged{Type: "github.gitops-commit", ID: "acme/app-gitops"}
-	if n := countTagged(got, commits); n != 1 {
-		t.Errorf("%+v listed %d times; want once, the trailer commits on the repository the github.gitops-repository requirement binds; ListTagged = %+v", commits, n, got)
-	}
-	repository := observe.Tagged{Type: "github.gitops-repository", ID: "acme/app-gitops"}
-	if n := countTagged(got, repository); n != 0 {
-		t.Errorf("%+v listed %d times; want none, since another subscription's topic marks it as that subscription's; ListTagged = %+v", repository, n, got)
-	}
-}
-
-func TestGitHubTagged_CountsTheCommitTypeOnlyWhileTheBranchHoldsAPathATrailerCommitWrote(t *testing.T) {
-	api := ghWorld()
-	api.commits["acme/app"] = []observe.GitHubCommitPaths{{Message: "shop: deploy" + ghTrailer}, {Message: "shop: remove the app" + ghTrailer}}
-	lister := ghLister(api)
-	lister.CommitType = "github.gitops-commit"
-
-	got, err := lister.ListTagged(context.Background(), ghDesired(), ghSub)
-
-	if err != nil {
-		t.Fatalf("ListTagged: %v", err)
-	}
-	removed := observe.Tagged{Type: "github.gitops-commit", ID: "acme/app"}
-	if n := countTagged(got, removed); n != 0 {
-		t.Errorf("%+v listed %d times; want none, since the branch holds no path its trailer commits wrote; ListTagged = %+v", removed, n, got)
 	}
 }
 
