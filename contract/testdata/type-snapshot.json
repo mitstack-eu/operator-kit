@@ -1242,8 +1242,8 @@
           "required": true
         }
       ],
-      "observe": "the pulls API returns the pull request open from its head to its base",
-      "absence": "the pulls API returns the pull request closed",
+      "observe": "the pulls API returns the pull request from its head to its base, open or merged",
+      "absence": "the pulls API returns the pull request closed unmerged, and a merged pull request ends with its subscription and is never observed gone, because a merge is permanent",
       "timeBudgets": {
         "delete": "1m",
         "ensure": "1m",
