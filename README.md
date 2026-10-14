@@ -540,6 +540,48 @@ listing more than one type runs the check once per listed type, with
 a `TestDeclaredResources` test that calls `kittest.AssertBlock`, runs it, and
 names in its pass detail the guards that ran.
 
+### Serving a capability and issuing an app's credential
+
+A `mitstack/v1beta` manifest's `type` is `block` or `capability`. A capability
+is a unit that serves more than one app, such as a shared cluster or an org's
+payment provider. The Handler serves its four lifecycle verbs exactly as it
+serves a block's, so a capability that apps reach through their own blocks
+needs nothing more.
+
+A capability may also give each app a credential narrowed to that app, such as
+a one-hour access token. Its block-level handler then implements
+`handler.CredentialIssuer`:
+
+```go
+type CredentialIssuer interface {
+	IssueCredential(ctx context.Context, d contract.Desired, appID string) (contract.Credential, error)
+}
+```
+
+The platform asks for one app's credential with the `issue` operation, a
+signed request to `/hook` that names the app under `issueAppId`. The Handler
+calls `IssueCredential` and answers 200 with the credential under
+`credential`, as in
+`{"outputs":null,"credential":{"values":{"accessToken":"tok-1"},"expiresAt":"2026-10-14T13:00:00Z"}}`.
+It answers every issue afresh, because a replayed credential may have
+expired, and it emits no lifecycle event for one.
+
+The Handler refuses an issue it cannot answer safely:
+
+| Case | Answer |
+|---|---|
+| The manifest's type is `block` | 400, refusal class `not-a-capability` |
+| The capability implements no `CredentialIssuer` | 400, refusal class `issues-no-credential` |
+| The request names no app under `issueAppId` | 400 |
+| The credential holds no value or has no expiry | 500 |
+| A credential value equals a secret the request carried | 500, naming the key and never the value |
+
+The last row refuses a credential value equal to a secret the request
+carried, such as the org's connection key passed in `secretInputs`. It
+compares whole values only. A value derived from a secret, or a credential the
+capability holds in its own configuration, passes it, so the capability's own
+code is what keeps such a credential from an app.
+
 ### Deploying a declared resource through GitOps
 
 The `gitops` package serves a declared resource that deploys through Argo CD,

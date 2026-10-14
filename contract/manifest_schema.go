@@ -28,7 +28,7 @@ func GenerateManifestSchema() ([]byte, error) {
 	}
 	props := doc["properties"].(map[string]any)
 	props["apiVersion"].(map[string]any)["const"] = ManifestAPIVersion
-	props["type"].(map[string]any)["const"] = "block"
+	props["type"].(map[string]any)["enum"] = []any{ManifestTypeBlock, ManifestTypeCapability}
 	doc["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 	doc["$id"] = manifestSchemaID
 	doc["title"] = "mitstack block manifest " + ManifestAPIVersion

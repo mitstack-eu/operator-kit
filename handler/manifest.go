@@ -29,6 +29,7 @@ type manifestDeclarations struct {
 	retainsOnUnsubscribe bool
 	resources            []contract.ManifestResource
 	provided             map[string]bool
+	capability           bool
 }
 
 // readManifestDeclarations errors on a manifest the parser refuses, since a declaration nobody can read must not be mistaken for an absent one.
@@ -49,6 +50,7 @@ func readManifestDeclarations(manifest []byte) (manifestDeclarations, error) {
 			apiVersion: m.APIVersion,
 			resources:  m.Block.Spec.Resources,
 			provided:   provided,
+			capability: m.Block.Type == contract.ManifestTypeCapability,
 		}, nil
 	}
 	if m.V1Alpha == nil || m.V1Alpha.Spec.Lifecycle == nil {

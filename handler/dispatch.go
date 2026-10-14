@@ -15,7 +15,7 @@ import (
 
 // dispatchRequest runs the verb through the idempotency cache, storing only a settled answer.
 //
-// A pending:true answer, or an unsubscribe answered absent:false, is never replayed so the engine's re-drive observes the resource again. The cache key carries the named resource, and an empty idempotencyKey or a validate skips the cache because a replayed probe would report a state the resource may have left.
+// A pending:true answer, or an unsubscribe answered absent:false, is never replayed so the engine's re-drive observes the resource again. The cache key carries the named resource, and an empty idempotencyKey or a validate skips the cache because a replayed probe would report a state the resource may have left; an issue skips it because a replayed credential may have expired.
 func (h *Handler) dispatchRequest(w http.ResponseWriter, r *http.Request, req contract.Request) {
 	secrets := h.secretsFor(req)
 
@@ -45,7 +45,7 @@ func (h *Handler) dispatchRequest(w http.ResponseWriter, r *http.Request, req co
 
 	var status int
 	var raw []byte
-	if req.IdempotencyKey != "" && req.Operation != "validate" {
+	if req.IdempotencyKey != "" && req.Operation != "validate" && req.Operation != contract.OperationIssue {
 		key := idempotencyKey{subscriptionID: req.SubscriptionID, idempotencyKey: req.IdempotencyKey, resource: req.Resource}
 		status, raw = h.idempotency.do(h.now(), key, run)
 	} else {
@@ -89,11 +89,11 @@ func panicValueForLog(p any, secrets []string) string {
 	}
 }
 
-// emitVerbEvent emits none for validate, since ProbeHealth dispatches validate in answer to a terminal event and a completed one would loop.
+// emitVerbEvent emits none for validate, since ProbeHealth dispatches validate in answer to a terminal event and a completed one would loop, and none for an issue, which changes nothing the subscription's events record.
 //
 // It emits no start event because the event log's partial unique index on (subscriptionId, idempotencyKey) would drop the terminal event under a start event that took its slot.
 func (h *Handler) emitVerbEvent(ctx context.Context, operation string, status int, resp contract.Response) {
-	if operation == "validate" {
+	if operation == "validate" || operation == contract.OperationIssue {
 		return
 	}
 	if status >= 200 && status < 300 {
@@ -113,6 +113,9 @@ func (h *Handler) emitVerbEvent(ctx context.Context, operation string, status in
 
 // dispatchVerb refuses with a 400 a request naming a resource of a block served over a single Resource, before the Resource is reached.
 func (h *Handler) dispatchVerb(ctx context.Context, req contract.Request, secrets []string) (int, contract.Response) {
+	if req.Operation == contract.OperationIssue {
+		return h.issue(ctx, req, secrets)
+	}
 	desired := req.Desired()
 
 	if h.declared != nil {

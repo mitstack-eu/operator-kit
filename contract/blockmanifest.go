@@ -126,10 +126,16 @@ func (m Manifest) ReleaseNote() string {
 	return ""
 }
 
+// The two types a ManifestAPIVersion manifest may declare: a capability serves more than one app and may issue each a credential, and a block serves one.
+const (
+	ManifestTypeBlock      = "block"
+	ManifestTypeCapability = "capability"
+)
+
 // BlockManifest is a block manifest under ManifestAPIVersion; a field without omitempty is required.
 type BlockManifest struct {
 	APIVersion string `json:"apiVersion"`
-	// Type must be "block".
+	// Type is ManifestTypeBlock or ManifestTypeCapability.
 	Type     string           `json:"type"`
 	Metadata ManifestMetadata `json:"metadata"`
 	Spec     ManifestSpec     `json:"spec"`

@@ -76,6 +76,17 @@ type Request struct {
 	RequirementTypes  map[string]string           `json:"requirementTypes,omitempty"`
 	// SettlesAt is the time of the state-changing verb a validate settles.
 	SettlesAt *time.Time `json:"settlesAt,omitempty"`
+
+	IssueAppID string `json:"issueAppId,omitempty"`
+}
+
+// OperationIssue asks a capability for one app's credential, beside the four lifecycle verbs.
+const OperationIssue = "issue"
+
+// Credential is what a capability issues one app: values that are secret, and when they stop working.
+type Credential struct {
+	Values    map[string]string `json:"values"`
+	ExpiresAt time.Time         `json:"expiresAt"`
 }
 
 type RecordedResource struct {
@@ -111,6 +122,8 @@ type Response struct {
 	Replaces []string `json:"replaces,omitempty"`
 	// ResourceSecretOutputs keeps each provided resource's secret outputs apart, since the merged SecretOutputs keeps one value of a key two resources share.
 	ResourceSecretOutputs map[string]map[string]string `json:"resourceSecretOutputs,omitempty"`
+	// Credential answers an issue alone.
+	Credential *Credential `json:"credential,omitempty"`
 }
 
 // ResourceOutcome is what a verb's calls did to one declared resource; a nil call did not run.
@@ -194,6 +207,10 @@ func requiredRequestFields(r Request) []requiredField {
 		)
 	}
 
+	if r.Operation == OperationIssue {
+		fields = append(fields, requiredField{"issueAppId", r.IssueAppID != ""})
+	}
+
 	if br := r.BuildRequest; br != nil {
 		fields = append(fields,
 			requiredField{"buildRequest.id", br.ID != ""},
@@ -212,10 +229,11 @@ type envelopeTimes struct {
 }
 
 var validOperations = map[string]bool{
-	"subscribe":   true,
-	"unsubscribe": true,
-	"upgrade":     true,
-	"validate":    true,
+	"subscribe":    true,
+	"unsubscribe":  true,
+	"upgrade":      true,
+	"validate":     true,
+	OperationIssue: true,
 }
 
 // DecodeRequest decodes raw into a Request validated against envelope.schema.json, naming the JSON field in every error.
@@ -247,7 +265,7 @@ func DecodeRequest(raw []byte) (Request, error) {
 
 	if !validOperations[req.Operation] {
 		return Request{}, fmt.Errorf(
-			"contract: envelope field %q must be one of subscribe, unsubscribe, upgrade, validate, got %q",
+			"contract: envelope field %q must be one of subscribe, unsubscribe, upgrade, validate, issue, got %q",
 			"operation", req.Operation)
 	}
 

@@ -23,14 +23,15 @@ var typeIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0
 
 var retiredEntryKeys = []string{"kind", "in", "on", "inputs"}
 
-// decodeBlockManifest also holds what the types cannot say: type is "block", names and references are unique, and every provides entry names a resource.
+// decodeBlockManifest also holds what the types cannot say: type is block or capability, names and references are unique, and every provides entry names a resource.
 func decodeBlockManifest(root *yamlNode) (*BlockManifest, error) {
 	b := &BlockManifest{}
 	if err := v1betaDecoder.decode(root, reflect.ValueOf(b).Elem(), ""); err != nil {
 		return nil, err
 	}
-	if b.Type != "block" {
-		return nil, fmt.Errorf("type is %q, but the type of a %s manifest must be \"block\"", b.Type, ManifestAPIVersion)
+	if b.Type != ManifestTypeBlock && b.Type != ManifestTypeCapability {
+		return nil, fmt.Errorf("type is %q, but the type of a %s manifest must be %q or %q",
+			b.Type, ManifestAPIVersion, ManifestTypeBlock, ManifestTypeCapability)
 	}
 	names := make(map[string]bool, len(b.Spec.Resources))
 	for i, r := range b.Spec.Resources {

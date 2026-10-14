@@ -3,7 +3,7 @@
   "$id": "https://mitstack.dev/schemas/lifecycle/envelope.schema.json",
   "title": "mitstack lifecycle webhook envelope",
   "description": "Versioned wire-shape contract for the JSON body mitstack's lifecycle engine POSTs to a block owner's registered webhook endpoint for each of the four alpha lifecycle verbs (subscribe/unsubscribe/upgrade/validate). Mirrors api/internal/lifecycle.Request byte-for-byte. Additive-friendly: additionalProperties is true at every level so a new optional Request field never breaks an existing operator or this contract test.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -18,7 +18,13 @@
     "resourceIdentity": ["resource"],
     "resourceType": ["resource"]
   },
+  "if": {"properties": {"operation": {"const": "issue"}}, "required": ["operation"]},
+  "then": {"required": ["issueAppId"], "properties": {"issueAppId": {"minLength": 1}}},
   "properties": {
+    "issueAppId": {
+      "type": "string",
+      "description": "The app an issue asks the capability to issue a credential for. Required on an issue."
+    },
     "resource": {
       "type": "string",
       "description": "The name of the one resource the block's manifest declares that a validate observes. Omitted, the verb runs on every declared resource, in creation order and in reverse for a teardown. A block refuses a name on any verb but validate, and a block served as one resource refuses any name."
@@ -60,8 +66,8 @@
     },
     "operation": {
       "type": "string",
-      "description": "The lifecycle verb being dispatched.",
-      "enum": ["subscribe", "unsubscribe", "upgrade", "validate"]
+      "description": "The lifecycle verb being dispatched, or issue, which asks a capability for one app's credential.",
+      "enum": ["subscribe", "unsubscribe", "upgrade", "validate", "issue"]
     },
     "subscriptionId": {
       "type": "string",

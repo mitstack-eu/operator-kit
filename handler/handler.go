@@ -48,6 +48,11 @@ type ReplacementPlanner interface {
 	PlanReplacements(ctx context.Context, d contract.Desired) ([]string, error)
 }
 
+// CredentialIssuer, when a capability's block-level Resource implements it, answers an issue with the named app's credential and when it expires.
+type CredentialIssuer interface {
+	IssueCredential(ctx context.Context, d contract.Desired, appID string) (contract.Credential, error)
+}
+
 // Hook is an extension point registered at one of the four HookXxx points.
 type Hook func(ctx context.Context, d contract.Desired) error
 
@@ -106,6 +111,7 @@ type Handler struct {
 
 	retainsOnUnsubscribe bool
 	types                contract.TypeSnapshot
+	capability           bool
 
 	jwksURL   string
 	publicKey func(kid string) (ed25519.PublicKey, error)
@@ -163,6 +169,7 @@ func New(cfg Config) (*Handler, error) {
 		provided:             declared.provided,
 		retainsOnUnsubscribe: declared.retainsOnUnsubscribe,
 		types:                cfg.Types,
+		capability:           declared.capability,
 		jwksURL:              cfg.JWKSURL,
 		publicKey:            cfg.PublicKey,
 		replay:               cfg.Replay,
