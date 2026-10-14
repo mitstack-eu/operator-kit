@@ -412,6 +412,23 @@ func TestGitHubTagged_CountsTheTrailerCommitsOnTheGitOpsRepositoryARequirementBi
 	}
 }
 
+func TestGitHubTagged_CountsTheCommitTypeOnlyWhileTheBranchHoldsAPathATrailerCommitWrote(t *testing.T) {
+	api := ghWorld()
+	api.commits["acme/app"] = []observe.GitHubCommitPaths{{Message: "shop: deploy" + ghTrailer}, {Message: "shop: remove the app" + ghTrailer}}
+	lister := ghLister(api)
+	lister.CommitType = "github.gitops-commit"
+
+	got, err := lister.ListTagged(context.Background(), ghDesired(), ghSub)
+
+	if err != nil {
+		t.Fatalf("ListTagged: %v", err)
+	}
+	removed := observe.Tagged{Type: "github.gitops-commit", ID: "acme/app"}
+	if n := countTagged(got, removed); n != 0 {
+		t.Errorf("%+v listed %d times; want none, since the branch holds no path its trailer commits wrote; ListTagged = %+v", removed, n, got)
+	}
+}
+
 func TestGitHubTagged_CountsNoBoundWebhookWithoutAProcessorURL(t *testing.T) {
 	api := ghWorld()
 	api.hooks["acme/app"] = append(api.hooks["acme/app"], observe.GitHubWebhook{ID: "23", URL: ""})
