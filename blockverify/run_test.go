@@ -353,3 +353,28 @@ func TestRun_UsageError_StandaloneFlagWithNoTarget(t *testing.T) {
 		t.Fatalf("want exit 2 when --standalone has no target, got %d\nstdout:\n%s", exit, stdout)
 	}
 }
+
+// The fixture serves a copy of hcloud-k3s-cluster's manifest typed capability, beside the platform's types it names.
+func TestRun_StandalonePassesACapabilityThatImplementsNoIssueHandler(t *testing.T) {
+	const fixture = "testdata/capability-without-issue-handler"
+	files := kitV1FixtureFiles(t)
+	delete(files, "main.go")
+	entries, err := os.ReadDir(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		raw, err := os.ReadFile(filepath.Join(fixture, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[e.Name()] = string(raw)
+	}
+	dir := newFixtureFrom(t, files)
+
+	stdout, exit := runBlockverify(t, "--json", "--standalone", dir)
+
+	if r := decodeReport(t, stdout); exit != 0 || r.Verdict != "pass" {
+		t.Errorf("exit %d, verdict %q; want 0 and pass\nstdout:\n%s", exit, r.Verdict, stdout)
+	}
+}

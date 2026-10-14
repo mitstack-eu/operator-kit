@@ -238,14 +238,19 @@ func wantEveryResourceObserved(t *testing.T, resp contract.Response, state contr
 	}
 }
 
+// A capability that implements no issue handler is served as a block is.
 func TestBlockLevel_SubscribeAndUpgradeRunOneEnsureThenObserveEachResourceByName(t *testing.T) {
-	for _, op := range []string{"subscribe", "upgrade"} {
-		t.Run(op, func(t *testing.T) {
+	for _, tc := range []struct{ name, manifest, op string }{
+		{"block subscribe", blockLevelManifest, "subscribe"}, {"block upgrade", blockLevelManifest, "upgrade"},
+		{"capability subscribe", capabilityManifest, "subscribe"}, {"capability upgrade", capabilityManifest, "upgrade"},
+	} {
+		op := tc.op
+		t.Run(tc.name, func(t *testing.T) {
 			cloud := newFakeCloud()
 			block := &blockResource{cloud: cloud}
 			obs := blockObservers(cloud)
 
-			status, resp := serveBlockLevel(t, block, obs, op, nil)
+			status, resp := serveBlockLevel(t, block, obs, op, nil, withManifest(tc.manifest))
 			if status != http.StatusOK {
 				t.Fatalf("status = %d, want 200; response %+v", status, resp)
 			}
@@ -1470,6 +1475,88 @@ func TestBlockLevel_StopsBeforeTheNextResourceOnceTheContextIsDone(t *testing.T)
 			}
 			if tc.operation != "unsubscribe" && !resp.Pending {
 				t.Errorf("pending = false, want true: %q was never reached", tc.notReached)
+			}
+		})
+	}
+}
+
+var capabilityManifest = strings.Replace(blockLevelManifest, "type: block\n", "type: capability\n", 1)
+
+func withManifest(manifest string) func(*handler.Config) {
+	return func(cfg *handler.Config) { cfg.Manifest = []byte(manifest) }
+}
+
+var issuedExpiry = time.Date(2026, 10, 14, 13, 0, 0, 0, time.UTC)
+
+// issuingBlock issues every named app the credential it holds, and keeps the apps it issued to.
+type issuingBlock struct {
+	*blockResource
+	credential contract.Credential
+	apps       []string
+}
+
+func (b *issuingBlock) IssueCredential(ctx context.Context, d contract.Desired, appID string) (contract.Credential, error) {
+	b.apps = append(b.apps, appID)
+	return b.credential, nil
+}
+
+func newIssuingBlock(values map[string]string, expiresAt time.Time) *issuingBlock {
+	return &issuingBlock{blockResource: &blockResource{cloud: newFakeCloud()}, credential: contract.Credential{Values: values, ExpiresAt: expiresAt}}
+}
+
+// Each issue reaches the capability, since a credential replayed from the idempotency cache could be one that has expired.
+func TestBlockLevel_IssueAnswersEachCallWithTheCredentialTheCapabilityIssuesTheNamedApp(t *testing.T) {
+	block := newIssuingBlock(map[string]string{"accessToken": "tok-app-shop"}, issuedExpiry)
+	s := kittest.NewSigner(t, "kid-issue", 18)
+	cfg := blockLevelConfig(t, s, block, asObservers(blockObservers(block.cloud)))
+	withManifest(capabilityManifest)(&cfg)
+	h, err := handler.New(cfg)
+	if err != nil {
+		t.Fatalf("handler.New: %v", err)
+	}
+
+	for _, nonce := range []string{"nonce-issue-1", "nonce-issue-2"} {
+		status, raw := postHook(t, h, s, envelope(t, s, nonce, map[string]any{"operation": "issue", "issueAppId": "app-shop", "idempotencyKey": "issue-1"}))
+
+		assertConforms(t, raw)
+		c := decodeResponse(t, raw).Credential
+		if status != http.StatusOK || c == nil || !reflect.DeepEqual(c.Values, block.credential.Values) || !c.ExpiresAt.Equal(issuedExpiry) {
+			t.Errorf("%s: status %d, credential %+v; want 200 and %+v", nonce, status, c, block.credential)
+		}
+	}
+	if !slices.Equal(block.apps, []string{"app-shop", "app-shop"}) || block.ensureCalls+block.deleteCalls != 0 {
+		t.Errorf("issued to %q with %d Ensure and %d Delete calls, want app-shop once per call and neither verb",
+			block.apps, block.ensureCalls, block.deleteCalls)
+	}
+}
+
+func TestBlockLevel_IssueIsRefusedUnlessACapabilityIssuesACredentialWithItsExpiry(t *testing.T) {
+	token, app := map[string]string{"accessToken": "tok-app-shop"}, map[string]any{"issueAppId": "app-shop"}
+	withSecret := map[string]any{"issueAppId": "app-shop", "secretInputs": map[string]any{"connectionKey": "conn-key-9f2"}}
+	cases := []struct {
+		name, manifest string
+		resource       handler.Resource
+		extra          map[string]any
+		status         int
+		want           string
+	}{
+		{"a block", blockLevelManifest, newIssuingBlock(token, issuedExpiry), app, http.StatusBadRequest, "refused:not-a-capability"},
+		{"a capability with no issue handler", capabilityManifest, &blockResource{cloud: newFakeCloud()}, app, http.StatusBadRequest, "refused:issues-no-credential"},
+		{"an issue naming no app", capabilityManifest, newIssuingBlock(token, issuedExpiry), nil, http.StatusBadRequest, `"issueAppId"`},
+		{"a credential with no expiry", capabilityManifest, newIssuingBlock(token, time.Time{}), app, http.StatusInternalServerError, "expiry"},
+		{"a credential with no value", capabilityManifest, newIssuingBlock(nil, issuedExpiry), app, http.StatusInternalServerError, "no value"},
+		{"a credential repeating a secret the request carried", capabilityManifest,
+			newIssuingBlock(map[string]string{"accessToken": "conn-key-9f2"}, issuedExpiry), withSecret, http.StatusInternalServerError, "accessToken"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, resp := serveBlockLevel(t, tc.resource, blockObservers(newFakeCloud()), "issue", tc.extra, withManifest(tc.manifest))
+
+			if status != tc.status || resp.Credential != nil {
+				t.Fatalf("status = %d, credential = %+v; want %d and none", status, resp.Credential, tc.status)
+			}
+			if got := resp.Error + " " + resp.StatusDetail; !strings.Contains(got, tc.want) || strings.Contains(got, "conn-key-9f2") {
+				t.Errorf("error and statusDetail = %q, want them to name %s and carry no secret", got, tc.want)
 			}
 		})
 	}

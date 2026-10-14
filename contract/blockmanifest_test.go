@@ -11,6 +11,7 @@ package contract_test
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -500,6 +501,29 @@ func requireRefusedNaming(t *testing.T, raw []byte, wants ...string) {
 	}
 }
 
+// The cluster's copy is hcloud-k3s-cluster's 4.1.0 manifest with its type set to capability and its release note cut to 4.1.0's entry.
+func TestParseManifest_V1BetaReadsTypeBlockOrCapability(t *testing.T) {
+	cluster, err := os.ReadFile("../blockverify/testdata/capability-without-issue-handler/manifest.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, want string
+		raw        []byte
+	}{
+		{"the base fixture", contract.ManifestTypeBlock, []byte(betaManifest)},
+		{"the base fixture typed capability", contract.ManifestTypeCapability, editBeta(t, "type: block\n", "type: capability\n")},
+		{"hcloud-k3s-cluster typed capability", contract.ManifestTypeCapability, cluster},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseBeta(t, tc.raw).Type; got != tc.want {
+				t.Errorf("Type = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseManifest_V1BetaAcceptsTheBaseFixture(t *testing.T) {
 	if b := parseBeta(t, []byte(betaManifest)); len(b.Spec.Resources) != 2 {
 		t.Fatalf("betaManifest gave resources %+v, want two", b.Spec.Resources)
@@ -539,7 +563,7 @@ func TestParseManifest_V1BetaRefusesAMissingRequiredFieldNamingItsPath(t *testin
 		edits []string
 	}{
 		{"type absent", []string{"type"}, []string{"type: block\n", ""}},
-		{"type not block", []string{"type", "block"}, []string{"type: block\n", "type: component\n"}},
+		{"type neither block nor capability", []string{`type is "component"`, `"block"`, `"capability"`}, []string{"type: block\n", "type: component\n"}},
 		{"metadata.id absent", []string{"metadata.id"}, []string{"  id: fixture-block\n", ""}},
 		{"spec.version absent", []string{"spec.version"}, []string{"  version: 1.0.0\n", ""}},
 		{"a requirement without a type", []string{"spec.requires[0].type"}, []string{"    - type: aws.ec2-instance\n", "    - name: primary\n"}},

@@ -1,0 +1,71 @@
+# hcloud-k3s-cluster runs a single-node k3s cluster on Hetzner for one app.
+# On a Cloud server, subscribe creates a private network, a firewall with no
+# rule, a load balancer that forwards TCP 80 and 443 to Traefik over that
+# network, a private cluster repository on GitHub, a public IPv4 primary IP,
+# and one Ubuntu server on that IP whose user data installs k3s with Cilium
+# and Argo CD, which syncs the cluster from that repository.
+#
+# Given robotServerNumber, subscribe instead adopts that dedicated server
+# through the Robot webservice. It names the server with the subscription's
+# tag, couples a vSwitch to the cluster network, points the load balancer at
+# the server's vSwitch address, installs Ubuntu 24.04 from the rescue system
+# with the same user data as a cloud-init NoCloud seed, and sets a Robot
+# firewall that admits only replies and the load balancer.
+#
+# Every Hetzner Cloud resource carries the subscription id as a label, every
+# Robot resource carries it in its name, and the repository carries it as a
+# topic. Upgrade converges what is missing and never replaces or reinstalls a
+# server. Unsubscribe deletes the Cloud resources, releases a dedicated server
+# without cancelling it, and finishes once the observers read every resource
+# absent.
+apiVersion: mitstack/v1beta
+type: capability
+metadata:
+  id: hcloud-k3s-cluster
+  name: Hetzner k3s cluster
+  owner: mitstack
+spec:
+  version: 4.1.0
+  releaseClass: feature
+  releaseNote: >
+    4.1.0: a subscription that sets hostsPlatform to true, mitstack's own
+    cluster alone, names openbaoSealKeyRecipient, an armored OpenPGP public
+    key, and githubAppId and githubAppInstallationId, a GitHub App that reads
+    the cluster repository. Its new node starts k3s without waiting for
+    enrolment, which a timer retries until the platform answers, and boots
+    OpenBao, External Secrets and Traefik from cluster-bases v0.2.0 with every
+    image by digest. OpenBao unseals from a static key the operator mints and
+    writes root-only on the node, and hands back only encrypted to the
+    recipient, in openbao-seal-key.asc in the cluster repository, the
+    operator's log and the output openbaoSealKey. Argo CD's repository token
+    comes from the App's key in OpenBao through External Secrets, and the
+    node agent runs with MITSTACK_PATCH_CLUSTER_REPOSITORY=false. Every new
+    cluster pins the node-agent image that carries that switch, and its
+    admission policies leave the openbao and external-secrets
+    namespaces alone, and a cluster without the param renders the user data
+    4.0.0 renders.
+  description: >
+    Runs a single-node k3s cluster on a Hetzner Cloud server, or on a
+    dedicated server it adopts through Robot, with Cilium for networking and
+    Argo CD syncing the cluster from a private GitHub repository the block
+    creates for the app.
+  lifecycle:
+    endpoint: https://api.mitstack.dev/operators/hcloud-k3s-cluster/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
+  resources:
+    - hetzner.network
+    - name: hetzner.firewall
+      type: [hetzner.firewall, hetzner.robot-firewall]
+    - hetzner.load-balancer
+    - name: github.repository
+      type: github.gitops-repository
+    - name: github.gitops-commit
+      type: github.gitops-commit
+    - name: hetzner.primary-ip
+      type: [hetzner.primary-ip, hetzner.vswitch]
+    - name: hetzner.server
+      type: [hetzner.server, hetzner.dedicated-server]
+    - hetzner.k3s-cluster
+  provides:
+    - hetzner.k3s-cluster

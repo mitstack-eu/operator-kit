@@ -19,7 +19,7 @@ type goldenOutcome struct {
 // goes unpinned.
 var wantRequestGoldenOutcomes = map[string]goldenOutcome{
 	"invalid-missing-nonce": {refusal: `contract: envelope field "nonce" is required`},
-	"invalid-unknown-verb":  {refusal: `contract: envelope field "operation" must be one of subscribe, unsubscribe, upgrade, validate, got "reticulate"`},
+	"invalid-unknown-verb":  {refusal: `contract: envelope field "operation" must be one of subscribe, unsubscribe, upgrade, validate, issue, got "reticulate"`},
 	"subscribe": {encoded: `{"operation":"subscribe","subscriptionId":"sub_a1b2c3d4e5","idempotencyKey":"sub_a1b2c3d4e5:subscribe:f6a7b8c9","blockId":"blk_aws_app_infra","blockVersion":"1.0.0","orgId":"org_acme","appId":"app_webapp01",` +
 		`"params":{"appName":"myapp","domain":"myapp.apps.mitstack.dev","repo":"acme/myapp"},"instances":{"aws":{"name":"Consumer AWS","endpoint":"https://aws.example.com","config":{"region":"eu-west-1"}}},` +
 		`"obo":"eyJvcmdfaWQiOiJvcmdfYWNtZSJ9.c2lnbmF0dXJlLXBsYWNlaG9sZGVy","secretInputs":{"dbPassword":"golden-fixture-not-a-secret"},` +

@@ -253,8 +253,8 @@ func TestEnvelopeSchema_DeclaresTheBlockLevelFieldsAndRaisesItsMinorVersion(t *t
 	if err := json.Unmarshal(contract.EnvelopeSchema, &doc); err != nil {
 		t.Fatalf("contract.EnvelopeSchema is not valid JSON: %v", err)
 	}
-	if doc["version"] != "1.4.0" {
-		t.Errorf("envelope.schema.json version = %v, want 1.4.0: it drops resourceInputs, which the engine never sends, a minor change from 1.3.0", doc["version"])
+	if doc["version"] != "1.5.0" {
+		t.Errorf("envelope.schema.json version = %v, want 1.5.0: it adds the issue operation and its issueAppId, a minor change from 1.4.0", doc["version"])
 	}
 	if req, ok := doc["required"].([]any); ok {
 		for _, r := range req {
