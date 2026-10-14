@@ -163,7 +163,7 @@ type GitHubTagAPI interface {
 	Commits(ctx context.Context, d contract.Desired, repo string) ([]GitHubCommitPaths, error)
 }
 
-// GitHubTagged lists what a subscription holds on the repositories carrying its topic and on the one its github.repository requirement binds, where a webhook counts only when it points at ProcessorURL.
+// GitHubTagged lists what a subscription holds on the repositories carrying its topic and on those its github.repository or github.gitops-repository requirements bind, where a webhook counts only when it points at ProcessorURL.
 type GitHubTagged struct {
 	API GitHubTagAPI
 	// RepositoryType defaults to github.repository.
@@ -291,11 +291,14 @@ func carriesTrailer(message, trailer string) bool {
 	return false
 }
 
-// boundRepositories are the repos the requirements met by a github.repository bind, in reference order.
+// boundRepositoryTypes are the requirement types whose bound repository a block may write to without having created it.
+var boundRepositoryTypes = []string{"github.repository", "github.gitops-repository"}
+
+// boundRepositories are the repos the requirements of a boundRepositoryTypes type bind, in reference order.
 func boundRepositories(d contract.Desired) []string {
 	var refs []string
 	for ref, typ := range d.RequirementTypes {
-		if typ == "github.repository" {
+		if slices.Contains(boundRepositoryTypes, typ) {
 			refs = append(refs, ref)
 		}
 	}

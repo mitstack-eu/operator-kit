@@ -503,9 +503,11 @@ serves. A repository counts when it carries the topic
 `mitstack-sub-3e304e324312`. On such a repository, the lister also reports
 every webhook, each Actions secret and variable under a name the block lists
 in `Secrets` or `Variables`, and what each commit closing with the trailer
-`observe.GitHubSubscriptionTrailer` gives wrote. On the repository that the
-block's `github.repository` requirement binds, it reports the same, except
-that a webhook counts only when it points at `ProcessorURL`. A committed file
+`observe.GitHubSubscriptionTrailer` gives wrote. On a repository that the
+block's `github.repository` or `github.gitops-repository` requirement binds,
+it reports the same, except that a webhook counts only when it points at
+`ProcessorURL`, and the repository itself counts only when it carries the
+topic. A committed file
 counts as a `github.workflow-file`, unless the block sets `CommitType`, which
 makes a repository's trailer commits count once as that type.
 `kittest.ListerProvider` serves such a lister to `kittest.AssertBlock`. The
