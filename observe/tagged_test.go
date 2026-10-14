@@ -201,12 +201,13 @@ func (f *fakeGitHub) Commits(_ context.Context, _ contract.Desired, repo string)
 func ghWorld() *fakeGitHub {
 	return &fakeGitHub{
 		topics: map[string][]string{
-			"acme/app-ci":    {"team-ci", "mitstack-sub-3e304e324312"},
-			"acme/app":       {"production"},
-			"acme/untagged":  nil,
-			"acme/other-ci":  {"mitstack-sub-9f9f9f9f9f9f"},
-			"acme/longer-ci": {"mitstack-sub-3e304e3243129"},
-			"acme/elsewhere": nil,
+			"acme/app-ci":     {"team-ci", "mitstack-sub-3e304e324312"},
+			"acme/app":        {"production"},
+			"acme/untagged":   nil,
+			"acme/other-ci":   {"mitstack-sub-9f9f9f9f9f9f"},
+			"acme/longer-ci":  {"mitstack-sub-3e304e3243129"},
+			"acme/elsewhere":  nil,
+			"acme/app-gitops": {"mitstack-sub-5a5a5a5a5a5a"},
 		},
 		hooks: map[string][]observe.GitHubWebhook{
 			"acme/app-ci":    {{ID: "11", URL: "https://example.com/any-hook"}},
