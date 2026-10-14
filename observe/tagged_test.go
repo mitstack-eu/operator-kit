@@ -387,6 +387,31 @@ func TestGitHubTagged_ReportsATaggedRepositoryAsTheTypeTheBlockNames(t *testing.
 	}
 }
 
+func TestGitHubTagged_CountsTheTrailerCommitsOnTheGitOpsRepositoryARequirementBindsButNotTheRepository(t *testing.T) {
+	api := ghWorld()
+	api.topics["acme/app-gitops"] = []string{"mitstack-sub-5a5a5a5a5a5a"}
+	api.commits["acme/app-gitops"] = []observe.GitHubCommitPaths{{Message: "shop: deploy" + ghTrailer, Paths: []string{"deployment.json"}}}
+	d := ghDesired()
+	d.RequirementTypes["gitops"] = "github.gitops-repository"
+	d.Bindings["gitops"] = map[string]string{"repo": "acme/app-gitops"}
+	lister := ghLister(api)
+	lister.RepositoryType, lister.CommitType = "github.gitops-repository", "github.gitops-commit"
+
+	got, err := lister.ListTagged(context.Background(), d, ghSub)
+
+	if err != nil {
+		t.Fatalf("ListTagged: %v", err)
+	}
+	commits := observe.Tagged{Type: "github.gitops-commit", ID: "acme/app-gitops"}
+	if n := countTagged(got, commits); n != 1 {
+		t.Errorf("%+v listed %d times; want once, the trailer commits on the repository the github.gitops-repository requirement binds; ListTagged = %+v", commits, n, got)
+	}
+	repository := observe.Tagged{Type: "github.gitops-repository", ID: "acme/app-gitops"}
+	if n := countTagged(got, repository); n != 0 {
+		t.Errorf("%+v listed %d times; want none, since another subscription's topic marks it as that subscription's; ListTagged = %+v", repository, n, got)
+	}
+}
+
 func TestGitHubTagged_CountsNoBoundWebhookWithoutAProcessorURL(t *testing.T) {
 	api := ghWorld()
 	api.hooks["acme/app"] = append(api.hooks["acme/app"], observe.GitHubWebhook{ID: "23", URL: ""})
