@@ -1177,6 +1177,10 @@
         {
           "class": "permanent",
           "cause": "the branch is protected against direct pushes"
+        },
+        {
+          "class": "permanent",
+          "cause": "the repository deletes head branches on merge, which removes the branch that carried the commit"
         }
       ],
       "version": 1
