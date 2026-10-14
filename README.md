@@ -509,7 +509,8 @@ it reports the same, except that a webhook counts only when it points at
 `ProcessorURL`, and the repository itself counts only when it carries the
 topic. A committed file
 counts as a `github.workflow-file`, unless the block sets `CommitType`, which
-makes a repository's trailer commits count once as that type.
+makes a repository's trailer commits count once as that type, while the
+branch still holds a path they wrote.
 `kittest.ListerProvider` serves such a lister to `kittest.AssertBlock`. The
 tagging guard then hands the lister the `contract.Desired` it holds, which
 carries the requirement bindings, and `Provider` itself does not change.

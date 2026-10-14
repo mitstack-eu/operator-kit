@@ -172,7 +172,7 @@ type GitHubTagged struct {
 	// Secrets and Variables are the fixed names the block writes, so another block's secret on the same repository is not counted.
 	Secrets   []string
 	Variables []string
-	// CommitType, when set, counts a repository's trailer commits once as that type; otherwise each path they wrote counts as a github.workflow-file.
+	// CommitType, when set, counts a repository's trailer commits once as that type while the branch holds a path they wrote; otherwise each path they wrote counts as a github.workflow-file.
 	CommitType string
 }
 
@@ -255,15 +255,13 @@ func fixedNames(typ, repo string, present, fixed []string) []Tagged {
 
 func (l GitHubTagged) committed(repo string, commits []GitHubCommitPaths, trailer string) []Tagged {
 	var paths []string
-	trailed := false
 	for _, c := range commits {
 		if carriesTrailer(c.Message, trailer) {
-			trailed = true
 			paths = append(paths, c.Paths...)
 		}
 	}
 	if l.CommitType != "" {
-		if trailed {
+		if len(paths) > 0 {
 			return []Tagged{{Type: l.CommitType, ID: repo}}
 		}
 		return nil
