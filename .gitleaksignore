@@ -1,0 +1,16 @@
+0a0242c819773e65e06bd30d48edc0997efd3e4c:gitops/commit_test.go:github-app-token:272
+1eafcb44c38f352907f53bc9c179d32e9496e7f3:gitops/commit_test.go:github-app-token:272
+48b05cdfbecfce449c4672fcb7688175759f667e:gitops/notification_test.go:generic-api-key:225
+77bb4e6ee3e9e4a5434f3f4a66910ec7a878d992:provenance/goldens/invalid-unknown-field.json:jwt:22
+a1b2fc8c7ffee6596695b938f93ce5be0a66f6c7:kittest/secretleak_test.go:generic-api-key:26
+b845f0a487cac6b6ce7a0a157951a2a7ee114682:provenance/goldens/invalid-failed-conformance.json:jwt:21
+b845f0a487cac6b6ce7a0a157951a2a7ee114682:provenance/goldens/invalid-other-identity.json:jwt:21
+b845f0a487cac6b6ce7a0a157951a2a7ee114682:provenance/goldens/invalid-tampered-payload.json:jwt:21
+b845f0a487cac6b6ce7a0a157951a2a7ee114682:provenance/goldens/invalid-unknown-key.json:jwt:21
+b845f0a487cac6b6ce7a0a157951a2a7ee114682:provenance/goldens/record.golden.json:jwt:21
+dcacb465dfa9d46f0d2e897907cf9020164156c4:safe/safe_test.go:generic-api-key:194
+e35ddce103d1b1ea321df5e543ad51088d107bd5:handler/secrets_test.go:generic-api-key:143
+e35ddce103d1b1ea321df5e543ad51088d107bd5:handler/secrets_test.go:generic-api-key:147
+eb57135e599cc787d96a353c2cd728135a0b9222:handler/observewithrequest_test.go:generic-api-key:148
+eb57135e599cc787d96a353c2cd728135a0b9222:handler/observewithrequest_test.go:generic-api-key:177
+eb57135e599cc787d96a353c2cd728135a0b9222:handler/outputsecrets_test.go:generic-api-key:85

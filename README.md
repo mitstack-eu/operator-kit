@@ -980,3 +980,8 @@ fails naming any file whose code differs from the base. The third prints the
 comment share of a file or directory and needs no base. The check reads the
 working tree as the head, so a file you moved without `git mv` is judged as a
 new file until you stage the move.
+
+## Licence
+
+The kit is licensed under the Apache License, Version 2.0, whose full text is
+in [the LICENSE file](LICENSE).
