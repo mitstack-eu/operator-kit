@@ -46,8 +46,9 @@ never fails a block that has not picked it up yet.
 ## Run it locally
 
 The kit is a public module, so Go fetches it with no credential. Run the
-suites from your block's directory, naming the kit release to run. `--standalone` tells `blockverify` to judge that one directory on its
-own, and it is the only mode the command has:
+suites from your block's directory, naming the kit release to run.
+`--standalone` tells `blockverify` to judge that one directory on its own,
+and it is the only mode the command has:
 
 ```sh
 go run github.com/mitstack-eu/operator-kit/v2/blockverify@v2.1.0 --standalone .
