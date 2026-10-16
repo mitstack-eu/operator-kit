@@ -897,10 +897,11 @@ func TestWorkflow_ASilentProbeRunsNoWriteStep(t *testing.T) {
 func TestWorkflow_JobsFetchThePublicKitWithNoCredential(t *testing.T) {
 	jobs := block(readWorkflow(t), "jobs")
 	for _, tc := range []struct {
-		job  string
-		want []string
+		job     string
+		idToken bool
+		want    []string
 	}{
-		{"conformance", []string{
+		{"conformance", false, []string{
 			"actions/checkout",
 			"actions/setup-go",
 			"go vet",
@@ -914,7 +915,7 @@ func TestWorkflow_JobsFetchThePublicKitWithNoCredential(t *testing.T) {
 			"blockverify (standalone contract check)",
 			"Upload blockverify report",
 		}},
-		{"publish", []string{
+		{"publish", true, []string{
 			"actions/checkout",
 			"actions/setup-go",
 			"Configure AWS credentials",
@@ -932,10 +933,13 @@ func TestWorkflow_JobsFetchThePublicKitWithNoCredential(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.job, func(t *testing.T) {
-			blocks := stepBlocks(block(jobs, tc.job))
+			jobBlock := block(jobs, tc.job)
+			blocks := stepBlocks(jobBlock)
 
 			got := stepLabels(blocks)
 			checkout := indexOfStepByName(blocks, "Checkout operator-kit")
+			permissions := block(jobBlock, "permissions")
+			build := indexOfStepByName(blocks, "Build and push image")
 
 			if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
 				t.Errorf("%s steps =\n  %s\nwant\n  %s", tc.job, strings.Join(got, "\n  "), strings.Join(tc.want, "\n  "))
@@ -945,6 +949,12 @@ func TestWorkflow_JobsFetchThePublicKitWithNoCredential(t *testing.T) {
 			}
 			if with := block(blocks[checkout], "with"); regexp.MustCompile(`(?m)^\s*token:`).MatchString(with) {
 				t.Errorf("%s kit checkout with: =\n%s\nwant no token key, so the public kit is read with the run's default token", tc.job, with)
+			}
+			if hasIDToken := strings.Contains(permissions, "id-token: write"); hasIDToken != tc.idToken {
+				t.Errorf("%s permissions =\n%s\nid-token: write granted = %v, want %v, since only the publish job assumes an AWS role and mints the record's OIDC token", tc.job, permissions, hasIDToken, tc.idToken)
+			}
+			if build >= 0 && strings.Contains(runScript(blocks[build]), "--secret") {
+				t.Errorf("%s image build run =\n%s\nwant no --secret, so the image fetches the public kit with no credential", tc.job, runScript(blocks[build]))
 			}
 		})
 	}
