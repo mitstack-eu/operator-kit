@@ -208,9 +208,8 @@ go get github.com/mitstack-eu/operator-kit/v2@vX.Y.Z
 A block on a v1 release keeps working, because v2 changes the Go API and
 leaves the wire contract alone. It moves to v2 on its next change.
 
-The repository is private, so the fetch needs `GOPRIVATE=github.com/mitstack-eu`
-in the environment and a credential able to read this repository (an SSH key
-or a token configured for `github.com` in `~/.netrc` or `git config`).
+The repository is public, so `go get` fetches it through the Go module proxy
+with no credential and no `GOPRIVATE` setting.
 
 ## The typed contract
 

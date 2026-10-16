@@ -59,104 +59,12 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ inputs.go-version }}
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ vars.AWS_BLOCK_PUBLISH_ROLE_ARN }}
-          aws-region: ${{ inputs.aws-region }}
-
-      # A short-lived GitHub App installation token, downscoped to
-      # contents:read on operator-kit, so `go mod download` can fetch the
-      # private module this block depends on. Credentials live in prod SSM,
-      # reached over this repo's own per-block AWS OIDC role.
-      - name: Mint kit token
-        id: kit_token
-        run: |
-          set -euo pipefail
-          APP_ID=$(aws ssm get-parameter --with-decryption --name /mitstack/MITSTACK_GITHUB_APP_ID --query Parameter.Value --output text)
-          aws ssm get-parameter --with-decryption --name /mitstack/MITSTACK_GITHUB_APP_PRIVATE_KEY --query Parameter.Value --output text | sed 's/\\n/\n/g' > /tmp/app-key.pem
-          chmod 600 /tmp/app-key.pem
-
-          b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-          NOW=$(date +%s)
-          JWT_HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
-          JWT_PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$((NOW-60))" "$((NOW+540))" "$APP_ID" | b64url)
-          JWT_SIG=$(printf '%s.%s' "$JWT_HEADER" "$JWT_PAYLOAD" | openssl dgst -sha256 -sign /tmp/app-key.pem -binary | b64url)
-          JWT="$JWT_HEADER.$JWT_PAYLOAD.$JWT_SIG"
-          rm -f /tmp/app-key.pem
-
-          INSTALLATION_ID=$(curl -fsSL -H "Authorization: Bearer $JWT" https://api.github.com/app/installations \
-            | jq -r '.[] | select(.account.login == "mitstack-eu") | .id')
-          RESPONSE=$(curl -fsSL -X POST \
-            -H "Authorization: Bearer $JWT" \
-            -H "Accept: application/vnd.github+json" \
-            -d '{"repositories":["operator-kit"],"permissions":{"contents":"read"}}' \
-            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens")
-          TOKEN=$(jq -r .token <<<"$RESPONSE")
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-          # The minted token's own answer is logged, never the token itself.
-          jq -r '"kit token minted: expires_at=\(.expires_at) repositories=\([.repositories[]?.name] | join(","))"' <<<"$RESPONSE"
-          echo "KIT_TOKEN_MINTED_AT=$(date +%s)" >> "$GITHUB_ENV"
-
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-          echo "GOPRIVATE=github.com/mitstack-eu" >> "$GITHUB_ENV"
-
-      # A bounded retry of the private kit fetch that logs why each attempt
-      # failed; go vet and go test then read the module cache it filled.
-      - name: Fetch Go modules
-        env:
-          KIT_TOKEN: ${{ steps.kit_token.outputs.token }}
-        run: |
-          set -uo pipefail
-          # Runs "$@" up to KIT_FETCH_ATTEMPTS times, sleeping
-          # KIT_FETCH_BACKOFF_SECONDS times the attempt number between tries.
-          # Each failure logs the fetch output, the seconds since the mint and
-          # what the same token's API view lists, never the token itself.
-          kit_fetch_retry() {
-            local attempts=${KIT_FETCH_ATTEMPTS:-5} backoff=${KIT_FETCH_BACKOFF_SECONDS:-10}
-            local n=1 out code since body names
-            # A bound that is not a positive integer would never end the loop.
-            case "$attempts" in ''|*[!0-9]*|0) echo "KIT_FETCH_ATTEMPTS must be a positive integer, got '${attempts}'" >&2; return 2;; esac
-            case "$backoff" in ''|*[!0-9]*) echo "KIT_FETCH_BACKOFF_SECONDS must be a whole number, got '${backoff}'" >&2; return 2;; esac
-            while :; do
-              since=""
-              if out=$("$@" 2>&1); then code=0; else code=$?; fi
-              [ -n "${KIT_TOKEN:-}" ] && out=${out//"$KIT_TOKEN"/***}
-              [ -n "${KIT_TOKEN_MINTED_AT:-}" ] && since=", $(( $(date +%s) - KIT_TOKEN_MINTED_AT ))s after the kit token was minted"
-              if [ "$code" -eq 0 ]; then
-                [ -n "$out" ] && printf '%s\n' "$out"
-                echo "kit fetch succeeded on attempt ${n}/${attempts}${since}"
-                return 0
-              fi
-              echo "::warning::kit fetch attempt ${n}/${attempts} failed (exit ${code}${since})"
-              printf '%s\n' "$out" | tail -n 20
-              if [ -n "${KIT_TOKEN:-}" ]; then
-                if body=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${KIT_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/installation/repositories?per_page=100" 2>&1) &&
-                   names=$(jq -r '[.repositories[].name] | join(",")' <<<"$body" 2>/dev/null); then
-                  echo "kit token repository view: ${names}"
-                else
-                  body=${body//"$KIT_TOKEN"/***}
-                  echo "kit token repository view: unavailable ($(head -c 200 <<<"$body" | tr '\n' ' '))"
-                fi
-              fi
-              if [ "$n" -ge "$attempts" ]; then
-                echo "::error::kit fetch failed after ${attempts} attempts"
-                return "$code"
-              fi
-              sleep $(( backoff * n ))
-              n=$(( n + 1 ))
-            done
-          }
-          kit_fetch_retry go mod download
 
       - name: go vet
         run: go vet ./...
@@ -166,16 +74,14 @@ jobs:
       - name: go test
         run: go test ./...
 
-      # The kit repository is private, so blockverify is built from a
-      # checkout minted with the same App token rather than a `go run` of a
-      # released tag — this keeps the reusable workflow independent of
-      # whether a given kit-ref has been tagged yet.
+      # blockverify is built from a checkout of kit-ref rather than a `go run`
+      # of a released tag, so the reusable workflow works whether or not a
+      # given kit-ref has been tagged yet.
       - name: Checkout operator-kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mitstack-eu/operator-kit
           ref: ${{ inputs.kit-ref }}
-          token: ${{ steps.kit_token.outputs.token }}
           path: operator-kit
 
       - name: Build blockverify
@@ -262,55 +168,11 @@ jobs:
           role-to-assume: ${{ vars.AWS_BLOCK_PUBLISH_ROLE_ARN }}
           aws-region: ${{ inputs.aws-region }}
 
-      # The conformance job's identical "Mint kit token" entry explains the scope.
-      - name: Mint kit token
-        id: kit_token
-        run: |
-          set -euo pipefail
-          APP_ID=$(aws ssm get-parameter --with-decryption --name /mitstack/MITSTACK_GITHUB_APP_ID --query Parameter.Value --output text)
-          aws ssm get-parameter --with-decryption --name /mitstack/MITSTACK_GITHUB_APP_PRIVATE_KEY --query Parameter.Value --output text | sed 's/\\n/\n/g' > /tmp/app-key.pem
-          chmod 600 /tmp/app-key.pem
-
-          b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-          NOW=$(date +%s)
-          JWT_HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
-          JWT_PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$((NOW-60))" "$((NOW+540))" "$APP_ID" | b64url)
-          JWT_SIG=$(printf '%s.%s' "$JWT_HEADER" "$JWT_PAYLOAD" | openssl dgst -sha256 -sign /tmp/app-key.pem -binary | b64url)
-          JWT="$JWT_HEADER.$JWT_PAYLOAD.$JWT_SIG"
-          rm -f /tmp/app-key.pem
-
-          INSTALLATION_ID=$(curl -fsSL -H "Authorization: Bearer $JWT" https://api.github.com/app/installations \
-            | jq -r '.[] | select(.account.login == "mitstack-eu") | .id')
-          RESPONSE=$(curl -fsSL -X POST \
-            -H "Authorization: Bearer $JWT" \
-            -H "Accept: application/vnd.github+json" \
-            -d '{"repositories":["operator-kit"],"permissions":{"contents":"read"}}' \
-            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens")
-          TOKEN=$(jq -r .token <<<"$RESPONSE")
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-          # The minted token's own answer is logged, never the token itself.
-          jq -r '"kit token minted: expires_at=\(.expires_at) repositories=\([.repositories[]?.name] | join(","))"' <<<"$RESPONSE"
-          echo "KIT_TOKEN_MINTED_AT=$(date +%s)" >> "$GITHUB_ENV"
-
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-          echo "GOPRIVATE=github.com/mitstack-eu" >> "$GITHUB_ENV"
-
-      - name: Write kit token to a secret file for the docker build
-        env:
-          KIT_TOKEN: ${{ steps.kit_token.outputs.token }}
-        run: |
-          set -euo pipefail
-          umask 077
-          printf '%s' "$KIT_TOKEN" > /tmp/kit-token
-          chmod 600 /tmp/kit-token
-
       - name: Checkout operator-kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mitstack-eu/operator-kit
           ref: ${{ inputs.kit-ref }}
-          token: ${{ steps.kit_token.outputs.token }}
           path: operator-kit
 
       - name: Build blockverify and blockprov
@@ -390,63 +252,12 @@ jobs:
           echo "no provenance record at ${RECORD_TAG}; completing it for ${DIGEST}"
           echo "record=false" >> "$GITHUB_OUTPUT"
 
-      # The image build and this job's blockverify run both fetch the kit
-      # with this token, and blockverify runs even when only the provenance
-      # record is missing, so the job fetches the block's modules through a
-      # bounded retry on every run, logging why any attempt failed.
-      - name: Fetch Go modules
-        env:
-          KIT_TOKEN: ${{ steps.kit_token.outputs.token }}
-        run: |
-          set -uo pipefail
-          # Runs "$@" up to KIT_FETCH_ATTEMPTS times, sleeping
-          # KIT_FETCH_BACKOFF_SECONDS times the attempt number between tries.
-          # Each failure logs the fetch output, the seconds since the mint and
-          # what the same token's API view lists, never the token itself.
-          kit_fetch_retry() {
-            local attempts=${KIT_FETCH_ATTEMPTS:-5} backoff=${KIT_FETCH_BACKOFF_SECONDS:-10}
-            local n=1 out code since body names
-            # A bound that is not a positive integer would never end the loop.
-            case "$attempts" in ''|*[!0-9]*|0) echo "KIT_FETCH_ATTEMPTS must be a positive integer, got '${attempts}'" >&2; return 2;; esac
-            case "$backoff" in ''|*[!0-9]*) echo "KIT_FETCH_BACKOFF_SECONDS must be a whole number, got '${backoff}'" >&2; return 2;; esac
-            while :; do
-              since=""
-              if out=$("$@" 2>&1); then code=0; else code=$?; fi
-              [ -n "${KIT_TOKEN:-}" ] && out=${out//"$KIT_TOKEN"/***}
-              [ -n "${KIT_TOKEN_MINTED_AT:-}" ] && since=", $(( $(date +%s) - KIT_TOKEN_MINTED_AT ))s after the kit token was minted"
-              if [ "$code" -eq 0 ]; then
-                [ -n "$out" ] && printf '%s\n' "$out"
-                echo "kit fetch succeeded on attempt ${n}/${attempts}${since}"
-                return 0
-              fi
-              echo "::warning::kit fetch attempt ${n}/${attempts} failed (exit ${code}${since})"
-              printf '%s\n' "$out" | tail -n 20
-              if [ -n "${KIT_TOKEN:-}" ]; then
-                if body=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${KIT_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/installation/repositories?per_page=100" 2>&1) &&
-                   names=$(jq -r '[.repositories[].name] | join(",")' <<<"$body" 2>/dev/null); then
-                  echo "kit token repository view: ${names}"
-                else
-                  body=${body//"$KIT_TOKEN"/***}
-                  echo "kit token repository view: unavailable ($(head -c 200 <<<"$body" | tr '\n' ' '))"
-                fi
-              fi
-              if [ "$n" -ge "$attempts" ]; then
-                echo "::error::kit fetch failed after ${attempts} attempts"
-                return "$code"
-              fi
-              sleep $(( backoff * n ))
-              n=$(( n + 1 ))
-            done
-          }
-          kit_fetch_retry go mod download
-
       - name: Build and push image
         if: steps.existing.outputs.published == 'false'
         run: |
           set -euo pipefail
           VERSION=$(awk '$1=="version:"{print $2; exit}' manifest.yaml)
           DOCKER_BUILDKIT=1 docker build \
-            --secret id=kit_token,src=/tmp/kit-token \
             -t "${REGISTRY}/${{ inputs.ecr-repository }}:v${VERSION}" \
             -t "${REGISTRY}/${{ inputs.ecr-repository }}:${GITHUB_SHA}" \
             .
@@ -525,7 +336,3 @@ jobs:
             --image-digest "$IMAGE_DIGEST" \
             --username AWS \
             --password-env ECR_PASSWORD
-
-      - name: Clean up the kit token file
-        if: always()
-        run: rm -f /tmp/kit-token
