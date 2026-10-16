@@ -1,4 +1,4 @@
-// Package cloudid turns the CloudIdentity delivered in a signed lifecycle webhook into short-lived AWS credentials, and is AWS-specific on purpose.
+// Package cloudid, an optional helper, turns the CloudIdentity delivered in a signed lifecycle webhook into short-lived AWS credentials, and is AWS-specific on purpose.
 package cloudid
 
 import (

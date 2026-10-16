@@ -1,4 +1,4 @@
-// Package appsdns writes, retires and observes an app's A record in the apps
+// Package appsdns, an optional helper, writes, retires and observes an app's A record in the apps
 // zone over a Client of stdlib types an operator adapts its Route 53 client to.
 package appsdns
 

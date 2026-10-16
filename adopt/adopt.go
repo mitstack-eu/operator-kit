@@ -1,4 +1,4 @@
-// Package adopt is the idempotency contract for a provisioning operator whose retried subscribe must converge without adopting another app's resources.
+// Package adopt, an optional helper, is the idempotency contract for a provisioning operator whose retried subscribe must converge without adopting another app's resources.
 package adopt
 
 import (

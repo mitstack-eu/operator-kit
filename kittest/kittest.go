@@ -1,4 +1,4 @@
-// Package kittest provides the test scaffolding every operator needs to exercise the mitstack trust boundary, from a deterministic signing identity to the conformance checks.
+// Package kittest, part of the core every block needs, provides the test scaffolding every operator needs to exercise the mitstack trust boundary, from a deterministic signing identity to the conformance checks.
 package kittest
 
 import (

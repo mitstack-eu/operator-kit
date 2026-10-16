@@ -10,6 +10,80 @@ sides are checked against, and the resource registry. The registry is the one
 list of output names a block may declare in `spec.outputs` and read under
 `spec.requires[].reads`, and the engine reads it from this package.
 
+## Which packages a block needs
+
+The kit's packages fall into three groups, so you can tell which to learn
+first. Learn the core before you write a block. Reach for an optional helper
+only when your block's provider or domain calls for it. You can leave
+mitstack's own tooling alone, because it runs on a block rather than inside
+it. Each package's `go doc` opens by naming its group, and no package's
+import path depends on its group.
+
+### The core every block needs
+
+Every block imports `contract`, `handler`, `webhook` and `observe`, and most
+also import `safe`. Every block's tests import `kittest`.
+
+| Package | What a block uses it for |
+|---|---|
+| `contract` | The wire contract, the manifest parser and the resource registry |
+| `handler` | Serving the four lifecycle verbs over the block's `Resource` |
+| `webhook` | Verifying mitstack's signature on every lifecycle call |
+| `observe` | Asking the provider what stands now |
+| `safe` | Choosing the API host, sanitising logs and scrubbing secrets |
+| `kittest` | The block's own tests: a signing identity, envelopes and the conformance checks |
+
+### Optional helpers
+
+Each helper serves one provider or one task, and a block imports it only for
+that.
+
+| Package | What it does |
+|---|---|
+| `adopt` | Lets a retried subscribe converge without adopting another app's resources |
+| `appsdns` | Writes, retires and observes an app's A record in the apps zone |
+| `awsnames` | Names the account-unique AWS resources every app-infra engine creates |
+| `cfnstack` | Drives CloudFormation stacks |
+| `cloudid` | Turns the cloud identity in a lifecycle call into short-lived AWS credentials |
+| `credrefresh` | Caches a short-lived credential and renews it before it expires |
+| `customdomain` | Checks that a consumer's custom hostname is a bare hostname |
+| `delivery` | Fetches the dispatcher's delivery record |
+| `events` | Sends advisory lifecycle events back to mitstack |
+| `ghapi` | Calls the GitHub REST API on a host the operator chooses |
+| `gitops` | Commits a block's rendered manifests to its GitOps repository and judges the deploy |
+| `gitops/gitopstest` | Fakes a GitOps repository and Argo CD's notifications in a test |
+| `handover` | Carries a block's durable data across a replacement through EC2 snapshots |
+| `health` | Lets `validate` repair an unhealthy resource within a bound |
+| `hostexec` | Runs one shell script on a host over SSM or SSH |
+| `progress` | Reports a long provision's progress on the advisory event channel |
+| `reach` | Judges whether an app is serving and records the verdict |
+| `registryauth` | Logs a container-registry CLI in with the credential on stdin |
+| `settle` | Decides whether a consumer's resource is serving, with every wait bounded |
+| `stackitid` | Exchanges mitstack's OIDC assertion for a short-lived STACKIT token |
+| `teardown` | Reclaims what the IaC engine never tracked, scoped to one app |
+| `tftpl` | Renders the subset of OpenTofu's `templatefile` syntax the kit accepts |
+
+### mitstack's own tooling
+
+These packages check, publish and record blocks, and no block imports them.
+Your CI runs `blockverify` on your block, as
+[Running the block checks on your block](docs/block-checks.md) describes.
+
+| Package | What it does |
+|---|---|
+| `blockverify` | Runs the conformance checks on a block's source tree |
+| `blockprov` | Builds, verifies and pushes a block's provenance record from its publish workflow |
+| `provenance` | Holds the signed record of where a block's image and manifest came from |
+| `attest` | Holds the signed attestation that a block passed its conformance checks |
+| `kitbinding` | Defines what counts as a block importing the handler, for `blockverify` and the platform alike |
+| `boardkeys` | Derives which board keys a commit delivers |
+| `cmd/board-delivery` | Records the keys a push to main delivered on mitstack's board |
+| `cmd/pr-keys` | Fails a pull request whose commits and title carry no board key |
+| `cmd/commentcheck` | Judges the comments a pull request adds |
+| `cmd/manifest-schema` | Prints the manifest JSON Schema the kit ships |
+
+## What the contract package holds
+
 Resource types, and the kinds they implement, live in the platform's
 catalogue and not in the kit. A block reads them from the type snapshot the
 platform serves, which `contract.ParseTypeSnapshot` reads, as a later

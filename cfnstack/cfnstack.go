@@ -1,4 +1,4 @@
-// Package cfnstack drives CloudFormation stacks over a Client of stdlib types,
+// Package cfnstack, an optional helper, drives CloudFormation stacks over a Client of stdlib types,
 // which an operator adapts its own AWS SDK client to. A create error whose
 // ErrorCode is AlreadyExistsException, as the SDK's typed exception reports,
 // turns into an update.

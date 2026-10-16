@@ -1,4 +1,4 @@
-// Package health makes `validate` a verb that acts on an unhealthy resource, with bounded remediation and no replacement of serving content.
+// Package health, an optional helper, makes `validate` a verb that acts on an unhealthy resource, with bounded remediation and no replacement of serving content.
 package health
 
 import (

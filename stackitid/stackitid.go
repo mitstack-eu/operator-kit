@@ -1,4 +1,4 @@
-// Package stackitid exchanges the platform-signed OIDC assertion for a short-lived STACKIT access token under RFC 8693, failing closed and never carrying either secret in an error.
+// Package stackitid, an optional helper, exchanges the platform-signed OIDC assertion for a short-lived STACKIT access token under RFC 8693, failing closed and never carrying either secret in an error.
 package stackitid
 
 import (

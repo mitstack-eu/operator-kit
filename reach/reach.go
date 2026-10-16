@@ -1,4 +1,4 @@
-// Package reach evaluates whether an app is serving and records the verdict as the fixed output keys every provider emits.
+// Package reach, an optional helper, evaluates whether an app is serving and records the verdict as the fixed output keys every provider emits.
 package reach
 
 import (

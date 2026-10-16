@@ -1,4 +1,4 @@
-// Package awsnames is the single source of the account-unique AWS names every app-infra engine creates, so a naming mismatch between engines shows up in one place.
+// Package awsnames, an optional helper, is the single source of the account-unique AWS names every app-infra engine creates, so a naming mismatch between engines shows up in one place.
 package awsnames
 
 import "strings"

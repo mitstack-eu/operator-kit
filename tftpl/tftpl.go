@@ -1,4 +1,4 @@
-// Package tftpl renders the OpenTofu `templatefile` subset of `${name}`, `$${name}` and `%{ if NAME != "" }`, refusing everything else.
+// Package tftpl, an optional helper, renders the OpenTofu `templatefile` subset of `${name}`, `$${name}` and `%{ if NAME != "" }`, refusing everything else.
 package tftpl
 
 import (

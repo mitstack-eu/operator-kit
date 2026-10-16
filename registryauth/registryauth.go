@@ -1,4 +1,4 @@
-// Package registryauth logs a container-registry CLI in with the credential passed over stdin, never as an argument or in a log line.
+// Package registryauth, an optional helper, logs a container-registry CLI in with the credential passed over stdin, never as an argument or in a log line.
 package registryauth
 
 import (

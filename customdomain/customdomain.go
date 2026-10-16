@@ -1,4 +1,4 @@
-// Package customdomain validates the consumer-supplied vanity hostname, which is data that must never reach a rendered Caddy or ACME config unless it is a bare hostname.
+// Package customdomain, an optional helper, validates the consumer-supplied vanity hostname, which is data that must never reach a rendered Caddy or ACME config unless it is a bare hostname.
 package customdomain
 
 import (

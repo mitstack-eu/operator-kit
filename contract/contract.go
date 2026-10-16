@@ -1,4 +1,4 @@
-// Package contract holds the wire contract between the engine and a block, which the engine and every block consume from here rather than keeping a copy.
+// Package contract, part of the core every block needs, holds the wire contract between the engine and a block, which the engine and every block consume from here rather than keeping a copy.
 package contract
 
 import (

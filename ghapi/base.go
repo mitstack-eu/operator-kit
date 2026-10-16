@@ -1,4 +1,4 @@
-// Package ghapi is the GitHub REST API client for operators, whose host is the operator's decision and always resolved over https with no loopback or http carve-out.
+// Package ghapi, an optional helper, is the GitHub REST API client for operators, whose host is the operator's decision and always resolved over https with no loopback or http carve-out.
 package ghapi
 
 import (

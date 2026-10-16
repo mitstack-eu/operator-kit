@@ -1,4 +1,4 @@
-// Package safe holds the security invariants every operator must honour: the operator picks the API host, and log sanitising and secret scrubbing are separate steps.
+// Package safe, part of the core every block needs, holds the security invariants every operator must honour: the operator picks the API host, and log sanitising and secret scrubbing are separate steps.
 package safe
 
 import (

@@ -1,4 +1,4 @@
-// Package boardkeys derives which board keys a commit delivers, counting only a leading key list in the subject terminated by ':' or a whole-line `Jira:` trailer.
+// Package boardkeys, part of mitstack's own tooling, derives which board keys a commit delivers, counting only a leading key list in the subject terminated by ':' or a whole-line `Jira:` trailer.
 package boardkeys
 
 import (

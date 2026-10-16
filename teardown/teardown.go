@@ -1,4 +1,4 @@
-// Package teardown reclaims what the IaC engine never tracked, scoped to the app's exact identity.
+// Package teardown, an optional helper, reclaims what the IaC engine never tracked, scoped to the app's exact identity.
 package teardown
 
 import (

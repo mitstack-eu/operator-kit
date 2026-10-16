@@ -1,4 +1,4 @@
-// Package delivery is the operator-side mirror of the dispatcher's delivery record, with a Client that fetches one, and shares testdata/delivery.golden.json with the dispatcher's tests.
+// Package delivery, an optional helper, is the operator-side mirror of the dispatcher's delivery record, with a Client that fetches one, and shares testdata/delivery.golden.json with the dispatcher's tests.
 package delivery
 
 import (

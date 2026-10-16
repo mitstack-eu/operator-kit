@@ -1,4 +1,4 @@
-// Package credrefresh caches a short-lived credential of any type and renews it ahead of expiry, failing closed rather than returning a stale one.
+// Package credrefresh, an optional helper, caches a short-lived credential of any type and renews it ahead of expiry, failing closed rather than returning a stale one.
 package credrefresh
 
 import (

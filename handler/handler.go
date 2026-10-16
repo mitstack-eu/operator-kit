@@ -1,4 +1,4 @@
-// Package handler serves the four lifecycle verbs over a block author's Resource, owning every invariant a block must not override.
+// Package handler, part of the core every block needs, serves the four lifecycle verbs over a block author's Resource, owning every invariant a block must not override.
 package handler
 
 import (

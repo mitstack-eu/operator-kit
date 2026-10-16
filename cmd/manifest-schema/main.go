@@ -1,4 +1,4 @@
-// Command manifest-schema prints the block manifest JSON Schema generated from the kit types: go run ./cmd/manifest-schema > contract/manifest.schema.json
+// Command manifest-schema, part of mitstack's own tooling, prints the block manifest JSON Schema generated from the kit types: go run ./cmd/manifest-schema > contract/manifest.schema.json
 package main
 
 import (

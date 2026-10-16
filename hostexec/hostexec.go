@@ -1,4 +1,4 @@
-// Package hostexec runs one shell script on a host over an SSM RunShellScript document or an SSH connection, without streaming output or holding a connection.
+// Package hostexec, an optional helper, runs one shell script on a host over an SSM RunShellScript document or an SSH connection, without streaming output or holding a connection.
 package hostexec
 
 import (

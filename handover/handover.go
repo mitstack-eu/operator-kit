@@ -1,4 +1,4 @@
-// Package handover carries a block's durable data across a replacement by snapshotting through the EC2 API outside any engine state.
+// Package handover, an optional helper, carries a block's durable data across a replacement by snapshotting through the EC2 API outside any engine state.
 package handover
 
 import (

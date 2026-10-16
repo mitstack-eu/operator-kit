@@ -1,4 +1,4 @@
-// Package attest is the signed conformance attestation that a block passed block-verify, checkable offline against a JWKS.
+// Package attest, part of mitstack's own tooling, is the signed conformance attestation that a block passed block-verify, checkable offline against a JWKS.
 package attest
 
 import (

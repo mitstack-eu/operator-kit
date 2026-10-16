@@ -1,4 +1,4 @@
-// Package observe holds the shared read-only observers, which ask the provider what stands now and never answer from what an ensure remembered.
+// Package observe, part of the core every block needs, holds the shared read-only observers, which ask the provider what stands now and never answer from what an ensure remembered.
 package observe
 
 import (

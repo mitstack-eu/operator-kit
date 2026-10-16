@@ -1,4 +1,4 @@
-// Package events lets an operator push advisory lifecycle events back to mitstack's ingest endpoint, as a no-op when the envelope carries no callback.
+// Package events, an optional helper, lets an operator push advisory lifecycle events back to mitstack's ingest endpoint, as a no-op when the envelope carries no callback.
 package events
 
 import (

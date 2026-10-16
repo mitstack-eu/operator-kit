@@ -1,4 +1,4 @@
-// Package kitbinding holds the one definition of a block importing the kit's handler, so blockverify and the platform's operator gates cannot disagree about a source tree.
+// Package kitbinding, part of mitstack's own tooling, holds the one definition of a block importing the kit's handler, so blockverify and the platform's operator gates cannot disagree about a source tree.
 package kitbinding
 
 import (

@@ -1,4 +1,4 @@
-// Package webhook implements the lifecycle-webhook trust boundary an operator consumes, verifying mitstack's detached Ed25519 signature against a public key fetched from its JWKS with no shared secret.
+// Package webhook, part of the core every block needs, implements the lifecycle-webhook trust boundary an operator consumes, verifying mitstack's detached Ed25519 signature against a public key fetched from its JWKS with no shared secret.
 package webhook
 
 import (

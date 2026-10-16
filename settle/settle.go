@@ -1,4 +1,4 @@
-// Package settle decides whether a consumer's resource is actually serving, with every wait bounded by a required deadline.
+// Package settle, an optional helper, decides whether a consumer's resource is actually serving, with every wait bounded by a required deadline.
 package settle
 
 import (

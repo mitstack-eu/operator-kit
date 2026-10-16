@@ -1,4 +1,4 @@
-// Package progress narrates a long provision on the advisory event channel, swallowing send failures so narration never changes a lifecycle outcome.
+// Package progress, an optional helper, narrates a long provision on the advisory event channel, swallowing send failures so narration never changes a lifecycle outcome.
 package progress
 
 import (
