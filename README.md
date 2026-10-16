@@ -21,8 +21,9 @@ import path depends on its group.
 
 ### The core every block needs
 
-Every block imports `contract`, `handler`, `webhook` and `observe`, and most
-also import `safe`. Every block's tests import `kittest`.
+Every block's code imports `contract`, `handler` and `webhook`, and most
+blocks also import `observe` and `safe`. Every block's tests import
+`kittest`.
 
 | Package | What a block uses it for |
 |---|---|
