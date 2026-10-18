@@ -585,7 +585,7 @@ func TestWorkflow_ExistingStepPrecedesBuildAndPushImage(t *testing.T) {
 // record. writeSteps are the ones that write to the registry or mint a
 // signed record.
 var (
-	imageSteps  = []string{"Build and push image"}
+	imageSteps  = []string{"Install Trivy", "Build and push image"}
 	recordSteps = []string{
 		"Determine the kit version pinned in go.mod",
 		"blockverify (standalone, for blockprov build's report)",
@@ -757,6 +757,41 @@ func runStepBody(t *testing.T, name string, env map[string]string) string {
 	return string(argv)
 }
 
+// Trivy reads these files from its working directory with no flag, so one anywhere in the tree fails the job straight after the checkout.
+func TestWorkflow_ATrivyIgnoreOrConfigFileFailsThePublishJob(t *testing.T) {
+	blocks, script := publishStepBlocks(t), filepath.Join(t.TempDir(), "refuse.sh")
+	idx := indexOfStepByName(blocks, "Refuse a committed Trivy ignore or config file")
+	if idx != 1 || ifOf(blocks[idx]) != "" {
+		t.Fatalf("the refusal is publish step %d, want an unconditional step 1", idx)
+	}
+	writeExecutable(t, script, runScript(blocks[idx]))
+	for _, file := range []string{"", ".trivyignore", ".trivyignore.yaml", "trivy.yaml", "deploy/trivy-secret.yaml"} {
+		tree := t.TempDir()
+		_ = os.MkdirAll(filepath.Join(tree, "deploy"), 0o755)
+		_ = os.WriteFile(filepath.Join(tree, file), nil, 0o644)
+		if res := runBash(t, script, tree); (res.exitCode != 0) != (file != "") || !strings.Contains(res.stderr, file) {
+			t.Errorf("with %q in the tree: exit %d, stderr %q", file, res.exitCode, res.stderr)
+		}
+	}
+}
+
+// A finding fails the step after the build and before any push, and no file, variable or flag narrows the scan.
+func TestWorkflow_AFindingStopsThePushOfTheImageItScanned(t *testing.T) {
+	blocks, dir := publishStepBlocks(t), t.TempDir()
+	if i := indexOfStepByName(blocks, "Install Trivy"); i < 0 || !strings.Contains(runScript(blocks[i]), "1f889576636db0623539cb339df7d06c40ebf39e7919489eafa1160e29808f19  $RUNNER_TEMP/trivy\" | sha256sum -c -") {
+		t.Errorf("Install Trivy, publish step %d, must check the binary against its pinned sha256", i)
+	}
+	writeExecutable(t, filepath.Join(dir, "docker"), "#!/bin/sh\necho docker $*\n")
+	writeExecutable(t, filepath.Join(dir, "trivy"), "#!/bin/sh\necho \"trivy $* cwd=[$(ls -A)] env=[$(env | grep ^TRIVY_)]\"\nexit 1\n")
+	writeExecutable(t, filepath.Join(dir, "manifest.yaml"), "spec:\n  version: 1.2.0\n")
+	writeExecutable(t, filepath.Join(dir, "build.sh"), strings.ReplaceAll(runScript(blocks[indexOfStepByName(blocks, "Build and push image")]), "${{ inputs.ecr-repository }}", "repo"))
+	res := runBash(t, filepath.Join(dir, "build.sh"), dir, "PATH="+dir+":"+os.Getenv("PATH"), "RUNNER_TEMP="+dir, "REGISTRY=r", "GITHUB_SHA=c0ffee", "TRIVY_SEVERITY=CRITICAL")
+	want := "docker build -t r/repo:v1.2.0 -t r/repo:c0ffee .\ntrivy image --image-src docker --exit-code 1 --ignore-unfixed "
+	if out := res.stdout; res.exitCode == 0 || !strings.HasPrefix(out, want) || strings.Count(out, "\n") != 2 || !strings.HasSuffix(out, " r/repo:c0ffee cwd=[] env=[]\n") || strings.Contains(out, "--severity") {
+		t.Errorf("exit %d, output =\n%s\nwant the build, then one scan of its sha tag with no --severity that fails the step before any push", res.exitCode, res.combined)
+	}
+}
+
 func TestWorkflow_ExistingStepReportsARecordAbsentBesideAPublishedTag(t *testing.T) {
 	res := runProbe(t, "1.2.0", "exists", "absent")
 	if res.exitCode != 0 {
@@ -917,6 +952,7 @@ func TestWorkflow_JobsFetchThePublicKitWithNoCredential(t *testing.T) {
 		}},
 		{"publish", true, []string{
 			"actions/checkout",
+			"Refuse a committed Trivy ignore or config file",
 			"actions/setup-go",
 			"Configure AWS credentials",
 			"Checkout operator-kit",
@@ -924,6 +960,7 @@ func TestWorkflow_JobsFetchThePublicKitWithNoCredential(t *testing.T) {
 			"Remove the kit checkout from the block tree",
 			"Log in to ECR",
 			"Probe the version tag and its provenance record",
+			"Install Trivy",
 			"Build and push image",
 			"Determine the kit version pinned in go.mod",
 			"blockverify (standalone, for blockprov build's report)",
