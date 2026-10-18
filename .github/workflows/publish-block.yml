@@ -20,6 +20,9 @@
 # finds the record missing fails rather than attesting an image it did not
 # build. A tag that already has its record ends green
 # with no writes.
+#
+# Before any push, the publish job scans the image it built with a pinned
+# Trivy, and a finding that has a fixed version stops the job.
 name: publish-block
 
 on:
@@ -158,6 +161,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Trivy reads these from its working directory with no flag, so a
+      # committed one could silence a finding. None is allowed anywhere.
+      - name: Refuse a committed Trivy ignore or config file
+        run: |
+          set -euo pipefail
+          found=$(find . -path ./.git -prune -o \( -name .trivyignore -o -name .trivyignore.yaml -o -name trivy.yaml -o -name trivy-secret.yaml \) -print)
+          if [ -n "$found" ]; then
+            printf 'Trivy would read these with no flag, so the image is neither scanned nor pushed:\n%s\n' "$found" >&2
+            exit 1
+          fi
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ inputs.go-version }}
@@ -252,6 +266,18 @@ jobs:
           echo "no provenance record at ${RECORD_TAG}; completing it for ${DIGEST}"
           echo "record=false" >> "$GITHUB_OUTPUT"
 
+      # One pinned version, checked by the binary's sha256.
+      - name: Install Trivy
+        if: steps.existing.outputs.published == 'false'
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v0.76.0/trivy_0.76.0_Linux-64bit.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" trivy
+          echo "1f889576636db0623539cb339df7d06c40ebf39e7919489eafa1160e29808f19  $RUNNER_TEMP/trivy" | sha256sum -c -
+          "$RUNNER_TEMP/trivy" --version
+
+      # Any finding with a fixed version, at any severity, stops the job
+      # before the first push.
       - name: Build and push image
         if: steps.existing.outputs.published == 'false'
         run: |
@@ -261,6 +287,14 @@ jobs:
             -t "${REGISTRY}/${{ inputs.ecr-repository }}:v${VERSION}" \
             -t "${REGISTRY}/${{ inputs.ecr-repository }}:${GITHUB_SHA}" \
             .
+          # An empty directory and no TRIVY_ variable leave no file or setting
+          # that could silence a finding. The databases come from the first
+          # mirror that answers.
+          unset "${!TRIVY_@}"
+          (cd "$(mktemp -d)" && "$RUNNER_TEMP/trivy" image --image-src docker --exit-code 1 --ignore-unfixed --no-progress \
+            --db-repository mirror.gcr.io/aquasec/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2 \
+            --java-db-repository mirror.gcr.io/aquasec/trivy-java-db:1,public.ecr.aws/aquasecurity/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1 \
+            "${REGISTRY}/${{ inputs.ecr-repository }}:${GITHUB_SHA}")
           # The sha tag goes first: a version tag in the registry then always
           # has the sha tag the probe checks before completing a record.
           docker push "${REGISTRY}/${{ inputs.ecr-repository }}:${GITHUB_SHA}"
