@@ -59,7 +59,6 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -67,54 +66,9 @@ jobs:
         with:
           go-version: ${{ inputs.go-version }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ vars.AWS_BLOCK_PUBLISH_ROLE_ARN }}
-          aws-region: ${{ inputs.aws-region }}
-
-      # A short-lived GitHub App installation token, downscoped to
-      # contents:read on operator-kit, so `go mod download` can fetch the
-      # private module this block depends on. Credentials live in prod SSM,
-      # reached over this repo's own per-block AWS OIDC role.
-      - name: Mint kit token
-        id: kit_token
-        run: |
-          set -euo pipefail
-          APP_ID=$(aws ssm get-parameter --with-decryption --name /mitstack/MITSTACK_GITHUB_APP_ID --query Parameter.Value --output text)
-          aws ssm get-parameter --with-decryption --name /mitstack/MITSTACK_GITHUB_APP_PRIVATE_KEY --query Parameter.Value --output text | sed 's/\\n/\n/g' > /tmp/app-key.pem
-          chmod 600 /tmp/app-key.pem
-
-          b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-          NOW=$(date +%s)
-          JWT_HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
-          JWT_PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$((NOW-60))" "$((NOW+540))" "$APP_ID" | b64url)
-          JWT_SIG=$(printf '%s.%s' "$JWT_HEADER" "$JWT_PAYLOAD" | openssl dgst -sha256 -sign /tmp/app-key.pem -binary | b64url)
-          JWT="$JWT_HEADER.$JWT_PAYLOAD.$JWT_SIG"
-          rm -f /tmp/app-key.pem
-
-          INSTALLATION_ID=$(curl -fsSL -H "Authorization: Bearer $JWT" https://api.github.com/app/installations \
-            | jq -r '.[] | select(.account.login == "mitstack-eu") | .id')
-          RESPONSE=$(curl -fsSL -X POST \
-            -H "Authorization: Bearer $JWT" \
-            -H "Accept: application/vnd.github+json" \
-            -d '{"repositories":["operator-kit"],"permissions":{"contents":"read"}}' \
-            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens")
-          TOKEN=$(jq -r .token <<<"$RESPONSE")
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-          # The minted token's own answer is logged, never the token itself.
-          jq -r '"kit token minted: expires_at=\(.expires_at) repositories=\([.repositories[]?.name] | join(","))"' <<<"$RESPONSE"
-          echo "KIT_TOKEN_MINTED_AT=$(date +%s)" >> "$GITHUB_ENV"
-
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-          echo "GOPRIVATE=github.com/mitstack-eu" >> "$GITHUB_ENV"
-
-      # A bounded retry of the private kit fetch that logs why each attempt
+      # A bounded retry of the kit fetch that logs why each attempt
       # failed; go vet and go test then read the module cache it filled.
       - name: Fetch Go modules
-        env:
-          KIT_TOKEN: ${{ steps.kit_token.outputs.token }}
         run: |
           set -uo pipefail
           # Runs "$@" up to KIT_FETCH_ATTEMPTS times, sleeping
@@ -166,16 +120,14 @@ jobs:
       - name: go test
         run: go test ./...
 
-      # The kit repository is private, so blockverify is built from a
-      # checkout minted with the same App token rather than a `go run` of a
-      # released tag — this keeps the reusable workflow independent of
-      # whether a given kit-ref has been tagged yet.
+      # blockverify is built from a checkout of kit-ref rather than a `go run`
+      # of a released tag, so the reusable workflow works whether or not a
+      # given kit-ref has been tagged yet.
       - name: Checkout operator-kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mitstack-eu/operator-kit
           ref: ${{ inputs.kit-ref }}
-          token: ${{ steps.kit_token.outputs.token }}
           path: operator-kit
 
       - name: Build blockverify
