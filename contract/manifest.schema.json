@@ -83,6 +83,24 @@
             "settleBudget": {
               "description": "A positive Go duration, such as 75m.",
               "type": "string"
+            },
+            "verbConnections": {
+              "additionalProperties": false,
+              "properties": {
+                "unsubscribe": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "validate": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
             }
           },
           "required": [

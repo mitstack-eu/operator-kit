@@ -213,6 +213,14 @@ type ManifestLifecycle struct {
 	Contract               string        `json:"contract"`
 	NeedsCredentialRefresh bool          `json:"needsCredentialRefresh,omitempty"`
 	SettleBudget           time.Duration `json:"settleBudget,omitempty"`
+	// VerbConnections is nil when the manifest declares none.
+	VerbConnections *ManifestVerbConnections `json:"verbConnections,omitempty"`
+}
+
+// ManifestVerbConnections names, per verb, the connections whose secrets a request of that verb carries, by the names Secrets groups them under.
+type ManifestVerbConnections struct {
+	Validate    []string `json:"validate,omitempty"`
+	Unsubscribe []string `json:"unsubscribe,omitempty"`
 }
 
 type plainLifecycle ManifestLifecycle

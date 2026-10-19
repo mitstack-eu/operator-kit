@@ -154,6 +154,23 @@ takes a positive Go duration such as `75m`. The parser refuses zero, a
 negative value or anything that is not a duration, naming the key, and a
 manifest without it reads as zero.
 
+A block names the connections its `validate` and `unsubscribe` requests need
+under `spec.lifecycle.verbConnections`, read into
+`ManifestLifecycle.VerbConnections`. Each verb takes a list of connection
+names, the names a request's `Secrets` are grouped under, such as `github` or
+`hetzner`:
+
+```yaml
+lifecycle:
+  verbConnections:
+    validate: [github]
+    unsubscribe: [github, hetzner]
+```
+
+The field is optional, and a manifest without it reads as nil, meaning no
+declaration. The parser refuses a verb other than `validate` or `unsubscribe`,
+and a value that is not a list of names, naming the key.
+
 An unnamed resource is named by its type id, and an unnamed requirement is
 referenced by it. An entry that lists more than one type needs a name, and
 two entries that would share a name or a reference are refused. The parser
