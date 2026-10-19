@@ -678,6 +678,10 @@ func TestParseManifest_V1BetaRefusesWhatTheSchemaRefusesNamingItsPath(t *testing
 			"  resources: []\n"}},
 		{"no lifecycle operations", "spec.lifecycle.operations", []string{
 			"    operations: [subscribe, unsubscribe]\n", "    operations: []\n"}},
+		{"one connection name in place of a list", "spec.lifecycle.verbConnections.validate must be a list", []string{
+			"    contract: kit/v1\n", "    contract: kit/v1\n    verbConnections:\n      validate: github\n"}},
+		{"a plain number as a connection name", "spec.lifecycle.verbConnections.unsubscribe[0]", []string{
+			"    contract: kit/v1\n", "    contract: kit/v1\n    verbConnections:\n      unsubscribe: [1]\n"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -953,6 +957,24 @@ func TestParseManifest_SettleBudget(t *testing.T) {
 			}
 			if again := parseBeta(t, beta("    settleBudget: "+written+"\n")).Spec.Lifecycle.SettleBudget; again != tc.want {
 				t.Errorf("JSON settleBudget %#v re-parses as %v, want %v (%s)", fields["settleBudget"], again, tc.want, raw)
+			}
+		})
+	}
+}
+
+func TestParseManifest_V1BetaReadsTheConnectionsEachVerbDeclares(t *testing.T) {
+	for _, tc := range []struct {
+		label, lines string
+		want         *contract.ManifestVerbConnections
+	}{
+		{"absent reads no declaration", "", nil},
+		{"declared reads both lists", "    verbConnections:\n      validate: [github]\n      unsubscribe: [github, hetzner]\n",
+			&contract.ManifestVerbConnections{Validate: []string{"github"}, Unsubscribe: []string{"github", "hetzner"}}},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			got := parseBeta(t, editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n"+tc.lines)).Spec.Lifecycle.VerbConnections
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("spec.lifecycle.verbConnections = %+v, want %+v", got, tc.want)
 			}
 		})
 	}

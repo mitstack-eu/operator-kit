@@ -39,6 +39,8 @@ func v1alphaUnknownFields(t *testing.T) map[string][]byte {
 		"spec.lifecycle.extra":     spec("  lifecycle:\n    extra:\n      hooks:\n        - afterEnsure\n"),
 		"spec.params[0].bogus":     spec("  params:\n    - name: image\n      bogus: 1\n"),
 		"spec.observability.bogus": spec("  observability:\n    bogus: 1\n"),
+		"spec.lifecycle.verbConnections": spec("  lifecycle:\n" +
+			"    verbConnections:\n      validate: [github]\n"),
 		"spec.observability.resources[0].priced.bogus": spec("  observability:\n    resources:\n" +
 			"      - id: app-instance\n        type: aws.ec2-instance\n        from: outputs.instanceId\n" +
 			"        priced:\n          service: AmazonEC2\n          bogus: 1\n"),
@@ -70,6 +72,8 @@ func v1betaUnknownFields(t *testing.T) map[string][]byte {
 		"spec.resources[1].bogus": editBeta(t, "      type: aws.security-group\n", "      type: aws.security-group\n      bogus: 1\n"),
 		"spec.lifecycle.bogus":    editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    bogus: 1\n"),
 		"spec.lifecycle.hooks":    editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    hooks: [beforeEnsure]\n"),
+		"spec.lifecycle.verbConnections.subscribe": editBeta(t, "    contract: kit/v1\n",
+			"    contract: kit/v1\n    verbConnections:\n      subscribe: [github]\n"),
 		"spec.lifecycle.retainsOnUnsubscribe": editBeta(t, "    contract: kit/v1\n",
 			"    contract: kit/v1\n    retainsOnUnsubscribe: true\n"),
 		"spec.naming": editBeta(t, "  version: 1.0.0\n",
