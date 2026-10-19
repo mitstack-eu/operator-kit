@@ -893,14 +893,34 @@ func TestWorkflow_ASilentProbeRunsNoWriteStep(t *testing.T) {
 	}
 }
 
-func TestWorkflow_CleanUpKitTokenStepStillRunsAlways(t *testing.T) {
-	blocks := publishStepBlocks(t)
-	idx := indexOfStepByName(blocks, "Clean up the kit token file")
-	if idx < 0 {
-		t.Fatal(`publish job has no "Clean up the kit token file" step`)
+// The kit is a public module, so the publish job assumes its role for the push alone and fetches the kit with no credential.
+func TestWorkflow_PublishFetchesThePublicKitWithNoCredential(t *testing.T) {
+	publish := block(block(readWorkflow(t), "jobs"), "publish")
+	if publish == "" {
+		t.Fatal("no publish job block found")
 	}
-	if got := ifOf(blocks[idx]); got != "always()" {
-		t.Errorf(`step "Clean up the kit token file" has if: %q, want "always()" — it must clean up the secret file whether or not the tag was already published`, got)
+	for _, banned := range []string{"MITSTACK_GITHUB_APP", "access_tokens", "kit_token", "kit-token", "KIT_TOKEN: ${{", "GOPRIVATE", "insteadOf"} {
+		if strings.Contains(publish, banned) {
+			t.Errorf("the publish job names %q, so it still mints or carries a kit credential", banned)
+		}
+	}
+	if !strings.Contains(publish, "role-to-assume: ${{ vars.AWS_BLOCK_PUBLISH_ROLE_ARN }}") {
+		t.Error("the publish job no longer assumes the publish role, which the image push needs")
+	}
+	blocks := stepBlocks(publish)
+	checkout := indexOfStepByName(blocks, "Checkout operator-kit")
+	if checkout < 0 {
+		t.Fatal(`publish job has no "Checkout operator-kit" step`)
+	}
+	if with := block(blocks[checkout], "with"); regexp.MustCompile(`(?m)^\s*token:`).MatchString(with) {
+		t.Errorf("publish kit checkout with: =\n%s\nwant no token key, so the public kit is read with the run's default token", with)
+	}
+	build := indexOfStepByName(blocks, "Build and push image")
+	if build < 0 {
+		t.Fatal(`publish job has no "Build and push image" step`)
+	}
+	if strings.Contains(runScript(blocks[build]), "--secret") {
+		t.Errorf("publish image build run =\n%s\nwant no --secret, so the image fetches the public kit with no credential", runScript(blocks[build]))
 	}
 }
 

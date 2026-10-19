@@ -1,6 +1,6 @@
 package main
 
-// kit_fetch_retry_workflow_test.go guards the bounded kit fetch retry in publish-block.yml and the publish job's mint log.
+// kit_fetch_retry_workflow_test.go guards the bounded kit fetch retry in publish-block.yml.
 
 import (
 	"context"
@@ -32,12 +32,12 @@ func stepByName(t *testing.T, job, name string) (int, string) {
 	return idx, blocks[idx]
 }
 
-// fetchRetryCases names each job's retry step and its mint step, empty where the job mints no token.
+// fetchRetryCases names each job's retry step and its mint step, empty since neither job mints a token.
 var fetchRetryCases = []struct {
 	job, step, command, mint, before string
 }{
 	{"conformance", "Fetch Go modules", "go mod download", "", "go vet"},
-	{"publish", "Fetch Go modules", "go mod download", "Mint kit token", "Build and push image"},
+	{"publish", "Fetch Go modules", "go mod download", "", "Build and push image"},
 }
 
 func TestWorkflow_EachJobRetriesTheKitFetchBeforeUsingIt(t *testing.T) {
@@ -64,9 +64,8 @@ func TestWorkflow_EachJobRetriesTheKitFetchBeforeUsingIt(t *testing.T) {
 	}
 }
 
-// The publish job's blockverify run compiles the block with `go test`, and
-// it runs when only the provenance record is missing, so the fetch step runs
-// whatever the probe answers.
+// The publish job's blockverify compiles the block and runs when only the
+// provenance record is missing, so the fetch step runs whatever the probe answers.
 func TestWorkflow_ThePublishFetchRunsWhateverTheProbeAnswers(t *testing.T) {
 	_, b := stepByName(t, "publish", "Fetch Go modules")
 	if got := ifOf(b); got != "" {
@@ -95,46 +94,6 @@ func TestWorkflow_BothJobsRetryWithTheSameFunction(t *testing.T) {
 	}
 	if bodies[0] != bodies[1] {
 		t.Errorf("the two jobs' kit_fetch_retry() bodies differ; keep them identical")
-	}
-}
-
-func TestWorkflow_MintStepsLogTheTokenAnswerWithoutTheToken(t *testing.T) {
-	for _, job := range []string{"publish"} {
-		_, b := stepByName(t, job, "Mint kit token")
-		s := runScript(b)
-		for _, want := range []string{"expires_at", ".repositories", "KIT_TOKEN_MINTED_AT=", `"repositories":["operator-kit"]`} {
-			if !strings.Contains(s, want) {
-				t.Errorf("%s Mint kit token step lacks %q", job, want)
-			}
-		}
-		var logLine string
-		for _, l := range strings.Split(s, "\n") {
-			if strings.Contains(l, "kit token minted:") {
-				logLine = l
-			}
-		}
-		if logLine == "" {
-			t.Errorf("%s Mint kit token step has no mint log line", job)
-		} else if _, err := exec.LookPath("jq"); err == nil {
-			const sentinel = "ghs_SENTINELmintTOKEN0123456789"
-			cmd := exec.Command("bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", logLine)
-			cmd.Env = append(os.Environ(), `RESPONSE={"token":"`+sentinel+`","expires_at":"2026-09-26T08:00:00Z","repositories":[{"name":"operator-kit"}]}`)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Errorf("%s mint log line failed: %v\n%s", job, err, out)
-			}
-			if strings.Contains(string(out), sentinel) {
-				t.Errorf("%s mint log line prints the token:\n%s", job, out)
-			}
-			if want := "kit token minted: expires_at=2026-09-26T08:00:00Z repositories=operator-kit"; !strings.Contains(string(out), want) {
-				t.Errorf("%s mint log line printed %q, want %q", job, out, want)
-			}
-		}
-		mask := strings.Index(s, `::add-mask::$TOKEN`)
-		logged := strings.Index(s, "kit token minted:")
-		if mask < 0 || logged < 0 || logged < mask {
-			t.Errorf("%s Mint kit token step must mask the token before it logs the mint answer", job)
-		}
 	}
 }
 
