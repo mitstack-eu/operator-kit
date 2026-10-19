@@ -73,35 +73,22 @@ jobs:
           set -uo pipefail
           # Runs "$@" up to KIT_FETCH_ATTEMPTS times, sleeping
           # KIT_FETCH_BACKOFF_SECONDS times the attempt number between tries.
-          # Each failure logs the fetch output, the seconds since the mint and
-          # what the same token's API view lists, never the token itself.
+          # Each failure logs the fetch output.
           kit_fetch_retry() {
             local attempts=${KIT_FETCH_ATTEMPTS:-5} backoff=${KIT_FETCH_BACKOFF_SECONDS:-10}
-            local n=1 out code since body names
+            local n=1 out code
             # A bound that is not a positive integer would never end the loop.
             case "$attempts" in ''|*[!0-9]*|0) echo "KIT_FETCH_ATTEMPTS must be a positive integer, got '${attempts}'" >&2; return 2;; esac
             case "$backoff" in ''|*[!0-9]*) echo "KIT_FETCH_BACKOFF_SECONDS must be a whole number, got '${backoff}'" >&2; return 2;; esac
             while :; do
-              since=""
               if out=$("$@" 2>&1); then code=0; else code=$?; fi
-              [ -n "${KIT_TOKEN:-}" ] && out=${out//"$KIT_TOKEN"/***}
-              [ -n "${KIT_TOKEN_MINTED_AT:-}" ] && since=", $(( $(date +%s) - KIT_TOKEN_MINTED_AT ))s after the kit token was minted"
               if [ "$code" -eq 0 ]; then
                 [ -n "$out" ] && printf '%s\n' "$out"
-                echo "kit fetch succeeded on attempt ${n}/${attempts}${since}"
+                echo "kit fetch succeeded on attempt ${n}/${attempts}"
                 return 0
               fi
-              echo "::warning::kit fetch attempt ${n}/${attempts} failed (exit ${code}${since})"
+              echo "::warning::kit fetch attempt ${n}/${attempts} failed (exit ${code})"
               printf '%s\n' "$out" | tail -n 20
-              if [ -n "${KIT_TOKEN:-}" ]; then
-                if body=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${KIT_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/installation/repositories?per_page=100" 2>&1) &&
-                   names=$(jq -r '[.repositories[].name] | join(",")' <<<"$body" 2>/dev/null); then
-                  echo "kit token repository view: ${names}"
-                else
-                  body=${body//"$KIT_TOKEN"/***}
-                  echo "kit token repository view: unavailable ($(head -c 200 <<<"$body" | tr '\n' ' '))"
-                fi
-              fi
               if [ "$n" -ge "$attempts" ]; then
                 echo "::error::kit fetch failed after ${attempts} attempts"
                 return "$code"
@@ -307,35 +294,22 @@ jobs:
           set -uo pipefail
           # Runs "$@" up to KIT_FETCH_ATTEMPTS times, sleeping
           # KIT_FETCH_BACKOFF_SECONDS times the attempt number between tries.
-          # Each failure logs the fetch output, the seconds since the mint and
-          # what the same token's API view lists, never the token itself.
+          # Each failure logs the fetch output.
           kit_fetch_retry() {
             local attempts=${KIT_FETCH_ATTEMPTS:-5} backoff=${KIT_FETCH_BACKOFF_SECONDS:-10}
-            local n=1 out code since body names
+            local n=1 out code
             # A bound that is not a positive integer would never end the loop.
             case "$attempts" in ''|*[!0-9]*|0) echo "KIT_FETCH_ATTEMPTS must be a positive integer, got '${attempts}'" >&2; return 2;; esac
             case "$backoff" in ''|*[!0-9]*) echo "KIT_FETCH_BACKOFF_SECONDS must be a whole number, got '${backoff}'" >&2; return 2;; esac
             while :; do
-              since=""
               if out=$("$@" 2>&1); then code=0; else code=$?; fi
-              [ -n "${KIT_TOKEN:-}" ] && out=${out//"$KIT_TOKEN"/***}
-              [ -n "${KIT_TOKEN_MINTED_AT:-}" ] && since=", $(( $(date +%s) - KIT_TOKEN_MINTED_AT ))s after the kit token was minted"
               if [ "$code" -eq 0 ]; then
                 [ -n "$out" ] && printf '%s\n' "$out"
-                echo "kit fetch succeeded on attempt ${n}/${attempts}${since}"
+                echo "kit fetch succeeded on attempt ${n}/${attempts}"
                 return 0
               fi
-              echo "::warning::kit fetch attempt ${n}/${attempts} failed (exit ${code}${since})"
+              echo "::warning::kit fetch attempt ${n}/${attempts} failed (exit ${code})"
               printf '%s\n' "$out" | tail -n 20
-              if [ -n "${KIT_TOKEN:-}" ]; then
-                if body=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${KIT_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/installation/repositories?per_page=100" 2>&1) &&
-                   names=$(jq -r '[.repositories[].name] | join(",")' <<<"$body" 2>/dev/null); then
-                  echo "kit token repository view: ${names}"
-                else
-                  body=${body//"$KIT_TOKEN"/***}
-                  echo "kit token repository view: unavailable ($(head -c 200 <<<"$body" | tr '\n' ' '))"
-                fi
-              fi
               if [ "$n" -ge "$attempts" ]; then
                 echo "::error::kit fetch failed after ${attempts} attempts"
                 return "$code"
