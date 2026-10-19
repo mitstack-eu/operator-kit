@@ -32,12 +32,11 @@ func stepByName(t *testing.T, job, name string) (int, string) {
 	return idx, blocks[idx]
 }
 
-// fetchRetryCases names each job's retry step and its mint step, empty since neither job mints a token.
 var fetchRetryCases = []struct {
-	job, step, command, mint, before string
+	job, step, command, before string
 }{
-	{"conformance", "Fetch Go modules", "go mod download", "", "go vet"},
-	{"publish", "Fetch Go modules", "go mod download", "", "Build and push image"},
+	{"conformance", "Fetch Go modules", "go mod download", "go vet"},
+	{"publish", "Fetch Go modules", "go mod download", "Build and push image"},
 }
 
 func TestWorkflow_EachJobRetriesTheKitFetchBeforeUsingIt(t *testing.T) {
@@ -46,17 +45,8 @@ func TestWorkflow_EachJobRetriesTheKitFetchBeforeUsingIt(t *testing.T) {
 		if !strings.Contains(runScript(b), "kit_fetch_retry "+c.command) {
 			t.Errorf("%s step %q does not run %q through kit_fetch_retry", c.job, c.step, c.command)
 		}
-		hasToken := strings.Contains(b, "KIT_TOKEN: ${{ steps.kit_token.outputs.token }}")
-		if c.mint == "" && hasToken {
-			t.Errorf("%s step %q receives a kit token, but the job mints none", c.job, c.step)
-		}
-		if c.mint != "" {
-			if !hasToken {
-				t.Errorf("%s step %q does not receive the kit token through env", c.job, c.step)
-			}
-			if mint, _ := stepByName(t, c.job, c.mint); mint > idx {
-				t.Errorf("%s step %q must sit after %q", c.job, c.step, c.mint)
-			}
+		if strings.Contains(b, "KIT_TOKEN") {
+			t.Errorf("%s step %q names KIT_TOKEN, but neither job mints a kit token", c.job, c.step)
 		}
 		if before, _ := stepByName(t, c.job, c.before); idx > before {
 			t.Errorf("%s step %q must sit before %q", c.job, c.step, c.before)
@@ -99,17 +89,17 @@ func TestWorkflow_BothJobsRetryWithTheSameFunction(t *testing.T) {
 
 // fetchStepResult is one execution of a retry step's run body.
 type fetchStepResult struct {
-	out   string
-	code  int
-	calls int
+	out        string
+	code       int
+	calls      int
+	curlCalled bool
 }
 
 // runFetchStep executes a job's retry step body with the retried command
 // replaced by a stub that fails with GitHub's not-found answer for its
 // first failFirst calls (every call when negative), and a stub curl that
-// answers the installation repositories request, or fails when curlOK is
-// false.
-func runFetchStep(t *testing.T, job string, failFirst int, curlOK bool, env map[string]string) fetchStepResult {
+// records being called.
+func runFetchStep(t *testing.T, job string, failFirst int, env map[string]string) fetchStepResult {
 	t.Helper()
 	var c = fetchRetryCases[0]
 	for _, fc := range fetchRetryCases {
@@ -133,16 +123,11 @@ func runFetchStep(t *testing.T, job string, failFirst int, curlOK bool, env map[
 		"n=$(( $(cat " + strconv.Quote(counter) + " 2>/dev/null || echo 0) + 1 ))\n" +
 		"echo \"$n\" > " + strconv.Quote(counter) + "\n" +
 		"if [ " + strconv.Itoa(failFirst) + " -lt 0 ] || [ \"$n\" -le " + strconv.Itoa(failFirst) + " ]; then\n" +
-		"  echo \"remote: Repository not found. (token ${KIT_TOKEN:-none})\" >&2\n  exit 128\nfi\necho fetched\n"
+		"  echo \"remote: Repository not found.\" >&2\n  exit 128\nfi\necho fetched\n"
 	// The retried command's first word is the binary the stub stands in for.
 	writeExecutable(t, filepath.Join(bin, strings.Fields(c.command)[0]), stub)
-	// The failing curl echoes its own arguments, the Authorization header
-	// among them, so printing its error text unredacted leaks the token.
-	curl := "#!/usr/bin/env bash\necho \"curl: (22) The requested URL returned error: 401 ($*)\" >&2\nexit 22\n"
-	if curlOK {
-		curl = "#!/usr/bin/env bash\necho '{\"repositories\":[{\"name\":\"operator-kit\"}]}'\n"
-	}
-	writeExecutable(t, filepath.Join(bin, "curl"), curl)
+	curlMarker := filepath.Join(tmp, "curl-called")
+	writeExecutable(t, filepath.Join(bin, "curl"), "#!/usr/bin/env bash\ntouch "+strconv.Quote(curlMarker)+"\nexit 22\n")
 	scriptPath := filepath.Join(tmp, "step.sh")
 	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 		t.Fatal(err)
@@ -172,7 +157,8 @@ func runFetchStep(t *testing.T, job string, failFirst int, curlOK bool, env map[
 	}
 	raw, _ := os.ReadFile(counter)
 	calls, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
-	return fetchStepResult{out: string(out), code: code, calls: calls}
+	_, curlErr := os.Stat(curlMarker)
+	return fetchStepResult{out: string(out), code: code, calls: calls, curlCalled: curlErr == nil}
 }
 
 func needBashAndJq(t *testing.T) {
@@ -187,8 +173,7 @@ func needBashAndJq(t *testing.T) {
 func TestWorkflow_AFetchThatFailsTwiceSucceedsOnTheThirdAttempt(t *testing.T) {
 	needBashAndJq(t)
 	for _, job := range []string{"conformance", "publish"} {
-		minted := strconv.FormatInt(time.Now().Unix()-3, 10)
-		r := runFetchStep(t, job, 2, true, map[string]string{"KIT_TOKEN": "tok", "KIT_TOKEN_MINTED_AT": minted})
+		r := runFetchStep(t, job, 2, nil)
 		if r.code != 0 {
 			t.Fatalf("%s: exit %d, want 0:\n%s", job, r.code, r.out)
 		}
@@ -196,11 +181,8 @@ func TestWorkflow_AFetchThatFailsTwiceSucceedsOnTheThirdAttempt(t *testing.T) {
 			t.Errorf("%s: the fetch ran %d times, want 3", job, r.calls)
 		}
 		for _, want := range []string{
-			"::warning::kit fetch attempt 1/5 failed",
-			"exit 128",
-			"s after the kit token was minted",
+			"::warning::kit fetch attempt 1/5 failed (exit 128)",
 			"Repository not found",
-			"kit token repository view: operator-kit",
 			"kit fetch succeeded on attempt 3/5",
 			"fetched",
 		} {
@@ -214,7 +196,7 @@ func TestWorkflow_AFetchThatFailsTwiceSucceedsOnTheThirdAttempt(t *testing.T) {
 func TestWorkflow_AFirstAttemptSuccessWarnsNothing(t *testing.T) {
 	needBashAndJq(t)
 	for _, job := range []string{"conformance", "publish"} {
-		r := runFetchStep(t, job, 0, true, nil)
+		r := runFetchStep(t, job, 0, nil)
 		if r.code != 0 || r.calls != 1 {
 			t.Fatalf("%s: exit %d after %d calls, want 0 after 1:\n%s", job, r.code, r.calls, r.out)
 		}
@@ -227,30 +209,32 @@ func TestWorkflow_AFirstAttemptSuccessWarnsNothing(t *testing.T) {
 func TestWorkflow_TheKitFetchRetryIsBounded(t *testing.T) {
 	needBashAndJq(t)
 	for _, job := range []string{"conformance", "publish"} {
-		r := runFetchStep(t, job, -1, false, map[string]string{"KIT_TOKEN": "tok", "KIT_FETCH_ATTEMPTS": "3"})
+		r := runFetchStep(t, job, -1, map[string]string{"KIT_FETCH_ATTEMPTS": "3"})
 		if r.code == 0 {
 			t.Fatalf("%s: exit 0 after every attempt failed:\n%s", job, r.out)
 		}
 		if r.calls != 3 {
 			t.Errorf("%s: the fetch ran %d times, want exactly 3", job, r.calls)
 		}
-		for _, want := range []string{"kit token repository view: unavailable", "::error::kit fetch failed after 3 attempts"} {
-			if !strings.Contains(r.out, want) {
-				t.Errorf("%s: output lacks %q:\n%s", job, want, r.out)
-			}
+		if !strings.Contains(r.out, "::error::kit fetch failed after 3 attempts") {
+			t.Errorf("%s: output lacks the final error line:\n%s", job, r.out)
 		}
 	}
 }
 
-func TestWorkflow_TheKitFetchRetryNeverPrintsTheToken(t *testing.T) {
+// The kit is public, so a failed attempt asks no API about a kit token even when one is in the environment.
+func TestWorkflow_TheKitFetchRetryReadsNoKitToken(t *testing.T) {
 	needBashAndJq(t)
-	const token = "ghs_SENTINELtokenVALUE0123456789"
 	for _, job := range []string{"conformance", "publish"} {
-		for _, curlOK := range []bool{true, false} {
-			r := runFetchStep(t, job, 1, curlOK, map[string]string{"KIT_TOKEN": token})
-			if strings.Contains(r.out, token) {
-				t.Errorf("%s (curl ok=%v): output leaks the token:\n%s", job, curlOK, r.out)
-			}
+		r := runFetchStep(t, job, 1, map[string]string{"KIT_TOKEN": "tok", "KIT_TOKEN_MINTED_AT": "1"})
+		if r.code != 0 {
+			t.Fatalf("%s: exit %d, want 0:\n%s", job, r.code, r.out)
+		}
+		if r.curlCalled {
+			t.Errorf("%s: a failed attempt called curl, want no kit token API read", job)
+		}
+		if strings.Contains(r.out, "kit token") {
+			t.Errorf("%s: output names a kit token:\n%s", job, r.out)
 		}
 	}
 }
@@ -265,7 +249,7 @@ func TestWorkflow_TheKitFetchRetryRefusesAnInvalidBound(t *testing.T) {
 		} {
 			// runFetchStep kills a step that runs past its deadline, which
 			// then reads as a non-2 exit with calls made.
-			r := runFetchStep(t, job, -1, true, env)
+			r := runFetchStep(t, job, -1, env)
 			if r.code != 2 || r.calls != 0 {
 				t.Errorf("%s %v: exit %d after %d calls, want exit 2 with no call:\n%s", job, env, r.code, r.calls, r.out)
 			}
