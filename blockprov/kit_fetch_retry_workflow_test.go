@@ -1,11 +1,6 @@
 package main
 
-// kit_fetch_retry_workflow_test.go guards the bounded retry around the
-// private operator-kit fetch in publish-block.yml. A fetch made seconds
-// after the installation token is minted has answered "Repository not
-// found" while a later run passed, so each job retries the fetch a bounded
-// number of times and logs why an attempt failed, and each mint step logs
-// the token's own answer without the token.
+// kit_fetch_retry_workflow_test.go guards the bounded kit fetch retry in publish-block.yml and the publish job's mint log.
 
 import (
 	"context"
@@ -37,11 +32,11 @@ func stepByName(t *testing.T, job, name string) (int, string) {
 	return idx, blocks[idx]
 }
 
-// fetchRetryCase names each job's retry step and the command it retries.
+// fetchRetryCases names each job's retry step and its mint step, empty where the job mints no token.
 var fetchRetryCases = []struct {
-	job, step, command, after, before string
+	job, step, command, mint, before string
 }{
-	{"conformance", "Fetch Go modules", "go mod download", "Mint kit token", "go vet"},
+	{"conformance", "Fetch Go modules", "go mod download", "", "go vet"},
 	{"publish", "Fetch Go modules", "go mod download", "Mint kit token", "Build and push image"},
 }
 
@@ -51,13 +46,20 @@ func TestWorkflow_EachJobRetriesTheKitFetchBeforeUsingIt(t *testing.T) {
 		if !strings.Contains(runScript(b), "kit_fetch_retry "+c.command) {
 			t.Errorf("%s step %q does not run %q through kit_fetch_retry", c.job, c.step, c.command)
 		}
-		if !strings.Contains(b, "KIT_TOKEN: ${{ steps.kit_token.outputs.token }}") {
-			t.Errorf("%s step %q does not receive the kit token through env", c.job, c.step)
+		hasToken := strings.Contains(b, "KIT_TOKEN: ${{ steps.kit_token.outputs.token }}")
+		if c.mint == "" && hasToken {
+			t.Errorf("%s step %q receives a kit token, but the job mints none", c.job, c.step)
 		}
-		after, _ := stepByName(t, c.job, c.after)
-		before, _ := stepByName(t, c.job, c.before)
-		if !(after < idx && idx < before) {
-			t.Errorf("%s step %q must sit after %q and before %q", c.job, c.step, c.after, c.before)
+		if c.mint != "" {
+			if !hasToken {
+				t.Errorf("%s step %q does not receive the kit token through env", c.job, c.step)
+			}
+			if mint, _ := stepByName(t, c.job, c.mint); mint > idx {
+				t.Errorf("%s step %q must sit after %q", c.job, c.step, c.mint)
+			}
+		}
+		if before, _ := stepByName(t, c.job, c.before); idx > before {
+			t.Errorf("%s step %q must sit before %q", c.job, c.step, c.before)
 		}
 	}
 }
@@ -97,7 +99,7 @@ func TestWorkflow_BothJobsRetryWithTheSameFunction(t *testing.T) {
 }
 
 func TestWorkflow_MintStepsLogTheTokenAnswerWithoutTheToken(t *testing.T) {
-	for _, job := range []string{"conformance", "publish"} {
+	for _, job := range []string{"publish"} {
 		_, b := stepByName(t, job, "Mint kit token")
 		s := runScript(b)
 		for _, want := range []string{"expires_at", ".repositories", "KIT_TOKEN_MINTED_AT=", `"repositories":["operator-kit"]`} {
@@ -308,6 +310,19 @@ func TestWorkflow_TheKitFetchRetryRefusesAnInvalidBound(t *testing.T) {
 			if r.code != 2 || r.calls != 0 {
 				t.Errorf("%s %v: exit %d after %d calls, want exit 2 with no call:\n%s", job, env, r.code, r.calls, r.out)
 			}
+		}
+	}
+}
+
+// Conformance runs on every pull request, so it never assumes the publish role or reads its App key.
+func TestWorkflow_ConformanceRunsWithoutThePublishRole(t *testing.T) {
+	conformance := block(block(readWorkflow(t), "jobs"), "conformance")
+	if conformance == "" {
+		t.Fatal("no conformance job block found")
+	}
+	for _, banned := range []string{"id-token: write", "role-to-assume", "AWS_BLOCK_PUBLISH_ROLE_ARN", "MITSTACK_GITHUB_APP_PRIVATE_KEY", "kit_token", "KIT_TOKEN: ${{"} {
+		if strings.Contains(conformance, banned) {
+			t.Errorf("the conformance job names %q, so a pull request's run reaches the publish role or its App key", banned)
 		}
 	}
 }
