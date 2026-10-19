@@ -214,55 +214,11 @@ jobs:
           role-to-assume: ${{ vars.AWS_BLOCK_PUBLISH_ROLE_ARN }}
           aws-region: ${{ inputs.aws-region }}
 
-      # The conformance job's identical "Mint kit token" entry explains the scope.
-      - name: Mint kit token
-        id: kit_token
-        run: |
-          set -euo pipefail
-          APP_ID=$(aws ssm get-parameter --with-decryption --name /mitstack/MITSTACK_GITHUB_APP_ID --query Parameter.Value --output text)
-          aws ssm get-parameter --with-decryption --name /mitstack/MITSTACK_GITHUB_APP_PRIVATE_KEY --query Parameter.Value --output text | sed 's/\\n/\n/g' > /tmp/app-key.pem
-          chmod 600 /tmp/app-key.pem
-
-          b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-          NOW=$(date +%s)
-          JWT_HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
-          JWT_PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$((NOW-60))" "$((NOW+540))" "$APP_ID" | b64url)
-          JWT_SIG=$(printf '%s.%s' "$JWT_HEADER" "$JWT_PAYLOAD" | openssl dgst -sha256 -sign /tmp/app-key.pem -binary | b64url)
-          JWT="$JWT_HEADER.$JWT_PAYLOAD.$JWT_SIG"
-          rm -f /tmp/app-key.pem
-
-          INSTALLATION_ID=$(curl -fsSL -H "Authorization: Bearer $JWT" https://api.github.com/app/installations \
-            | jq -r '.[] | select(.account.login == "mitstack-eu") | .id')
-          RESPONSE=$(curl -fsSL -X POST \
-            -H "Authorization: Bearer $JWT" \
-            -H "Accept: application/vnd.github+json" \
-            -d '{"repositories":["operator-kit"],"permissions":{"contents":"read"}}' \
-            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens")
-          TOKEN=$(jq -r .token <<<"$RESPONSE")
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-          # The minted token's own answer is logged, never the token itself.
-          jq -r '"kit token minted: expires_at=\(.expires_at) repositories=\([.repositories[]?.name] | join(","))"' <<<"$RESPONSE"
-          echo "KIT_TOKEN_MINTED_AT=$(date +%s)" >> "$GITHUB_ENV"
-
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-          echo "GOPRIVATE=github.com/mitstack-eu" >> "$GITHUB_ENV"
-
-      - name: Write kit token to a secret file for the docker build
-        env:
-          KIT_TOKEN: ${{ steps.kit_token.outputs.token }}
-        run: |
-          set -euo pipefail
-          umask 077
-          printf '%s' "$KIT_TOKEN" > /tmp/kit-token
-          chmod 600 /tmp/kit-token
-
       - name: Checkout operator-kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mitstack-eu/operator-kit
           ref: ${{ inputs.kit-ref }}
-          token: ${{ steps.kit_token.outputs.token }}
           path: operator-kit
 
       - name: Build blockverify and blockprov
@@ -342,13 +298,11 @@ jobs:
           echo "no provenance record at ${RECORD_TAG}; completing it for ${DIGEST}"
           echo "record=false" >> "$GITHUB_OUTPUT"
 
-      # The image build and this job's blockverify run both fetch the kit
-      # with this token, and blockverify runs even when only the provenance
-      # record is missing, so the job fetches the block's modules through a
-      # bounded retry on every run, logging why any attempt failed.
+      # The image build and this job's blockverify run both fetch the kit,
+      # and blockverify runs even when only the provenance record is missing,
+      # so the job fetches the block's modules through a bounded retry on
+      # every run, logging why any attempt failed.
       - name: Fetch Go modules
-        env:
-          KIT_TOKEN: ${{ steps.kit_token.outputs.token }}
         run: |
           set -uo pipefail
           # Runs "$@" up to KIT_FETCH_ATTEMPTS times, sleeping
@@ -398,7 +352,6 @@ jobs:
           set -euo pipefail
           VERSION=$(awk '$1=="version:"{print $2; exit}' manifest.yaml)
           DOCKER_BUILDKIT=1 docker build \
-            --secret id=kit_token,src=/tmp/kit-token \
             -t "${REGISTRY}/${{ inputs.ecr-repository }}:v${VERSION}" \
             -t "${REGISTRY}/${{ inputs.ecr-repository }}:${GITHUB_SHA}" \
             .
@@ -480,7 +433,3 @@ jobs:
             --image-digest "$IMAGE_DIGEST" \
             --username AWS \
             --password-env ECR_PASSWORD
-
-      - name: Clean up the kit token file
-        if: always()
-        run: rm -f /tmp/kit-token
