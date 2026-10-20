@@ -21,6 +21,8 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/provenance"
 )
 
+const goldenRepo = "mitstack-eu/postgres-db"
+
 func validPayload() provenance.Payload {
 	manifest := []byte("apiVersion: mitstack/v1alpha\nkind: Block\nmetadata:\n  id: sample-block\n")
 	sum := sha256.Sum256(manifest)
@@ -45,88 +47,67 @@ func validPayload() provenance.Payload {
 	}
 }
 
-func loadGolden(t *testing.T, name string) provenance.Record {
+func goldenRaw(t *testing.T, name string) []byte {
 	t.Helper()
 	raw, err := provenance.Goldens.ReadFile(provenance.GoldensDir + "/" + name)
 	if err != nil {
 		t.Fatalf("reading golden %q: %v", name, err)
 	}
+	return raw
+}
+
+func loadGolden(t *testing.T, name string) provenance.Record {
+	t.Helper()
 	var r provenance.Record
-	if err := json.Unmarshal(raw, &r); err != nil {
+	if err := json.Unmarshal(goldenRaw(t, name), &r); err != nil {
 		t.Fatalf("golden %q is not a valid Record: %v", name, err)
 	}
 	return r
 }
 
-// invalid-unknown-key.json is signed by a key deliberately absent from the committed JWKS.
+// committedResolver serves the committed JWKS, from which invalid-unknown-key.json's signing key is deliberately absent.
 func committedResolver(t *testing.T) provenance.KeyResolver {
 	t.Helper()
-	raw, err := provenance.Goldens.ReadFile(provenance.GoldensDir + "/record.golden.jwks.json")
-	if err != nil {
-		t.Fatalf("reading committed JWKS: %v", err)
-	}
-	resolve, err := provenance.ParseJWKS(raw)
+	resolve, err := provenance.ParseJWKS(goldenRaw(t, "record.golden.jwks.json"))
 	if err != nil {
 		t.Fatalf("ParseJWKS on the committed JWKS: %v", err)
 	}
 	return resolve
 }
 
-func decodeJWTSegment(t *testing.T, token string, index int) map[string]interface{} {
+func tokenField(t *testing.T, token string, segment int, key string) string {
 	t.Helper()
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		t.Fatalf("token %q is not three segments", token)
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[index])
+	raw, err := base64.RawURLEncoding.DecodeString(parts[segment])
 	if err != nil {
-		t.Fatalf("decoding token segment %d: %v", index, err)
+		t.Fatalf("decoding token segment %d: %v", segment, err)
 	}
-	var doc map[string]interface{}
+	var doc map[string]any
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("token segment %d is not JSON: %v", index, err)
+		t.Fatalf("token segment %d is not JSON: %v", segment, err)
 	}
-	return doc
-}
-
-func stringClaim(t *testing.T, doc map[string]interface{}, key string) string {
-	t.Helper()
-	v, ok := doc[key]
+	s, ok := doc[key].(string)
 	if !ok {
-		t.Fatalf("no claim %q", key)
-	}
-	s, ok := v.(string)
-	if !ok {
-		t.Fatalf("claim %q is not a string: %v", key, v)
+		t.Fatalf("token segment %d has no string %q: %v", segment, key, doc)
 	}
 	return s
 }
 
-func newTestRSAKey(t *testing.T) (*rsa.PrivateKey, *rsa.PublicKey) {
+func newTestRSAKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generating test RSA key: %v", err)
 	}
-	return priv, &priv.PublicKey
+	return priv
 }
 
-func resolverFor(kid string, pub *rsa.PublicKey) provenance.KeyResolver {
-	return func(k string) (*rsa.PublicKey, bool) {
-		if k == kid {
-			return pub, true
-		}
-		return nil, false
-	}
-}
-
-func signTestToken(t *testing.T, priv *rsa.PrivateKey, kid string, claims map[string]interface{}) string {
+func signTestToken(t *testing.T, priv *rsa.PrivateKey, kid string, claims map[string]any) string {
 	t.Helper()
-	header := map[string]interface{}{"alg": "RS256", "kid": kid, "typ": "JWT"}
-	headerJSON, err := json.Marshal(header)
-	if err != nil {
-		t.Fatalf("marshalling header: %v", err)
-	}
+	headerJSON, _ := json.Marshal(map[string]any{"alg": "RS256", "kid": kid, "typ": "JWT"})
 	claimsJSON, err := json.Marshal(claims)
 	if err != nil {
 		t.Fatalf("marshalling claims: %v", err)
@@ -140,36 +121,19 @@ func signTestToken(t *testing.T, priv *rsa.PrivateKey, kid string, claims map[st
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
-func TestCanonical_DeterministicAcrossCalls(t *testing.T) {
+func TestCanonicalAndAudience(t *testing.T) {
 	p := validPayload()
-	a, err := provenance.Canonical(p)
-	if err != nil {
-		t.Fatalf("Canonical: %v", err)
-	}
-	b, err := provenance.Canonical(p)
-	if err != nil {
-		t.Fatalf("Canonical (second call): %v", err)
-	}
-	if !bytes.Equal(a, b) {
-		t.Error("Canonical must be deterministic: two calls on the same payload produced different bytes")
-	}
-}
 
-func TestAudience_EqualsPrefixPlusSha256OfCanonical(t *testing.T) {
-	p := validPayload()
-	canon, err := provenance.Canonical(p)
-	if err != nil {
-		t.Fatalf("Canonical: %v", err)
-	}
-	sum := sha256.Sum256(canon)
-	want := provenance.AudiencePrefix + "sha256:" + hex.EncodeToString(sum[:])
-
+	a, errA := provenance.Canonical(p)
+	b, errB := provenance.Canonical(p)
 	got, err := provenance.Audience(p)
-	if err != nil {
-		t.Fatalf("Audience: %v", err)
+
+	if errA != nil || errB != nil || !bytes.Equal(a, b) {
+		t.Errorf("Canonical twice = %s, %v and %s, %v; want the same bytes both times", a, errA, b, errB)
 	}
-	if got != want {
-		t.Errorf("Audience(p) = %q, want %q (AudiencePrefix + sha256 of Canonical(p))", got, want)
+	sum := sha256.Sum256(a)
+	if want := provenance.AudiencePrefix + "sha256:" + hex.EncodeToString(sum[:]); err != nil || got != want {
+		t.Errorf("Audience(p) = %q, %v; want %q, the prefix and the sha256 of Canonical(p)", got, err, want)
 	}
 }
 
@@ -179,64 +143,53 @@ func TestBuild_MintsTokenForExactlyTheComputedAudience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Audience: %v", err)
 	}
-
 	var gotAud string
+
 	rec, err := provenance.Build(p, func(audience string) (string, error) {
 		gotAud = audience
 		return "minted-for:" + audience, nil
 	})
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if gotAud != wantAud {
-		t.Errorf("mintToken was asked for audience %q, want %q", gotAud, wantAud)
-	}
-	if rec.Token != "minted-for:"+wantAud {
-		t.Errorf("Record.Token = %q, want the exact value mintToken returned", rec.Token)
+
+	if err != nil || gotAud != wantAud || rec.Token != "minted-for:"+wantAud {
+		t.Errorf("Build = token %q, %v after minting for %q; want the token minted for %q", rec.Token, err, gotAud, wantAud)
 	}
 }
 
-func TestBuild_RefusesNonPassVerdict(t *testing.T) {
-	for _, verdict := range []string{"fail", "partial", "", "PASS", "pass-with-warnings"} {
-		verdict := verdict
-		t.Run(fmt.Sprintf("verdict=%q", verdict), func(t *testing.T) {
-			p := validPayload()
-			p.Conformance.Verdict = verdict
-
-			rec, err := provenance.Build(p, func(string) (string, error) {
-				t.Fatal("Build must not mint a token for a non-pass verdict — a failed run writes no record")
-				return "", nil
-			})
-			if !errors.Is(err, provenance.ErrNotConformant) {
-				t.Errorf("err = %v, want ErrNotConformant", err)
-			}
-			if rec != (provenance.Record{}) {
-				t.Errorf("Build must return a zero Record when refusing, got %+v", rec)
-			}
-		})
+func TestBuild_Refuses(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*provenance.Payload)
+		want   error
+	}{
+		{"a fail verdict", func(p *provenance.Payload) { p.Conformance.Verdict = "fail" }, provenance.ErrNotConformant},
+		{"a partial verdict", func(p *provenance.Payload) { p.Conformance.Verdict = "partial" }, provenance.ErrNotConformant},
+		{"an empty verdict", func(p *provenance.Payload) { p.Conformance.Verdict = "" }, provenance.ErrNotConformant},
+		{"an upper-case PASS", func(p *provenance.Payload) { p.Conformance.Verdict = "PASS" }, provenance.ErrNotConformant},
+		{"a pass with warnings", func(p *provenance.Payload) { p.Conformance.Verdict = "pass-with-warnings" }, provenance.ErrNotConformant},
+		{"no schemaVersion", func(p *provenance.Payload) { p.SchemaVersion = "" }, provenance.ErrIncomplete},
+		{"no blockId", func(p *provenance.Payload) { p.BlockID = "" }, provenance.ErrIncomplete},
+		{"no blockVersion", func(p *provenance.Payload) { p.BlockVersion = "" }, provenance.ErrIncomplete},
+		{"no imageRef", func(p *provenance.Payload) { p.ImageRef = "" }, provenance.ErrIncomplete},
+		{"no imageDigest", func(p *provenance.Payload) { p.ImageDigest = "" }, provenance.ErrIncomplete},
+		{"no manifest", func(p *provenance.Payload) { p.Manifest = "" }, provenance.ErrIncomplete},
+		{"no manifestSha256", func(p *provenance.Payload) { p.ManifestSha256 = "" }, provenance.ErrIncomplete},
+		{"no kitVersion", func(p *provenance.Payload) { p.KitVersion = "" }, provenance.ErrIncomplete},
+		{"no sourceRepository", func(p *provenance.Payload) { p.SourceRepository = "" }, provenance.ErrIncomplete},
+		{"no sourceCommit", func(p *provenance.Payload) { p.SourceCommit = "" }, provenance.ErrIncomplete},
 	}
-}
-
-func TestBuild_RefusesIncompletePayload(t *testing.T) {
-	cases := map[string]func(*provenance.Payload){
-		"schemaVersion":    func(p *provenance.Payload) { p.SchemaVersion = "" },
-		"blockId":          func(p *provenance.Payload) { p.BlockID = "" },
-		"blockVersion":     func(p *provenance.Payload) { p.BlockVersion = "" },
-		"imageRef":         func(p *provenance.Payload) { p.ImageRef = "" },
-		"imageDigest":      func(p *provenance.Payload) { p.ImageDigest = "" },
-		"manifest":         func(p *provenance.Payload) { p.Manifest = "" },
-		"manifestSha256":   func(p *provenance.Payload) { p.ManifestSha256 = "" },
-		"kitVersion":       func(p *provenance.Payload) { p.KitVersion = "" },
-		"sourceRepository": func(p *provenance.Payload) { p.SourceRepository = "" },
-		"sourceCommit":     func(p *provenance.Payload) { p.SourceCommit = "" },
-	}
-	for name, mutate := range cases {
-		name, mutate := name, mutate
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			p := validPayload()
-			mutate(&p)
-			if _, err := provenance.Build(p, func(string) (string, error) { return "tok", nil }); !errors.Is(err, provenance.ErrIncomplete) {
-				t.Errorf("missing %s: err = %v, want ErrIncomplete", name, err)
+			tc.mutate(&p)
+			minted := false
+
+			rec, err := provenance.Build(p, func(string) (string, error) { minted = true; return "tok", nil })
+
+			if !errors.Is(err, tc.want) || rec != (provenance.Record{}) {
+				t.Errorf("Build = %+v, %v; want a zero Record and %v", rec, err, tc.want)
+			}
+			if minted && errors.Is(tc.want, provenance.ErrNotConformant) {
+				t.Error("Build minted a token for a non-pass verdict; a failed run writes no record")
 			}
 		})
 	}
@@ -244,432 +197,227 @@ func TestBuild_RefusesIncompletePayload(t *testing.T) {
 
 func TestBuild_ReproducesGoldenCanonicalAndAudience(t *testing.T) {
 	golden := loadGolden(t, "record.golden.json")
-
 	wantCanonical, err := provenance.Canonical(golden.Payload)
 	if err != nil {
 		t.Fatalf("Canonical(golden.Payload): %v", err)
 	}
 
 	rec, err := provenance.Build(golden.Payload, func(string) (string, error) { return "irrelevant", nil })
+
 	if err != nil {
-		t.Fatalf("Build on the golden's own payload must succeed (it is already a pass): %v", err)
+		t.Fatalf("Build on the golden's own passing payload: %v", err)
 	}
-	gotCanonical, err := provenance.Canonical(rec.Payload)
-	if err != nil {
-		t.Fatalf("Canonical(rec.Payload): %v", err)
+	if got, _ := provenance.Canonical(rec.Payload); !bytes.Equal(wantCanonical, got) {
+		t.Errorf("Build's canonical encoding = %s, want the golden's %s byte for byte", got, wantCanonical)
 	}
-	if !bytes.Equal(wantCanonical, gotCanonical) {
-		t.Error("Build must reproduce the golden's canonical encoding byte for byte from the same inputs")
-	}
-
-	wantAud, err := provenance.Audience(golden.Payload)
-	if err != nil {
-		t.Fatalf("Audience(golden.Payload): %v", err)
-	}
-	tokenAud := stringClaim(t, decodeJWTSegment(t, golden.Token, 1), "aud")
-	if tokenAud != wantAud {
-		t.Errorf("golden token's aud claim = %q, want Audience(golden.Payload) = %q", tokenAud, wantAud)
+	wantAud, _ := provenance.Audience(golden.Payload)
+	if aud := tokenField(t, golden.Token, 1, "aud"); aud != wantAud {
+		t.Errorf("golden token's aud = %q, want Audience(golden.Payload) = %q", aud, wantAud)
 	}
 }
 
-func TestVerify_AcceptsTheGoldenRecord(t *testing.T) {
-	rec := loadGolden(t, "record.golden.json")
-	resolve := committedResolver(t)
+func TestVerify_TheGoldens(t *testing.T) {
+	cases := []struct {
+		name, golden, repo string
+		want, notWant      error
+	}{
+		{"the golden record verifies", "record.golden.json", goldenRepo, nil, nil},
+		{"a key in the JWKS claiming another identity is a wrong identity, not an unknown key", "invalid-other-identity.json", goldenRepo, provenance.ErrWrongIdentity, provenance.ErrUnknownKid},
+		{"a key absent from the JWKS is unknown", "invalid-unknown-key.json", goldenRepo, provenance.ErrUnknownKid, nil},
+		{"a tampered payload no longer matches its audience", "invalid-tampered-payload.json", goldenRepo, provenance.ErrRecordTampered, nil},
+		{"a failed conformance run is not conformant", "invalid-failed-conformance.json", goldenRepo, provenance.ErrNotConformant, nil},
+		{"an empty expected repository is refused, never read as any repository", "record.golden.json", "", provenance.ErrWrongIdentity, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := loadGolden(t, tc.golden)
 
-	if err := provenance.Verify(rec, resolve, provenance.Expect{Repository: "mitstack-eu/postgres-db"}); err != nil {
-		t.Fatalf("Verify(golden) = %v, want nil", err)
+			err := provenance.Verify(rec, committedResolver(t), provenance.Expect{Repository: tc.repo})
+
+			if (tc.want == nil && err != nil) || !errors.Is(err, tc.want) || (tc.notWant != nil && errors.Is(err, tc.notWant)) {
+				t.Errorf("Verify(%s, repo %q) = %v, want %v and not %v", tc.golden, tc.repo, err, tc.want, tc.notWant)
+			}
+		})
 	}
 }
 
-func TestVerify_RejectsOtherIdentity(t *testing.T) {
-	rec := loadGolden(t, "invalid-other-identity.json")
-	resolve := committedResolver(t)
-
-	err := provenance.Verify(rec, resolve, provenance.Expect{Repository: "mitstack-eu/postgres-db"})
-	if !errors.Is(err, provenance.ErrWrongIdentity) {
-		t.Errorf("err = %v, want ErrWrongIdentity", err)
-	}
-	if errors.Is(err, provenance.ErrUnknownKid) {
-		t.Error("must not be reported as ErrUnknownKid — the signing key IS in the committed JWKS, only the claimed identity is wrong")
-	}
-}
-
-func TestVerify_RejectsUnknownKey(t *testing.T) {
-	rec := loadGolden(t, "invalid-unknown-key.json")
-	resolve := committedResolver(t)
-
-	if err := provenance.Verify(rec, resolve, provenance.Expect{Repository: "mitstack-eu/postgres-db"}); !errors.Is(err, provenance.ErrUnknownKid) {
-		t.Errorf("err = %v, want ErrUnknownKid", err)
-	}
-}
-
-func TestVerify_RejectsTamperedPayload(t *testing.T) {
-	rec := loadGolden(t, "invalid-tampered-payload.json")
-	resolve := committedResolver(t)
-
-	if err := provenance.Verify(rec, resolve, provenance.Expect{Repository: "mitstack-eu/postgres-db"}); !errors.Is(err, provenance.ErrRecordTampered) {
-		t.Errorf("err = %v, want ErrRecordTampered", err)
-	}
-}
-
-func TestVerify_RejectsFailedConformance(t *testing.T) {
-	rec := loadGolden(t, "invalid-failed-conformance.json")
-	resolve := committedResolver(t)
-
-	if err := provenance.Verify(rec, resolve, provenance.Expect{Repository: "mitstack-eu/postgres-db"}); !errors.Is(err, provenance.ErrNotConformant) {
-		t.Errorf("err = %v, want ErrNotConformant", err)
-	}
-}
-
-func TestVerify_EmptyExpectedRepositoryIsRefused(t *testing.T) {
-	rec := loadGolden(t, "record.golden.json")
-	resolve := committedResolver(t)
-
-	err := provenance.Verify(rec, resolve, provenance.Expect{})
-	if err == nil {
-		t.Fatal(`Verify must refuse an empty Expect rather than treat it as "any repository"`)
-	}
-	if !errors.Is(err, provenance.ErrWrongIdentity) {
-		t.Errorf("err = %v, want ErrWrongIdentity for an unset exp.Repository", err)
-	}
-}
-
-func TestVerify_DoesNotRejectAnExpiredToken(t *testing.T) {
-	// exp is deliberately not checked: an OIDC token lives about ten minutes, so checking it would make every record unverifiable within the hour.
-	priv, pub := newTestRSAKey(t)
-	const kid = "test-kid-expired"
-	p := validPayload()
-	aud, err := provenance.Audience(p)
-	if err != nil {
-		t.Fatalf("Audience: %v", err)
-	}
+func TestVerify_SignedClaims(t *testing.T) {
+	priv, wrongPriv := newTestRSAKey(t), newTestRSAKey(t)
+	const kid = "test-kid"
+	resolve := func(k string) (*rsa.PublicKey, bool) { return &priv.PublicKey, k == kid }
 	now := time.Now().UTC()
-	claims := map[string]interface{}{
-		"iss":        provenance.Issuer,
-		"aud":        aud,
-		"repository": p.SourceRepository,
-		"sha":        p.SourceCommit,
-		"iat":        now.Add(-2 * time.Hour).Unix(),
-		"exp":        now.Add(-90 * time.Minute).Unix(), // long expired
+	cases := []struct {
+		name      string
+		mutate    func(*provenance.Payload)
+		claims    map[string]any
+		signer    *rsa.PrivateKey
+		want      error
+		wantNamed string
+	}{
+		{"an expired token still verifies, since an OIDC token lives about ten minutes and the record must stay checkable", nil,
+			map[string]any{"iat": now.Add(-2 * time.Hour).Unix(), "exp": now.Add(-90 * time.Minute).Unix()}, priv, nil, ""},
+		{"an iat more than five minutes ahead is malformed", nil,
+			map[string]any{"iat": now.Add(10 * time.Minute).Unix(), "exp": now.Add(20 * time.Minute).Unix()}, priv, provenance.ErrMalformedToken, ""},
+		{"an issuer other than GitHub is untrusted", nil, map[string]any{"iss": "https://not-github.example.com"}, priv, provenance.ErrUntrustedIssuer, ""},
+		{"a signed payload missing schemaVersion is incomplete and names it", func(p *provenance.Payload) { p.SchemaVersion = "" }, nil, priv, provenance.ErrIncomplete, "schemaVersion"},
+		{"a forged signature is judged before the identity claims the presenter controls", nil,
+			map[string]any{"repository": "mitstack-eu/wrong-repo"}, wrongPriv, provenance.ErrBadSignature, ""},
 	}
-	rec := provenance.Record{Payload: p, Token: signTestToken(t, priv, kid, claims)}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validPayload()
+			if tc.mutate != nil {
+				tc.mutate(&p)
+			}
+			aud, err := provenance.Audience(p)
+			if err != nil {
+				t.Fatalf("Audience: %v", err)
+			}
+			claims := map[string]any{"iss": provenance.Issuer, "aud": aud, "repository": p.SourceRepository, "sha": p.SourceCommit, "iat": now.Unix()}
+			for k, v := range tc.claims {
+				claims[k] = v
+			}
+			rec := provenance.Record{Payload: p, Token: signTestToken(t, tc.signer, kid, claims)}
 
-	if err := provenance.Verify(rec, resolverFor(kid, pub), provenance.Expect{Repository: p.SourceRepository}); err != nil {
-		t.Errorf("Verify must accept a record whose token has expired, got %v", err)
-	}
-}
+			err = provenance.Verify(rec, resolve, provenance.Expect{Repository: p.SourceRepository})
 
-func TestVerify_RejectsIatMoreThanFiveMinutesInTheFuture(t *testing.T) {
-	priv, pub := newTestRSAKey(t)
-	const kid = "test-kid-future-iat"
-	p := validPayload()
-	aud, err := provenance.Audience(p)
-	if err != nil {
-		t.Fatalf("Audience: %v", err)
-	}
-	now := time.Now().UTC()
-	claims := map[string]interface{}{
-		"iss":        provenance.Issuer,
-		"aud":        aud,
-		"repository": p.SourceRepository,
-		"sha":        p.SourceCommit,
-		"iat":        now.Add(10 * time.Minute).Unix(), // over the 5-minute allowance
-		"exp":        now.Add(20 * time.Minute).Unix(),
-	}
-	rec := provenance.Record{Payload: p, Token: signTestToken(t, priv, kid, claims)}
-
-	err = provenance.Verify(rec, resolverFor(kid, pub), provenance.Expect{Repository: p.SourceRepository})
-	if !errors.Is(err, provenance.ErrMalformedToken) {
-		t.Errorf("err = %v, want ErrMalformedToken for an iat more than five minutes in the future", err)
-	}
-}
-
-func TestVerify_RejectsWrongIssuer(t *testing.T) {
-	priv, pub := newTestRSAKey(t)
-	const kid = "test-kid-issuer"
-	p := validPayload()
-	aud, err := provenance.Audience(p)
-	if err != nil {
-		t.Fatalf("Audience: %v", err)
-	}
-	claims := map[string]interface{}{
-		"iss":        "https://not-github.example.com",
-		"aud":        aud,
-		"repository": p.SourceRepository,
-		"sha":        p.SourceCommit,
-		"iat":        time.Now().UTC().Unix(),
-	}
-	rec := provenance.Record{Payload: p, Token: signTestToken(t, priv, kid, claims)}
-
-	if err := provenance.Verify(rec, resolverFor(kid, pub), provenance.Expect{Repository: p.SourceRepository}); !errors.Is(err, provenance.ErrUntrustedIssuer) {
-		t.Errorf("err = %v, want ErrUntrustedIssuer", err)
-	}
-}
-
-func TestVerify_RejectsIncompletePayloadMissingSchemaVersion(t *testing.T) {
-	priv, pub := newTestRSAKey(t)
-	const kid = "test-kid-missing-schema-version"
-	p := validPayload()
-	p.SchemaVersion = ""
-	aud, err := provenance.Audience(p)
-	if err != nil {
-		t.Fatalf("Audience: %v", err)
-	}
-	claims := map[string]interface{}{
-		"iss":        provenance.Issuer,
-		"aud":        aud,
-		"repository": p.SourceRepository,
-		"sha":        p.SourceCommit,
-		"iat":        time.Now().UTC().Unix(),
-	}
-	rec := provenance.Record{Payload: p, Token: signTestToken(t, priv, kid, claims)}
-
-	err = provenance.Verify(rec, resolverFor(kid, pub), provenance.Expect{Repository: p.SourceRepository})
-	if !errors.Is(err, provenance.ErrIncomplete) {
-		t.Fatalf("err = %v, want ErrIncomplete", err)
-	}
-	if !strings.Contains(err.Error(), "schemaVersion") {
-		t.Errorf("err = %v, want it to name schemaVersion as the missing field", err)
-	}
-}
-
-func TestVerify_SignatureCheckedBeforeIdentityMismatch(t *testing.T) {
-	// Presenter-controlled claims are judged after the signature, so a forged token cannot leak whether they were well-formed.
-	_, pub := newTestRSAKey(t)
-	wrongPriv, _ := newTestRSAKey(t)
-	const kid = "test-kid-order"
-	p := validPayload()
-	aud, err := provenance.Audience(p)
-	if err != nil {
-		t.Fatalf("Audience: %v", err)
-	}
-	claims := map[string]interface{}{
-		"iss":        provenance.Issuer,
-		"aud":        aud,
-		"repository": "mitstack-eu/wrong-repo", // also wrong, to prove signature is judged first
-		"sha":        p.SourceCommit,
-		"iat":        time.Now().UTC().Unix(),
-	}
-	rec := provenance.Record{Payload: p, Token: signTestToken(t, wrongPriv, kid, claims)}
-
-	err = provenance.Verify(rec, resolverFor(kid, pub), provenance.Expect{Repository: p.SourceRepository})
-	if !errors.Is(err, provenance.ErrBadSignature) {
-		t.Errorf("err = %v, want ErrBadSignature — the signature must be judged before any claim the presenter controls", err)
+			if (tc.want == nil && err != nil) || !errors.Is(err, tc.want) {
+				t.Errorf("Verify(claims %v) = %v, want %v", tc.claims, err, tc.want)
+			}
+			if tc.wantNamed != "" && !strings.Contains(fmt.Sprint(err), tc.wantNamed) {
+				t.Errorf("Verify error = %v, want it to name %s", err, tc.wantNamed)
+			}
+		})
 	}
 }
 
 func TestVerify_RejectsMalformedToken(t *testing.T) {
 	p := validPayload()
 	resolve := func(string) (*rsa.PublicKey, bool) { return nil, false }
-
-	headerAndPayload := func(header map[string]interface{}) string {
+	withHeader := func(header map[string]any) string {
 		h, _ := json.Marshal(header)
-		pl, _ := json.Marshal(map[string]interface{}{"iss": provenance.Issuer})
+		pl, _ := json.Marshal(map[string]any{"iss": provenance.Issuer})
 		return base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(pl) + ".sig"
 	}
-
-	cases := map[string]string{
+	for name, token := range map[string]string{
 		"empty token":       "",
 		"only two segments": "aaaa.bbbb",
 		"four segments":     "a.b.c.d",
 		"header not base64": "!!!not-base64!!!.eyJhIjoxfQ.sig",
-		"alg is not RS256":  headerAndPayload(map[string]interface{}{"alg": "HS256", "kid": "some-kid"}),
-		"kid is empty":      headerAndPayload(map[string]interface{}{"alg": "RS256", "kid": ""}),
-	}
-	for name, token := range cases {
-		name, token := name, token
+		"alg is not RS256":  withHeader(map[string]any{"alg": "HS256", "kid": "some-kid"}),
+		"kid is empty":      withHeader(map[string]any{"alg": "RS256", "kid": ""}),
+	} {
 		t.Run(name, func(t *testing.T) {
-			rec := provenance.Record{Payload: p, Token: token}
-			if err := provenance.Verify(rec, resolve, provenance.Expect{Repository: p.SourceRepository}); !errors.Is(err, provenance.ErrMalformedToken) {
-				t.Errorf("err = %v, want ErrMalformedToken", err)
+			err := provenance.Verify(provenance.Record{Payload: p, Token: token}, resolve, provenance.Expect{Repository: p.SourceRepository})
+
+			if !errors.Is(err, provenance.ErrMalformedToken) {
+				t.Errorf("Verify(token %q) = %v, want ErrMalformedToken", token, err)
 			}
 		})
 	}
 }
 
-func TestParseJWKS_RoundTripsAndUnknownKidReturnsFalse(t *testing.T) {
-	golden := loadGolden(t, "record.golden.json")
-	kid := stringClaim(t, decodeJWTSegment(t, golden.Token, 0), "kid")
-
+func TestParseJWKS_ResolvesTheGoldenKidAndNoOther(t *testing.T) {
+	kid := tokenField(t, loadGolden(t, "record.golden.json").Token, 0, "kid")
 	resolve := committedResolver(t)
-	if _, ok := resolve(kid); !ok {
-		t.Fatalf("ParseJWKS must resolve the golden token's own kid %q", kid)
-	}
-	if _, ok := resolve("not-a-real-kid-at-all"); ok {
-		t.Error("ParseJWKS's resolver must return false for an unknown kid, not silently accept it")
+
+	_, known := resolve(kid)
+	_, unknown := resolve("not-a-real-kid-at-all")
+
+	if !known || unknown {
+		t.Errorf("resolve(%q) = %v, resolve(unknown) = %v; want true and false", kid, known, unknown)
 	}
 }
 
 func TestSchema_DeclaresDraft202012VersionAndTopLevelVersion(t *testing.T) {
-	if len(provenance.Schema) == 0 {
-		t.Fatal("provenance.Schema must not be empty")
-	}
-	var doc map[string]interface{}
-	if err := json.Unmarshal(provenance.Schema, &doc); err != nil {
-		t.Fatalf("provenance.Schema must be valid JSON: %v", err)
+	var doc map[string]any
+
+	err := json.Unmarshal(provenance.Schema, &doc)
+
+	if err != nil || len(provenance.Schema) == 0 {
+		t.Fatalf("provenance.Schema is empty or not JSON: %v", err)
 	}
 	if doc["$schema"] != "https://json-schema.org/draft/2020-12/schema" {
 		t.Errorf(`provenance.Schema["$schema"] = %v, want "https://json-schema.org/draft/2020-12/schema"`, doc["$schema"])
 	}
-	version, ok := doc["version"]
-	if !ok || version == "" {
-		t.Error(`provenance.Schema must declare a non-empty top-level "version" field`)
-	}
-}
-
-func TestValidGoldens_ExcludesAnyJWKSCompanionBySuffix(t *testing.T) {
-	valid, err := provenance.ValidGoldens()
-	if err != nil {
-		t.Fatalf("ValidGoldens: %v", err)
-	}
-	for name := range valid {
-		if strings.HasSuffix(name, ".jwks") {
-			t.Errorf("ValidGoldens must not surface a *.jwks.json file (%q) as if it were a record golden — the accessor must skip the .jwks.json suffix generally", name)
-		}
-	}
-}
-
-func TestValidGoldens_NonVacuousAndEveryEntryIsARecord(t *testing.T) {
-	valid, err := provenance.ValidGoldens()
-	if err != nil {
-		t.Fatalf("ValidGoldens: %v", err)
-	}
-	if len(valid) == 0 {
-		t.Fatal("ValidGoldens must not be empty — a vacuous acceptance set proves nothing")
-	}
-	for name, raw := range valid {
-		var r provenance.Record
-		if err := json.Unmarshal(raw, &r); err != nil {
-			t.Errorf("valid golden %q is not valid Record JSON: %v", name, err)
-		}
-	}
-}
-
-func TestInvalidGoldens_NonVacuous(t *testing.T) {
-	invalid, err := provenance.InvalidGoldens()
-	if err != nil {
-		t.Fatalf("InvalidGoldens: %v", err)
-	}
-	if len(invalid) == 0 {
-		t.Fatal("InvalidGoldens must not be empty — a vacuous rejection set proves nothing")
-	}
-	for name, raw := range invalid {
-		var r provenance.Record
-		if err := json.Unmarshal(raw, &r); err != nil {
-			t.Errorf("invalid golden %q is not valid Record JSON: %v", name, err)
-		}
-	}
-}
-
-const platformPinManifestSha256 = "sha256:1300af076bfb7994658ffa101c9e444d7dd2665accc7f24f6b71b6b86aef9cee"
-
-func TestGoldenManifestSha256_MatchesThePlatformPinLiteralAndItsOwnBytes(t *testing.T) {
-	rec := loadGolden(t, "record.golden.json")
-
-	if rec.Payload.ManifestSha256 != platformPinManifestSha256 {
-		t.Errorf("golden manifestSha256 = %q, want the literal platform/blocks/pins/postgres-db.yaml value %q", rec.Payload.ManifestSha256, platformPinManifestSha256)
-	}
-
-	raw, err := base64.StdEncoding.DecodeString(rec.Payload.Manifest)
-	if err != nil {
-		t.Fatalf("golden manifest is not valid base64: %v", err)
-	}
-	sum := sha256.Sum256(raw)
-	got := "sha256:" + hex.EncodeToString(sum[:])
-	if got != rec.Payload.ManifestSha256 {
-		t.Errorf("sha256 of the decoded manifest = %q, want it to equal manifestSha256 %q", got, rec.Payload.ManifestSha256)
+	if v, ok := doc["version"]; !ok || v == "" {
+		t.Errorf(`provenance.Schema "version" = %v, want a non-empty top-level version`, v)
 	}
 }
 
 var sha256FieldPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
-func TestGoldenDigestFields_AreShapedLikeSha256(t *testing.T) {
-	valid, err := provenance.ValidGoldens()
-	if err != nil {
-		t.Fatalf("ValidGoldens: %v", err)
-	}
-	invalid, err := provenance.InvalidGoldens()
-	if err != nil {
-		t.Fatalf("InvalidGoldens: %v", err)
-	}
+// Every golden, valid or invalid, is a Record whose digest fields are shaped like sha256, and neither set is vacuous.
+func TestGoldens_AreNonVacuousRecordsWithSha256Digests(t *testing.T) {
+	for _, set := range []struct {
+		name string
+		load func() (map[string][]byte, error)
+	}{{"ValidGoldens", provenance.ValidGoldens}, {"InvalidGoldens", provenance.InvalidGoldens}} {
+		t.Run(set.name, func(t *testing.T) {
+			goldens, err := set.load()
 
-	all := map[string][]byte{}
-	for name, raw := range valid {
-		all[name] = raw
-	}
-	for name, raw := range invalid {
-		all[name] = raw
-	}
-	if len(all) == 0 {
-		t.Fatal("no goldens found to check")
-	}
-
-	for name, raw := range all {
-		var r provenance.Record
-		if err := json.Unmarshal(raw, &r); err != nil {
-			t.Fatalf("golden %q is not valid Record JSON: %v", name, err)
-		}
-		fields := map[string]string{
-			"imageDigest":               r.Payload.ImageDigest,
-			"manifestSha256":            r.Payload.ManifestSha256,
-			"conformance.resultsDigest": r.Payload.Conformance.ResultsDigest,
-		}
-		for field, value := range fields {
-			if !sha256FieldPattern.MatchString(value) {
-				t.Errorf("golden %q: %s = %q, want it to match ^sha256:[0-9a-f]{64}$", name, field, value)
+			if err != nil || len(goldens) == 0 {
+				t.Fatalf("%s = %d goldens, %v; want a non-empty set, since a vacuous set proves nothing", set.name, len(goldens), err)
 			}
+			for name, raw := range goldens {
+				if strings.HasSuffix(name, ".jwks") {
+					t.Errorf("%s surfaces the JWKS companion %q as a record golden", set.name, name)
+				}
+				var r provenance.Record
+				if err := json.Unmarshal(raw, &r); err != nil {
+					t.Errorf("golden %q is not valid Record JSON: %v", name, err)
+					continue
+				}
+				for field, value := range map[string]string{
+					"imageDigest": r.Payload.ImageDigest, "manifestSha256": r.Payload.ManifestSha256, "conformance.resultsDigest": r.Payload.Conformance.ResultsDigest,
+				} {
+					if !sha256FieldPattern.MatchString(value) {
+						t.Errorf("golden %q: %s = %q, want it to match %s", name, field, value, sha256FieldPattern)
+					}
+				}
+			}
+		})
+	}
+}
+
+const platformPinManifestSha256 = "sha256:1300af076bfb7994658ffa101c9e444d7dd2665accc7f24f6b71b6b86aef9cee"
+
+func TestGoldenRecord_CarriesItsManifestAndEveryAttestedField(t *testing.T) {
+	p := loadGolden(t, "record.golden.json").Payload
+
+	raw, err := base64.StdEncoding.DecodeString(p.Manifest)
+
+	if err != nil {
+		t.Fatalf("golden manifest is not valid base64: %v", err)
+	}
+	sum := sha256.Sum256(raw)
+	if got := "sha256:" + hex.EncodeToString(sum[:]); p.ManifestSha256 != platformPinManifestSha256 || got != p.ManifestSha256 {
+		t.Errorf("golden manifestSha256 = %q, sha256 of its manifest %q; want both the platform/blocks/pins/postgres-db.yaml value %q", p.ManifestSha256, got, platformPinManifestSha256)
+	}
+	for field, value := range map[string]string{
+		"manifest": p.Manifest, "kitVersion": p.KitVersion, "sourceCommit": p.SourceCommit,
+		"conformance.verdict": p.Conformance.Verdict, "conformance.suiteVersion": p.Conformance.SuiteVersion, "conformance.resultsDigest": p.Conformance.ResultsDigest,
+	} {
+		if value == "" {
+			t.Errorf("golden %s is empty, want it carried", field)
 		}
 	}
 }
 
-func TestGoldenRecord_CarriesEveryAcceptanceCriterionField(t *testing.T) {
-	rec := loadGolden(t, "record.golden.json")
-
-	if rec.Payload.Manifest == "" {
-		t.Error("golden must carry the manifest bytes")
-	}
-	if rec.Payload.ManifestSha256 == "" {
-		t.Error("golden must carry the manifest's sha256")
-	}
-	if rec.Payload.KitVersion == "" {
-		t.Error("golden must carry the kit version")
-	}
-	if rec.Payload.Conformance.Verdict == "" || rec.Payload.Conformance.SuiteVersion == "" || rec.Payload.Conformance.ResultsDigest == "" {
-		t.Error("golden must carry the conformance result")
-	}
-	if rec.Payload.SourceCommit == "" {
-		t.Error("golden must carry the source commit")
-	}
-}
-
-// Decode accepts reordered keys and reformatted whitespace on purpose, because an intermediary may reformat a record and the audience already covers every value.
-
-// loadGoldenRaw returns raw bytes because json.Unmarshal into Record would drop the very field under test.
-func loadGoldenRaw(t *testing.T, name string) []byte {
+// injectField sets key in the object at path, the record's own top level when path is empty.
+func injectField(t *testing.T, raw []byte, path, key string, value any) []byte {
 	t.Helper()
-	raw, err := provenance.Goldens.ReadFile(provenance.GoldensDir + "/" + name)
-	if err != nil {
-		t.Fatalf("reading golden %q: %v", name, err)
-	}
-	return raw
-}
-
-// injectField treats an empty path as the record's own top level.
-func injectField(t *testing.T, raw []byte, path, key string, value interface{}) []byte {
-	t.Helper()
-	var doc map[string]interface{}
+	var doc map[string]any
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("decoding fixture generically: %v", err)
 	}
 	target := doc
-	if path != "" {
-		for _, segment := range strings.Split(path, ".") {
-			next, ok := target[segment].(map[string]interface{})
-			if !ok {
-				t.Fatalf("fixture has no object at %q", segment)
-			}
-			target = next
+	for _, segment := range strings.FieldsFunc(path, func(r rune) bool { return r == '.' }) {
+		next, ok := target[segment].(map[string]any)
+		if !ok {
+			t.Fatalf("fixture has no object at %q", segment)
 		}
+		target = next
 	}
 	target[key] = value
 	out, err := json.Marshal(doc)
@@ -679,58 +427,39 @@ func injectField(t *testing.T, raw []byte, path, key string, value interface{}) 
 	return out
 }
 
-func TestDecode_AcceptsTheGoldenRecordUnchanged(t *testing.T) {
-	want := loadGolden(t, "record.golden.json")
-	rec, err := provenance.Decode(loadGoldenRaw(t, "record.golden.json"))
-	if err != nil {
-		t.Fatalf("Decode(golden) = %v, want nil — strictness must not break the artefact both halves share", err)
-	}
-	if rec != want {
-		t.Errorf("Decode(golden) = %+v, want %+v", rec, want)
-	}
-}
-
-func TestDecode_RejectsUnknownFieldAtPayloadTopLevel(t *testing.T) {
-	raw := injectField(t, loadGoldenRaw(t, "record.golden.json"), "payload", "evilExtraField", "attacker-controlled")
-	if _, err := provenance.Decode(raw); !errors.Is(err, provenance.ErrUnknownField) {
-		t.Errorf("err = %v, want ErrUnknownField for an unknown key at payload's top level", err)
-	}
-}
-
-func TestDecode_RejectsUnknownFieldInsideConformance(t *testing.T) {
-	raw := injectField(t, loadGoldenRaw(t, "record.golden.json"), "payload.conformance", "evilExtraField", "attacker-controlled")
-	if _, err := provenance.Decode(raw); !errors.Is(err, provenance.ErrUnknownField) {
-		t.Errorf("err = %v, want ErrUnknownField for an unknown key inside conformance", err)
-	}
-}
-
-func TestDecode_RejectsUnknownFieldAtRecordTopLevel(t *testing.T) {
-	raw := injectField(t, loadGoldenRaw(t, "record.golden.json"), "", "evilExtraField", "attacker-controlled")
-	if _, err := provenance.Decode(raw); !errors.Is(err, provenance.ErrUnknownField) {
-		t.Errorf("err = %v, want ErrUnknownField for an unknown key beside payload and token", err)
-	}
-}
-
-func TestDecode_RejectsTheUnknownFieldGolden(t *testing.T) {
-	raw := loadGoldenRaw(t, "invalid-unknown-field.json")
-	if _, err := provenance.Decode(raw); !errors.Is(err, provenance.ErrUnknownField) {
-		t.Errorf("err = %v, want ErrUnknownField", err)
-	}
-}
-
-func TestDecode_AcceptsReorderedKeysAndExtraWhitespace(t *testing.T) {
+// Decode accepts reordered keys and reformatted whitespace on purpose, because an intermediary may reformat a record and the audience already covers every value.
+func TestDecode(t *testing.T) {
+	golden := goldenRaw(t, "record.golden.json")
 	want := loadGolden(t, "record.golden.json")
 	payloadJSON, err := json.Marshal(want.Payload)
 	if err != nil {
 		t.Fatalf("marshalling payload: %v", err)
 	}
-	reordered := []byte(fmt.Sprintf("{\n\n  \"token\":   %q  ,\n\n  \"payload\":\n%s\n\n}\n", want.Token, payloadJSON))
-
-	rec, err := provenance.Decode(reordered)
-	if err != nil {
-		t.Fatalf("Decode must accept reordered keys and extra whitespace when every field is one the schema declares: %v", err)
+	cases := []struct {
+		name    string
+		raw     []byte
+		wantErr error
+	}{
+		{"the golden record decodes unchanged", golden, nil},
+		{"reordered keys and extra whitespace decode to the same record", []byte(fmt.Sprintf("{\n\n  \"token\":   %q  ,\n\n  \"payload\":\n%s\n\n}\n", want.Token, payloadJSON)), nil},
+		{"an unknown field at the payload's top level is refused", injectField(t, golden, "payload", "evilExtraField", "attacker-controlled"), provenance.ErrUnknownField},
+		{"an unknown field inside conformance is refused", injectField(t, golden, "payload.conformance", "evilExtraField", "attacker-controlled"), provenance.ErrUnknownField},
+		{"an unknown field beside payload and token is refused", injectField(t, golden, "", "evilExtraField", "attacker-controlled"), provenance.ErrUnknownField},
+		{"the unknown-field golden is refused", goldenRaw(t, "invalid-unknown-field.json"), provenance.ErrUnknownField},
 	}
-	if rec != want {
-		t.Errorf("Decode(reordered) = %+v, want %+v", rec, want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, err := provenance.Decode(tc.raw)
+
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Errorf("Decode = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || rec != want {
+				t.Errorf("Decode = %+v, %v; want %+v", rec, err, want)
+			}
+		})
 	}
 }

@@ -1,17 +1,5 @@
 package main
 
-// main_test.go pins the CONTRACT for the `pr-keys` command: the CLI a
-// pull_request CI job calls to gate the pull request on whether its range
-// delivers a board key. The seam under test is
-// Run(args []string, stdout io.Writer) int, following cmd/board-delivery's
-// own idiom: the whole command is testable without a real process.
-//
-// The git half runs against a hermetic temporary repository built with
-// os/exec (git init/commit), mirroring cmd/board-delivery/main_test.go's
-// fixture minus the anchor-tag and bare-origin machinery this command has no
-// use for: pr-keys only ever reads a base..head range, and never writes to
-// the repository.
-
 import (
 	"bytes"
 	"os/exec"
@@ -30,128 +18,74 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-type testRepo struct {
-	Dir string
-}
-
-func newTestRepo(t *testing.T) *testRepo {
+// newRange builds a repository with a seed commit and then one empty commit per subject, returning the directory and the seed and head shas.
+func newRange(t *testing.T, subjects ...string) (dir, base, head string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir = t.TempDir()
 	runGit(t, dir, "init", "-q")
-	r := &testRepo{Dir: dir}
-	r.commit(t, "seed", "")
-	return r
+	for _, s := range append([]string{"seed"}, subjects...) {
+		runGit(t, dir, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "--allow-empty", "-q", "-m", s)
+		head = runGit(t, dir, "rev-parse", "HEAD")
+		if base == "" {
+			base = head
+		}
+	}
+	return dir, base, head
 }
 
-// commit makes an empty commit (subject, optional body) and returns its sha.
-func (r *testRepo) commit(t *testing.T, subject, body string) string {
-	t.Helper()
-	args := []string{"-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "--allow-empty", "-m", subject}
-	if body != "" {
-		args = append(args, "-m", body)
+func TestRun(t *testing.T) {
+	keyed := key(12) + ": fix the thing"
+	cases := []struct {
+		name      string
+		subjects  []string
+		args      func(dir, base, head string) []string
+		envTitle  string
+		wantCode  int
+		wantFirst string
+	}{
+		{"a keyed commit and a keyed title exit zero", []string{keyed},
+			func(d, b, h string) []string {
+				return []string{"--repo", d, "--base", b, "--head", h, "--title", keyed}
+			}, "", 0, ""},
+		{"a merge range keyed only in its branch name exits non-zero naming the commits", []string{
+			"delete gets instance config", "fix review comments", "Merge pull request #6 from mitstack-eu/fix/" + key(3149) + "-delete-gets-instance-config"},
+			func(d, b, h string) []string {
+				return []string{"--repo", d, "--base", b, "--head", h, "--title", key(3149) + ": delete gets instance config"}
+			}, "", 1, "pr-keys: no board key in the pull request's commits"},
+		{"a keyless title exits non-zero naming the title", []string{keyed},
+			func(d, b, h string) []string {
+				return []string{"--repo", d, "--base", b, "--head", h, "--title", "fix the thing"}
+			}, "", 1,
+			"pr-keys: no board key in the pull request's title"},
+		{"an empty range exits non-zero naming the commits", nil,
+			func(d, _, h string) []string {
+				return []string{"--repo", d, "--base", h, "--head", h, "--title", keyed}
+			}, "", 1,
+			"pr-keys: no board key in the pull request's commits"},
+		{"a missing --head exits two", nil,
+			func(string, string, string) []string {
+				return []string{"--repo", ".", "--base", "HEAD", "--title", key(1) + ": x"}
+			}, "", 2, "pr-keys: --head is required"},
+		{"a missing --base exits two", nil,
+			func(string, string, string) []string {
+				return []string{"--repo", ".", "--head", "HEAD", "--title", key(1) + ": x"}
+			}, "", 2, "pr-keys: --base is required"},
+		{"the title falls back to PR_TITLE when --title is omitted", []string{keyed},
+			func(d, b, h string) []string { return []string{"--repo", d, "--base", b, "--head", h} }, keyed, 0, ""},
 	}
-	runGit(t, r.Dir, args...)
-	return runGit(t, r.Dir, "rev-parse", "HEAD")
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, base, head := newRange(t, tc.subjects...)
+			t.Setenv("PR_TITLE", tc.envTitle)
+			args := tc.args(dir, base, head)
+			var out bytes.Buffer
 
-// runPRKeys invokes Run with --repo/--base/--head/--title exactly as the
-// workflow job will set them.
-func runPRKeys(t *testing.T, repoDir, base, head, title string) (stdout string, exitCode int) {
-	t.Helper()
-	args := []string{"--repo", repoDir, "--base", base, "--head", head, "--title", title}
-	var buf bytes.Buffer
-	exitCode = Run(args, &buf)
-	return buf.String(), exitCode
-}
+			code := Run(args, &out)
 
-func TestRun_KeyedCommitAndKeyedTitle_ExitsZero(t *testing.T) {
-	repo := newTestRepo(t)
-	base := runGit(t, repo.Dir, "rev-parse", "HEAD")
-	head := repo.commit(t, "MIT-12: fix the thing", "")
-
-	out, code := runPRKeys(t, repo.Dir, base, head, "MIT-12: fix the thing")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0, output: %s", code, out)
-	}
-}
-
-// TestRun_KitPR6Shape_ExitsNonZeroAndNamesCommits exercises the range
-// reading through real git: a merge commit whose branch commits carry no
-// key, a merge subject naming the key only inside the branch name, and a
-// keyed title, which must fail on the commits.
-func TestRun_KitPR6Shape_ExitsNonZeroAndNamesCommits(t *testing.T) {
-	repo := newTestRepo(t)
-	base := runGit(t, repo.Dir, "rev-parse", "HEAD")
-	repo.commit(t, "delete gets instance config", "")
-	repo.commit(t, "fix review comments", "")
-	head := repo.commit(t, "Merge pull request #6 from mitstack-eu/fix/MIT-3149-delete-gets-instance-config", "")
-
-	out, code := runPRKeys(t, repo.Dir, base, head, "MIT-3149: delete gets instance config")
-	if code == 0 {
-		t.Fatalf("Run exit code = 0, want non-zero — kit PR 6's branch commits carry no key")
-	}
-	if !strings.Contains(strings.ToLower(out), "commit") {
-		t.Errorf("output = %q, want it to name the commits as missing", out)
-	}
-}
-
-func TestRun_KeylessTitle_ExitsNonZeroAndNamesTitle(t *testing.T) {
-	repo := newTestRepo(t)
-	base := runGit(t, repo.Dir, "rev-parse", "HEAD")
-	head := repo.commit(t, "MIT-12: fix the thing", "")
-
-	out, code := runPRKeys(t, repo.Dir, base, head, "fix the thing")
-	if code == 0 {
-		t.Fatalf("Run exit code = 0, want non-zero — the title carries no key")
-	}
-	if !strings.Contains(strings.ToLower(out), "title") {
-		t.Errorf("output = %q, want it to name the title as missing", out)
-	}
-}
-
-// TestRun_EmptyRange_ExitsNonZero pins that an empty base..head range never
-// passes vacuously on a keyed title alone.
-func TestRun_EmptyRange_ExitsNonZero(t *testing.T) {
-	repo := newTestRepo(t)
-	head := runGit(t, repo.Dir, "rev-parse", "HEAD")
-
-	out, code := runPRKeys(t, repo.Dir, head, head, "MIT-12: fix the thing")
-	if code == 0 {
-		t.Fatalf("Run exit code = 0, want non-zero — an empty range must never pass")
-	}
-	if !strings.Contains(strings.ToLower(out), "commit") {
-		t.Errorf("output = %q, want it to name the commits as missing", out)
-	}
-}
-
-func TestRun_MissingHeadFlag_ExitsTwo(t *testing.T) {
-	var buf bytes.Buffer
-	code := Run([]string{"--repo", ".", "--base", "HEAD", "--title", "MIT-1: x"}, &buf)
-	if code != 2 {
-		t.Fatalf("Run exit code = %d, want 2 — --head is required, output: %s", code, buf.String())
-	}
-}
-
-func TestRun_MissingBaseFlag_ExitsTwo(t *testing.T) {
-	var buf bytes.Buffer
-	code := Run([]string{"--repo", ".", "--head", "HEAD", "--title", "MIT-1: x"}, &buf)
-	if code != 2 {
-		t.Fatalf("Run exit code = %d, want 2 — --base is required, output: %s", code, buf.String())
-	}
-}
-
-// TestRun_TitleFallsBackToEnvWhenFlagOmitted pins that the title can arrive
-// through PR_TITLE, not only through --title, since the workflow job reads
-// it from the pull_request event either way.
-func TestRun_TitleFallsBackToEnvWhenFlagOmitted(t *testing.T) {
-	repo := newTestRepo(t)
-	base := runGit(t, repo.Dir, "rev-parse", "HEAD")
-	head := repo.commit(t, "MIT-12: fix the thing", "")
-
-	t.Setenv("PR_TITLE", "MIT-12: fix the thing")
-	var buf bytes.Buffer
-	code := Run([]string{"--repo", repo.Dir, "--base", base, "--head", head}, &buf)
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0 — the title should fall back to PR_TITLE, output: %s", code, buf.String())
+			first, _, _ := strings.Cut(out.String(), "\n")
+			if code != tc.wantCode || (tc.wantFirst != "" && first != tc.wantFirst) {
+				t.Errorf("Run(%q) = %d, first line %q; want %d, %q\noutput: %s", args, code, first, tc.wantCode, tc.wantFirst, out.String())
+			}
+		})
 	}
 }

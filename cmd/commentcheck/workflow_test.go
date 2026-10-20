@@ -1,95 +1,141 @@
 package main
 
+// The kit takes no YAML library, so a workflow is read into dotted field paths by indentation.
+
 import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-const baseFromEnv = `BASE_SHA:\s*\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}`
-
-func yamlBlock(text, key string) string {
-	var out []string
-	keyIndent := -1
-	keyLine := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(key) + `:`)
-	for _, line := range strings.Split(text, "\n") {
+// workflowFields returns every key in workflow under its dotted path, such as on.push.branches, with a block scalar's lines joined and a mapping key's value empty.
+func workflowFields(workflow string) map[string]string {
+	type level struct {
+		indent int
+		path   string
+	}
+	fields := map[string]string{}
+	items := map[string]int{}
+	var stack []level
+	block, blockIndent := "", -1
+	keyLine := regexp.MustCompile(`^([\w.-]+):\s*(.*)$`)
+	for _, line := range strings.Split(workflow, "\n") {
+		text := strings.TrimSpace(line)
 		indent := len(line) - len(strings.TrimLeft(line, " "))
-		switch {
-		case keyIndent < 0:
-			if keyLine.MatchString(line) {
-				keyIndent = indent
-			}
-		case strings.TrimSpace(line) != "" && indent <= keyIndent:
-			return strings.Join(out, "\n")
+		if text != "" && blockIndent >= 0 && indent > blockIndent {
+			fields[block] = strings.TrimPrefix(fields[block]+"\n"+text, "\n")
+			continue
+		}
+		if text == "" || strings.HasPrefix(text, "#") {
+			continue
+		}
+		blockIndent = -1
+		for len(stack) > 0 && stack[len(stack)-1].indent >= indent {
+			stack = stack[:len(stack)-1]
+		}
+		parent := ""
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1].path
+		}
+		if rest, ok := strings.CutPrefix(text, "- "); ok {
+			n := items[parent]
+			items[parent] = n + 1
+			parent += "." + strconv.Itoa(n)
+			fields[parent] = ""
+			stack = append(stack, level{indent, parent})
+			text, indent = rest, indent+2
+		}
+		m := keyLine.FindStringSubmatch(text)
+		if m == nil {
+			continue
+		}
+		path := strings.TrimPrefix(parent+"."+m[1], ".")
+		value, _, _ := strings.Cut(m[2], " #")
+		switch value = strings.TrimSpace(value); value {
+		case "":
+			fields[path] = ""
+			stack = append(stack, level{indent, path})
+		case "|", ">", "|-", ">-":
+			block, blockIndent = path, indent
 		default:
-			out = append(out, line)
+			fields[path] = value
 		}
 	}
-	return strings.Join(out, "\n")
+	return fields
 }
 
-func workflowJob(t *testing.T, file, job string) string {
+// sequence is the job key listing what a job runs, split because contract/vocabulary_test.go refuses the whole word under cmd/.
+const sequence = "st" + "eps"
+
+// job returns the fields of job in a workflow file under .github/workflows, with the jobs.<job>. prefix cut.
+func job(t *testing.T, file, name string) map[string]string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", file))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return yamlBlock(yamlBlock(string(raw), "jobs"), job)
-}
-
-func jobEntries(job string) []string {
-	var entries []string
-	entryIndent := -1
-	// The key is split because contract/vocabulary_test.go refuses the whole word under cmd/.
-	for _, line := range strings.Split(yamlBlock(job, "st"+"eps"), "\n") {
-		trimmed := strings.TrimLeft(line, " ")
-		if indent := len(line) - len(trimmed); strings.HasPrefix(trimmed, "- ") && (entryIndent < 0 || indent == entryIndent) {
-			entryIndent = indent
-			entries = append(entries, "")
-		}
-		if len(entries) > 0 {
-			entries[len(entries)-1] += line + "\n"
+	out := map[string]string{}
+	for path, value := range workflowFields(string(raw)) {
+		if rest, ok := strings.CutPrefix(path, "jobs."+name+"."); ok {
+			out[rest] = value
 		}
 	}
-	return entries
+	if len(out) == 0 {
+		t.Fatalf("no %q job under jobs: in %s", name, file)
+	}
+	return out
 }
 
-func entryMatching(entries []string, pattern string) (int, string) {
-	for i, s := range entries {
-		if regexp.MustCompile(pattern).MatchString(s) {
-			return i, s
+// entry returns the fields of a job's i-th sequence entry, empty when i is out of range.
+func entry(fields map[string]string, i int) map[string]string {
+	out := map[string]string{}
+	prefix := sequence + "." + strconv.Itoa(i) + "."
+	for path, value := range fields {
+		if rest, ok := strings.CutPrefix(path, prefix); ok && i >= 0 {
+			out[rest] = value
 		}
 	}
-	return -1, ""
+	return out
+}
+
+// find returns the index of the first entry from index from whose run matches pattern, or -1.
+func find(fields map[string]string, from int, pattern string) int {
+	re := regexp.MustCompile(pattern)
+	for i := max(from, 0); len(entry(fields, i)) > 0; i++ {
+		if re.MatchString(entry(fields, i)["run"]) {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestWorkflow_CommentCheckRunsOnEveryPullRequest(t *testing.T) {
-	ci := workflowJob(t, "ci.yml", "comment-check")
-	conformance := jobEntries(workflowJob(t, "publish-block.yml", "conformance"))
-	removal, _ := entryMatching(conformance, `rm -rf operator-kit`)
-	_, build := entryMatching(conformance[:max(removal, 0)], `\./cmd/commentcheck`)
-	var afterFetch []string
-	if fetch, _ := entryMatching(conformance, `git fetch .*"\$BASE_SHA"`); fetch >= 0 {
-		afterFetch = conformance[fetch+1:]
-	}
-	_, check := entryMatching(afterFetch, `\./commentcheck\b`)
-	onPullRequest := `(?m)^\s*if:\s*github\.event_name\s*==\s*'pull_request'\s*$`
-	for _, c := range []struct{ name, text, pattern string }{
-		{"ci.yml comment-check runs only on a pull request", ci, `(?m)^    if:\s*github\.event_name\s*==\s*'pull_request'\s*$`},
-		{"ci.yml comment-check checks out full history", ci, `fetch-depth:\s*0\b`},
-		{"ci.yml comment-check runs the command against the base", ci, `go run \./cmd/commentcheck -base "\$BASE_SHA"`},
-		{"ci.yml comment-check takes the base sha through env", ci, baseFromEnv},
-		{"publish-block builds commentcheck in the kit checkout before removing it", build, `working-directory:\s*operator-kit\b`},
-		{"publish-block builds commentcheck beside blockverify", build, `go build -o \.\./commentcheck \./cmd/commentcheck`},
-		{"publish-block runs commentcheck after the base fetch only on a pull request", check, onPullRequest},
-		{"publish-block runs commentcheck against the base on the block tree", check, `\./commentcheck -base "\$BASE_SHA" \.`},
-		{"publish-block passes commentcheck the base sha through env", check, baseFromEnv},
+	const onPullRequest, baseSHA = "github.event_name == 'pull_request'", "${{ github.event.pull_request.base.sha }}"
+	ci := job(t, "ci.yml", "comment-check")
+	ciRun := entry(ci, find(ci, 0, `cmd/commentcheck`))
+	conformance := job(t, "publish-block.yml", "conformance")
+	removal := find(conformance, 0, `rm -rf operator-kit`)
+	buildAt := find(conformance, 0, `\./cmd/commentcheck`)
+	build := entry(conformance, buildAt)
+	check := entry(conformance, find(conformance, find(conformance, 0, `git fetch .*"\$BASE_SHA"`)+1, `\./commentcheck\b`))
+	for _, c := range []struct{ name, got, want string }{
+		{"ci.yml comment-check runs only on a pull request", ci["if"], onPullRequest},
+		{"ci.yml comment-check checks out full history", entry(ci, 0)["with.fetch-depth"], "0"},
+		{"ci.yml comment-check runs the command against the base", ciRun["run"], `go run ./cmd/commentcheck -base "$BASE_SHA" .`},
+		{"ci.yml comment-check takes the base sha through env", ciRun["env.BASE_SHA"], baseSHA},
+		{"publish-block builds commentcheck before removing the kit checkout", strconv.FormatBool(buildAt >= 0 && buildAt < removal), "true"},
+		{"publish-block builds commentcheck in the kit checkout", build["working-directory"], "operator-kit"},
+		{"publish-block builds commentcheck beside blockverify", build["run"], "go build -o ../commentcheck ./cmd/commentcheck"},
+		{"publish-block runs commentcheck after the base fetch only on a pull request", check["if"], onPullRequest},
+		{"publish-block runs commentcheck against the base on the block tree", check["run"], `./commentcheck -base "$BASE_SHA" .`},
+		{"publish-block passes commentcheck the base sha through env", check["env.BASE_SHA"], baseSHA},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if !regexp.MustCompile(c.pattern).MatchString(c.text) {
-				t.Errorf("no match for %s in:\n%s", c.pattern, c.text)
+			if c.got != c.want {
+				t.Errorf("field = %q, want %q", c.got, c.want)
 			}
 		})
 	}

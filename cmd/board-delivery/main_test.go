@@ -8,15 +8,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// testRepo is a temporary working copy plus a bare origin, since the board-synced tag only persists across CI runs once it reaches the remote.
-type testRepo struct {
-	Dir       string // working copy, passed to the command as --repo
-	OriginDir string // bare remote
-	SeedSHA   string // the repo's first commit, made by newTestRepo
+// k writes each "#" in s as the board's key prefix, so "#12: fix" is a subject delivering key 12.
+func k(s string) string { return strings.ReplaceAll(s, "#", "MIT-") }
+
+func keys(ns ...int) []string {
+	var out []string
+	for _, n := range ns {
+		out = append(out, fmt.Sprintf("MIT-%d", n))
+	}
+	return out
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {
@@ -30,412 +35,207 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func newTestRepo(t *testing.T) *testRepo {
-	t.Helper()
-	origin := t.TempDir()
-	dir := t.TempDir()
-	runGit(t, origin, "init", "-q", "--bare")
-	runGit(t, dir, "init", "-q")
-	runGit(t, dir, "remote", "add", "origin", origin)
+// tagSHA returns what the board-synced tag points at in dir, or "" when it is unset.
+func tagSHA(dir string) string {
+	cmd := exec.Command("git", "rev-parse", "-q", "--verify", "refs/tags/"+anchorTag+"^{commit}")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
-	r := &testRepo{Dir: dir, OriginDir: origin}
-	r.SeedSHA = r.commit(t, "seed", "")
-	runGit(t, dir, "push", "-q", "origin", "HEAD:refs/heads/main")
+// testRepo is a working copy plus a bare origin, since the board-synced tag only persists across CI runs once it reaches the remote.
+type testRepo struct {
+	dir, origin, seed string
+	shas              []string
+}
+
+// newTestRepo commits a seed and then each "subject\x00body" message, pushing the seed to origin.
+func newTestRepo(t *testing.T, messages ...string) *testRepo {
+	t.Helper()
+	r := &testRepo{dir: t.TempDir(), origin: t.TempDir()}
+	runGit(t, r.origin, "init", "-q", "--bare")
+	runGit(t, r.dir, "init", "-q")
+	runGit(t, r.dir, "remote", "add", "origin", r.origin)
+	for i, msg := range append([]string{"seed"}, messages...) {
+		args := []string{"-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "--allow-empty", "-q"}
+		for _, part := range strings.Split(k(msg), "\x00") {
+			args = append(args, "-m", part)
+		}
+		runGit(t, r.dir, args...)
+		sha := runGit(t, r.dir, "rev-parse", "HEAD")
+		if i == 0 {
+			r.seed = sha
+			runGit(t, r.dir, "push", "-q", "origin", "HEAD:refs/heads/main")
+			continue
+		}
+		r.shas = append(r.shas, sha)
+	}
 	return r
 }
 
-// commit makes an empty commit (subject, optional body) and returns its sha.
-func (r *testRepo) commit(t *testing.T, subject, body string) string {
-	t.Helper()
-	args := []string{"-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "--allow-empty", "-m", subject}
-	if body != "" {
-		args = append(args, "-m", body)
-	}
-	runGit(t, r.Dir, args...)
-	return runGit(t, r.Dir, "rev-parse", "HEAD")
-}
-
-// setLocalTag simulates a checkout that already fetched a board-synced tag
-// left by an earlier successful run.
-func (r *testRepo) setLocalTag(t *testing.T, tag, sha string) {
-	t.Helper()
-	runGit(t, r.Dir, "tag", "-f", tag, sha)
-}
-
-func (r *testRepo) localTagSHA(t *testing.T, tag string) string {
-	t.Helper()
-	cmd := exec.Command("git", "rev-parse", "-q", "--verify", "refs/tags/"+tag+"^{commit}")
-	cmd.Dir = r.Dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func (r *testRepo) originTagSHA(t *testing.T, tag string) string {
-	t.Helper()
-	cmd := exec.Command("git", "rev-parse", "-q", "--verify", "refs/tags/"+tag+"^{commit}")
-	cmd.Dir = r.OriginDir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
 type capturedRequest struct {
-	Method  string
-	Path    string
-	Headers http.Header
-	Body    []byte
+	method, path string
+	headers      http.Header
+	body         []byte
 }
 
-// newRecordingServer answers every request with status/body and records it,
-// so a test can assert exactly how many requests arrived and what they
-// carried.
-func newRecordingServer(t *testing.T, status int, body string) (*httptest.Server, *[]capturedRequest) {
-	t.Helper()
-	var reqs []capturedRequest
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-		reqs = append(reqs, capturedRequest{Method: r.Method, Path: r.URL.Path, Headers: r.Header.Clone(), Body: raw})
-		w.WriteHeader(status)
-		fmt.Fprint(w, body)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &reqs
+type outcome struct {
+	repo *testRepo
+	reqs []capturedRequest
+	out  string
+	tip  string
 }
 
+const (
+	noBoard     = 0
+	unreachable = -1
+)
+
+func TestRun(t *testing.T) {
+	const token = "super-secret-value-xyz"
+	cases := []struct {
+		name      string
+		messages  []string
+		tagAt     int
+		before    func(r *testRepo) string
+		status    int
+		body      string
+		token     string
+		wantCode  int
+		wantKeys  []string
+		wantInOut string
+		check     func(t *testing.T, o outcome)
+	}{
+		{"it posts exactly one JSON delivery of the tip with the bearer token", []string{"#42: fix the thing"}, 0, nil, 200, "ok", token, 0, keys(42), "",
+			func(t *testing.T, o outcome) {
+				r := o.reqs[0]
+				got := []string{r.method, r.path, r.headers.Get("Content-Type"), r.headers.Get("Authorization")}
+				if want := []string{http.MethodPost, "/v1/delivered", "application/json", "Bearer " + token}; !slices.Equal(got, want) {
+					t.Errorf("method, path, content type, authorization = %q, want %q", got, want)
+				}
+				if d := delivered(t, r.body).Delivery; d != o.tip {
+					t.Errorf("delivery = %q, want the tip %q", d, o.tip)
+				}
+			}},
+		{"an empty token sends no Authorization header at all", []string{"#1: fix"}, 0, nil, 200, "ok", "", 0, keys(1), "",
+			func(t *testing.T, o outcome) {
+				if vals := o.reqs[0].headers.Values("Authorization"); len(vals) != 0 {
+					t.Errorf("Authorization = %v, want no header when the token is empty", vals)
+				}
+			}},
+		{"a push delivering no key records nothing and succeeds", []string{"chore: bump platform submodule to abc (#1092 automation)"}, 0, nil, 200, "ok", "", 0, nil, "recorded nothing",
+			func(t *testing.T, o outcome) {
+				if len(o.reqs) != 0 {
+					t.Errorf("server received %d requests, want none when no key is delivered", len(o.reqs))
+				}
+			}},
+		{"an unset TRACKER_BASE_URL never silently skips a real delivery", []string{"#1: fix"}, 0, nil, noBoard, "", "", 1, nil, "no board to record on", nil},
+		{"an unset TRACKER_BASE_URL is moot when nothing would be recorded", []string{"chore: bump platform submodule to abc (#1092 automation)"}, 0, nil, noBoard, "", "", 0, nil, "recorded nothing", nil},
+		{"a rejected record fails carrying the status and the body", []string{"#1: fix"}, 0, nil, 500, "boom-details", "", 1, keys(1), "board returned 500: boom-details", nil},
+		{"a transport failure is a hard failure", []string{"#1: fix"}, 0, nil, unreachable, "", "", 1, nil, "posting delivery", nil},
+		{"the token reaches the request but never the output", []string{"#1: fix"}, 0, nil, 401, "unauthorized", token, 1, keys(1), "",
+			func(t *testing.T, o outcome) {
+				if strings.Contains(o.out, token) {
+					t.Errorf("output carries the bearer token: %q", o.out)
+				}
+				if auth := o.reqs[0].headers.Get("Authorization"); auth != "Bearer "+token {
+					t.Errorf("Authorization = %q, want %q", auth, "Bearer "+token)
+				}
+			}},
+		{"the range excludes the before commit itself", []string{"#1: one", "#2: two", "#3: three"}, 0,
+			func(r *testRepo) string { return r.shas[0] }, 200, "ok", "", 0, keys(2, 3), "", nil},
+		{"no before and no anchor deliver only the tip, never full history", []string{"#1: one", "#2: two"}, 0, nil, 200, "ok", "", 0, keys(2), "", nil},
+		{"an all-zero before and no anchor deliver only the tip", []string{"#1: one", "#2: two"}, 0,
+			func(*testRepo) string { return testZeroSHA }, 200, "ok", "", 0, keys(2), "", nil},
+		{"keys merge across commits in numeric order", []string{"#20: two", "#9: nine"}, 0,
+			func(r *testRepo) string { return r.seed }, 200, "ok", "", 0, keys(9, 20), "", nil},
+		{"a key in one commit's subject and trailer is deduplicated", []string{"#5: fix\x00Jira: #5 #6"}, 0, nil, 200, "ok", "", 0, keys(5, 6), "", nil},
+		{"the board-synced anchor wins over --before", []string{"#1: one", "#2: two", "#3: three"}, 1,
+			func(r *testRepo) string { return r.seed }, 200, "ok", "", 0, keys(2, 3), "", nil},
+		{"a successful write advances the anchor and pushes it to origin", []string{"#1: one"}, 0, nil, 200, "ok", "", 0, keys(1), "",
+			func(t *testing.T, o outcome) {
+				if local, origin := tagSHA(o.repo.dir), tagSHA(o.repo.origin); local != o.tip || origin != o.tip {
+					t.Errorf("board-synced tag local %q, origin %q; want both at %q, since a run's own checkout is discarded", local, origin, o.tip)
+				}
+			}},
+		{"a failed write leaves the anchor unset", []string{"#1: one"}, 0, nil, 500, "boom", "", 1, keys(1), "",
+			func(t *testing.T, o outcome) {
+				if local, origin := tagSHA(o.repo.dir), tagSHA(o.repo.origin); local != "" || origin != "" {
+					t.Errorf("board-synced tag local %q, origin %q; want both unset after a failed write", local, origin)
+				}
+			}},
+		{"a run with no board configured leaves the anchor unset", []string{"#1: one"}, 0, nil, noBoard, "", "", 1, nil, "",
+			func(t *testing.T, o outcome) {
+				if local := tagSHA(o.repo.dir); local != "" {
+					t.Errorf("local board-synced tag = %q, want it unset when the run never wrote", local)
+				}
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRepo(t, tc.messages...)
+			if tc.tagAt > 0 {
+				runGit(t, r.dir, "tag", "-f", anchorTag, r.shas[tc.tagAt-1])
+			}
+			o := outcome{repo: r, tip: r.shas[len(r.shas)-1]}
+			baseURL := ""
+			if tc.status != noBoard {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					raw, _ := io.ReadAll(req.Body)
+					o.reqs = append(o.reqs, capturedRequest{req.Method, req.URL.Path, req.Header.Clone(), raw})
+					w.WriteHeader(tc.status)
+					fmt.Fprint(w, tc.body)
+				}))
+				baseURL = srv.URL
+				if tc.status == unreachable {
+					srv.Close()
+				} else {
+					t.Cleanup(srv.Close)
+				}
+			}
+			t.Setenv("TRACKER_BASE_URL", baseURL)
+			t.Setenv("TRACKER_API_TOKEN", tc.token)
+			args := []string{"--repo", r.dir, "--after", o.tip}
+			if tc.before != nil {
+				args = append(args, "--before", tc.before(r))
+			}
+			var buf bytes.Buffer
+
+			code := Run(args, &buf)
+
+			o.out = buf.String()
+			if code != tc.wantCode || !strings.Contains(o.out, tc.wantInOut) {
+				t.Fatalf("Run(%q) = %d, output %q; want %d, output carrying %q", args, code, o.out, tc.wantCode, tc.wantInOut)
+			}
+			if tc.wantKeys != nil {
+				if len(o.reqs) != 1 {
+					t.Fatalf("server received %d requests, want exactly 1", len(o.reqs))
+				}
+				if got := delivered(t, o.reqs[0].body).Keys; !slices.Equal(got, tc.wantKeys) {
+					t.Errorf("delivered keys = %v, want %v", got, tc.wantKeys)
+				}
+			}
+			if tc.check != nil {
+				tc.check(t, o)
+			}
+		})
+	}
+}
+
+// deliveredPayload decodes the body the board receives independently of the type that encodes it.
 type deliveredPayload struct {
 	Delivery string   `json:"delivery"`
 	Keys     []string `json:"keys"`
 }
 
-func decodeDelivered(t *testing.T, raw []byte) deliveredPayload {
+func delivered(t *testing.T, raw []byte) deliveredPayload {
 	t.Helper()
 	var p deliveredPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
 		t.Fatalf("decoding delivered payload %s: %v", raw, err)
 	}
 	return p
-}
-
-func keysEqual(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// runBoardDelivery invokes Run with --repo/--before/--after flags and
-// TRACKER_BASE_URL/TRACKER_API_TOKEN set exactly as the workflow job will
-// set them.
-func runBoardDelivery(t *testing.T, repoDir, before, after, baseURL, token string) (stdout string, exitCode int) {
-	t.Helper()
-	t.Setenv("TRACKER_BASE_URL", baseURL)
-	t.Setenv("TRACKER_API_TOKEN", token)
-	args := []string{"--repo", repoDir, "--after", after}
-	if before != "" {
-		args = append(args, "--before", before)
-	}
-	var buf bytes.Buffer
-	exitCode = Run(args, &buf)
-	return buf.String(), exitCode
-}
-
-func TestRun_PostsExactlyOneRequestWithDecodedJSONBody(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "MIT-42: fix the thing", "")
-	srv, reqs := newRecordingServer(t, 200, "ok")
-
-	_, code := runBoardDelivery(t, repo.Dir, "", sha, srv.URL, "s3cr3t-token")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0", code)
-	}
-	if len(*reqs) != 1 {
-		t.Fatalf("server received %d requests, want exactly 1", len(*reqs))
-	}
-	req := (*reqs)[0]
-	if req.Method != http.MethodPost {
-		t.Errorf("method = %q, want POST", req.Method)
-	}
-	if req.Path != "/v1/delivered" {
-		t.Errorf("path = %q, want /v1/delivered", req.Path)
-	}
-	if ct := req.Headers.Get("Content-Type"); ct != "application/json" {
-		t.Errorf("Content-Type = %q, want application/json", ct)
-	}
-	if auth := req.Headers.Get("Authorization"); auth != "Bearer s3cr3t-token" {
-		t.Errorf("Authorization = %q, want %q", auth, "Bearer s3cr3t-token")
-	}
-	payload := decodeDelivered(t, req.Body)
-	if payload.Delivery != sha {
-		t.Errorf("delivery = %q, want %q", payload.Delivery, sha)
-	}
-	if !keysEqual(payload.Keys, []string{"MIT-42"}) {
-		t.Errorf("keys = %v, want [MIT-42]", payload.Keys)
-	}
-}
-
-func TestRun_OmitsAuthorizationHeaderWhenTokenEmpty(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "MIT-1: fix", "")
-	srv, reqs := newRecordingServer(t, 200, "ok")
-
-	_, code := runBoardDelivery(t, repo.Dir, "", sha, srv.URL, "")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0", code)
-	}
-	if len(*reqs) != 1 {
-		t.Fatalf("server received %d requests, want exactly 1", len(*reqs))
-	}
-	if vals := (*reqs)[0].Headers.Values("Authorization"); len(vals) != 0 {
-		t.Errorf("Authorization header = %v, want no header at all when the token is empty", vals)
-	}
-}
-
-func TestRun_NoKeys_RecordsNothingAndSucceeds(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "chore: bump platform submodule to abc (MIT-1092 automation)", "")
-	srv, reqs := newRecordingServer(t, 200, "ok")
-
-	out, code := runBoardDelivery(t, repo.Dir, "", sha, srv.URL, "")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0 — a docs/automation-only push must not fail the run", code)
-	}
-	if len(*reqs) != 0 {
-		t.Fatalf("server received %d requests, want 0 — no keys means no POST", len(*reqs))
-	}
-	if !strings.Contains(strings.ToLower(out), "recorded nothing") {
-		t.Errorf("output = %q, want it to say it recorded nothing", out)
-	}
-}
-
-func TestRun_EmptyBaseURL_WithKeys_IsHardFailure(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "MIT-1: fix", "")
-
-	out, code := runBoardDelivery(t, repo.Dir, "", sha, "", "")
-	if code == 0 {
-		t.Fatalf("Run exit code = 0, want non-zero — an unset TRACKER_BASE_URL must never silently skip a real delivery")
-	}
-	if !strings.Contains(strings.ToLower(out), "no board to record on") {
-		t.Errorf("output = %q, want it to say the delivery has no board to record on", out)
-	}
-}
-
-func TestRun_EmptyBaseURL_NoKeys_Succeeds(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "chore: bump platform submodule to abc (MIT-1092 automation)", "")
-
-	out, code := runBoardDelivery(t, repo.Dir, "", sha, "", "")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0 — nothing was ever going to be recorded, so a missing board is moot", code)
-	}
-	if !strings.Contains(strings.ToLower(out), "recorded nothing") {
-		t.Errorf("output = %q, want it to say it recorded nothing", out)
-	}
-}
-
-func TestRun_NonSuccessStatus_IsHardFailureIncludingStatusAndBody(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "MIT-1: fix", "")
-	srv, _ := newRecordingServer(t, 500, "boom-details")
-
-	out, code := runBoardDelivery(t, repo.Dir, "", sha, srv.URL, "")
-	if code == 0 {
-		t.Fatalf("Run exit code = 0, want non-zero on a rejected record")
-	}
-	if !strings.Contains(out, "500") {
-		t.Errorf("output = %q, want it to include the response status code 500", out)
-	}
-	if !strings.Contains(out, "boom-details") {
-		t.Errorf("output = %q, want it to include the response body", out)
-	}
-}
-
-func TestRun_TransportError_IsHardFailure(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "MIT-1: fix", "")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
-	baseURL := srv.URL
-	srv.Close() // nothing is listening by the time Run dials it
-
-	_, code := runBoardDelivery(t, repo.Dir, "", sha, baseURL, "")
-	if code == 0 {
-		t.Fatalf("Run exit code = 0, want non-zero on a transport failure")
-	}
-}
-
-func TestRun_TokenNeverAppearsInErrorTextOrOutput(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "MIT-1: fix", "")
-	const token = "super-secret-value-xyz"
-	srv, reqs := newRecordingServer(t, 401, "unauthorized")
-
-	out, code := runBoardDelivery(t, repo.Dir, "", sha, srv.URL, token)
-	if code == 0 {
-		t.Fatalf("Run exit code = 0, want non-zero on a 401")
-	}
-	if strings.Contains(out, token) {
-		t.Fatalf("output contains the bearer token verbatim: %q", out)
-	}
-	if len(*reqs) != 1 {
-		t.Fatalf("server received %d requests, want exactly 1", len(*reqs))
-	}
-	if auth := (*reqs)[0].Headers.Get("Authorization"); auth != "Bearer "+token {
-		t.Errorf("Authorization sent to the server = %q, want %q — the token must reach the request even though it never reaches output", auth, "Bearer "+token)
-	}
-}
-
-func TestRun_RangeExcludesTheBeforeCommitItself(t *testing.T) {
-	repo := newTestRepo(t)
-	shaA := repo.commit(t, "MIT-1: one", "")
-	repo.commit(t, "MIT-2: two", "")
-	shaC := repo.commit(t, "MIT-3: three", "")
-	srv, reqs := newRecordingServer(t, 200, "ok")
-
-	_, code := runBoardDelivery(t, repo.Dir, shaA, shaC, srv.URL, "")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0", code)
-	}
-	payload := decodeDelivered(t, (*reqs)[0].Body)
-	if !keysEqual(payload.Keys, []string{"MIT-2", "MIT-3"}) {
-		t.Errorf("keys = %v, want [MIT-2 MIT-3] — MIT-1's commit (before) must be excluded", payload.Keys)
-	}
-}
-
-func TestRun_UnknownBeforeAndNoAnchorUsesOnlyTheTipCommit(t *testing.T) {
-	repo := newTestRepo(t)
-	repo.commit(t, "MIT-1: one", "")
-	shaB := repo.commit(t, "MIT-2: two", "")
-	srv, reqs := newRecordingServer(t, 200, "ok")
-
-	_, code := runBoardDelivery(t, repo.Dir, "", shaB, srv.URL, "")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0", code)
-	}
-	payload := decodeDelivered(t, (*reqs)[0].Body)
-	if !keysEqual(payload.Keys, []string{"MIT-2"}) {
-		t.Errorf("keys = %v, want [MIT-2] only — an unresolvable before must fall back to the single tip commit, never full history", payload.Keys)
-	}
-}
-
-func TestRun_ZeroSHABeforeAndNoAnchorUsesOnlyTheTipCommit(t *testing.T) {
-	repo := newTestRepo(t)
-	repo.commit(t, "MIT-1: one", "")
-	shaB := repo.commit(t, "MIT-2: two", "")
-	srv, reqs := newRecordingServer(t, 200, "ok")
-
-	_, code := runBoardDelivery(t, repo.Dir, testZeroSHA, shaB, srv.URL, "")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0", code)
-	}
-	payload := decodeDelivered(t, (*reqs)[0].Body)
-	if !keysEqual(payload.Keys, []string{"MIT-2"}) {
-		t.Errorf("keys = %v, want [MIT-2] only — GitHub's all-zero before sentinel must fall back to the tip commit", payload.Keys)
-	}
-}
-
-func TestRun_MergesAndSortsKeysNumericallyAcrossCommits(t *testing.T) {
-	repo := newTestRepo(t)
-	repo.commit(t, "MIT-20: two", "")
-	shaB := repo.commit(t, "MIT-9: nine", "")
-	srv, reqs := newRecordingServer(t, 200, "ok")
-
-	_, code := runBoardDelivery(t, repo.Dir, repo.SeedSHA, shaB, srv.URL, "")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0", code)
-	}
-	payload := decodeDelivered(t, (*reqs)[0].Body)
-	if !keysEqual(payload.Keys, []string{"MIT-9", "MIT-20"}) {
-		t.Errorf("keys = %v, want [MIT-9 MIT-20] — numeric order across commits, not appearance order or lexical order", payload.Keys)
-	}
-}
-
-func TestRun_DedupesKeyAppearingInSubjectAndTrailerOfOneCommit(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "MIT-5: fix", "Jira: MIT-5 MIT-6")
-	srv, reqs := newRecordingServer(t, 200, "ok")
-
-	_, code := runBoardDelivery(t, repo.Dir, "", sha, srv.URL, "")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0", code)
-	}
-	payload := decodeDelivered(t, (*reqs)[0].Body)
-	if !keysEqual(payload.Keys, []string{"MIT-5", "MIT-6"}) {
-		t.Errorf("keys = %v, want [MIT-5 MIT-6] deduped", payload.Keys)
-	}
-}
-
-func TestRun_UsesAnchorTagOverBeforeFlagWhenTagIsPresent(t *testing.T) {
-	repo := newTestRepo(t)
-	shaA := repo.commit(t, "MIT-1: one", "")
-	repo.commit(t, "MIT-2: two", "")
-	shaC := repo.commit(t, "MIT-3: three", "")
-	repo.setLocalTag(t, "board-synced", shaA)
-	srv, reqs := newRecordingServer(t, 200, "ok")
-
-	// --before points at the seed commit, which would wrongly include shaA's key if the anchor tag were not preferred.
-	_, code := runBoardDelivery(t, repo.Dir, repo.SeedSHA, shaC, srv.URL, "")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0", code)
-	}
-	payload := decodeDelivered(t, (*reqs)[0].Body)
-	if !keysEqual(payload.Keys, []string{"MIT-2", "MIT-3"}) {
-		t.Errorf("keys = %v, want [MIT-2 MIT-3] — the board-synced anchor tag must win over --before", payload.Keys)
-	}
-}
-
-func TestRun_AdvancesAndPushesAnchorTagAfterASuccessfulWrite(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "MIT-1: one", "")
-	srv, _ := newRecordingServer(t, 200, "ok")
-
-	_, code := runBoardDelivery(t, repo.Dir, "", sha, srv.URL, "")
-	if code != 0 {
-		t.Fatalf("Run exit code = %d, want 0", code)
-	}
-	if got := repo.localTagSHA(t, "board-synced"); got != sha {
-		t.Errorf("local board-synced tag = %q, want it advanced to %q", got, sha)
-	}
-	if got := repo.originTagSHA(t, "board-synced"); got != sha {
-		t.Errorf("origin's board-synced tag = %q, want it pushed to %q — a run's own checkout is discarded, so the anchor only survives if it reaches the remote", got, sha)
-	}
-}
-
-func TestRun_DoesNotAdvanceAnchorTagWhenTheWriteFails(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "MIT-1: one", "")
-	srv, _ := newRecordingServer(t, 500, "boom")
-
-	_, code := runBoardDelivery(t, repo.Dir, "", sha, srv.URL, "")
-	if code == 0 {
-		t.Fatalf("Run exit code = 0, want non-zero on a rejected record")
-	}
-	if got := repo.localTagSHA(t, "board-synced"); got != "" {
-		t.Errorf("local board-synced tag = %q, want it left unset — a failed write must not advance the anchor", got)
-	}
-	if got := repo.originTagSHA(t, "board-synced"); got != "" {
-		t.Errorf("origin's board-synced tag = %q, want it left unset — a failed write must not advance the anchor", got)
-	}
-}
-
-func TestRun_DoesNotAdvanceAnchorTagWhenBaseURLIsEmpty(t *testing.T) {
-	repo := newTestRepo(t)
-	sha := repo.commit(t, "MIT-1: one", "")
-
-	_, code := runBoardDelivery(t, repo.Dir, "", sha, "", "")
-	if code == 0 {
-		t.Fatalf("Run exit code = 0, want non-zero — no board configured is a hard failure")
-	}
-	if got := repo.localTagSHA(t, "board-synced"); got != "" {
-		t.Errorf("local board-synced tag = %q, want it left unset — a run that never wrote must not claim it synced", got)
-	}
 }

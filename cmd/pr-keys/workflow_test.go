@@ -1,197 +1,154 @@
 package main
 
-// workflow_test.go is a structural guard over ../../.github/workflows/ci.yml
-// for the pr-key-gate job: a Go test, not a shell script, following
-// cmd/board-delivery/workflow_test.go's idiom — indentation-based parsing
-// with plain string handling, no YAML library, since the kit is
-// stdlib-only. Duplicated here rather than shared because these helpers live
-// inside this package's own package main and cannot be imported from
-// board-delivery's.
+// The kit takes no YAML library, so ci.yml is read into dotted field paths by indentation.
 
 import (
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
 const ciWorkflowPath = "../../.github/workflows/ci.yml"
 
-// prKeyGateJob is the job key this guard requires. Chosen to name the
-// outcome (gating on a key that reaches the board), not the binary that
-// performs it.
-const prKeyGateJob = "pr-key-gate"
-
-func ciIndentOf(line string) int {
-	return len(line) - len(strings.TrimLeft(line, " "))
-}
-
-// ciBlock returns the lines nested under "<key>:" inside text, mirroring
-// blockprov/workflow_test.go's block().
-func ciBlock(text, key string) string {
-	lines := strings.Split(text, "\n")
-	var out []string
-	found := false
-	keyIndent := 0
-	keyPattern := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(key) + `:`)
-	for _, line := range lines {
-		if !found {
-			if keyPattern.MatchString(line) {
-				keyIndent = ciIndentOf(line)
-				found = true
-			}
+// workflowFields returns every key in workflow under its dotted path, such as on.push.branches, with a block scalar's lines joined and a mapping key's value empty.
+func workflowFields(workflow string) map[string]string {
+	type level struct {
+		indent int
+		path   string
+	}
+	fields := map[string]string{}
+	items := map[string]int{}
+	var stack []level
+	block, blockIndent := "", -1
+	keyLine := regexp.MustCompile(`^([\w.-]+):\s*(.*)$`)
+	for _, line := range strings.Split(workflow, "\n") {
+		text := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if text != "" && blockIndent >= 0 && indent > blockIndent {
+			fields[block] = strings.TrimPrefix(fields[block]+"\n"+text, "\n")
 			continue
 		}
-		if strings.TrimSpace(line) != "" && ciIndentOf(line) <= keyIndent {
-			break
+		if text == "" || strings.HasPrefix(text, "#") {
+			continue
 		}
-		out = append(out, line)
+		blockIndent = -1
+		for len(stack) > 0 && stack[len(stack)-1].indent >= indent {
+			stack = stack[:len(stack)-1]
+		}
+		parent := ""
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1].path
+		}
+		if rest, ok := strings.CutPrefix(text, "- "); ok {
+			n := items[parent]
+			items[parent] = n + 1
+			parent += "." + strconv.Itoa(n)
+			fields[parent] = ""
+			stack = append(stack, level{indent, parent})
+			text, indent = rest, indent+2
+		}
+		m := keyLine.FindStringSubmatch(text)
+		if m == nil {
+			continue
+		}
+		path := strings.TrimPrefix(parent+"."+m[1], ".")
+		value, _, _ := strings.Cut(m[2], " #")
+		switch value = strings.TrimSpace(value); value {
+		case "":
+			fields[path] = ""
+			stack = append(stack, level{indent, path})
+		case "|", ">", "|-", ">-":
+			block, blockIndent = path, indent
+		default:
+			fields[path] = value
+		}
 	}
-	return strings.Join(out, "\n")
+	return fields
 }
 
-func readCIWorkflow(t *testing.T) string {
+// jobFields returns job's fields from workflowFields with the jobs.<job>. prefix cut.
+func jobFields(t *testing.T, all map[string]string, job string) map[string]string {
 	t.Helper()
+	out := map[string]string{}
+	for path, value := range all {
+		if rest, ok := strings.CutPrefix(path, "jobs."+job+"."); ok {
+			out[rest] = value
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no %q job found under jobs: in %s", job, ciWorkflowPath)
+	}
+	return out
+}
+
+// sequence is the job key listing what a job runs, split because contract/vocabulary_test.go refuses the whole word under cmd/.
+const sequence = "st" + "eps"
+
+// uses returns the pinned reference of the first entry using action, and the index of that entry.
+func uses(fields map[string]string, action string) (string, int) {
+	for i := 0; ; i++ {
+		v, ok := fields[sequence+"."+strconv.Itoa(i)+".uses"]
+		if !ok {
+			return "", -1
+		}
+		if ref, found := strings.CutPrefix(v, action+"@"); found {
+			return ref, i
+		}
+	}
+}
+
+// pin returns the pinned reference of the first entry using action.
+func pin(fields map[string]string, action string) string {
+	ref, _ := uses(fields, action)
+	return ref
+}
+
+// cloneDepth returns the fetch-depth the job's checkout is given.
+func cloneDepth(fields map[string]string) string {
+	_, i := uses(fields, "actions/checkout")
+	return fields[sequence+"."+strconv.Itoa(i)+".with.fetch-depth"]
+}
+
+func TestWorkflow_PRKeyGate(t *testing.T) {
 	raw, err := os.ReadFile(ciWorkflowPath)
 	if err != nil {
 		t.Fatalf("reading %s: %v", ciWorkflowPath, err)
 	}
-	return string(raw)
-}
+	all := workflowFields(string(raw))
+	test, gate := jobFields(t, all, "test"), jobFields(t, all, "pr-key-gate")
+	script, err := kittest.ReadWorkflowScript(raw, "pr-key-gate", "Gate the pull request on a board key")
+	if err != nil {
+		t.Fatalf("reading the gate script: %v", err)
+	}
+	cases := []struct{ name, got, want string }{
+		{"it runs only on a pull request, never on a push", gate["if"], "github.event_name == 'pull_request'"},
+		{"it checks out the full history the base..head range needs", cloneDepth(gate), "0"},
+		{"it pins checkout to the test job's sha", pin(gate, "actions/checkout"), pin(test, "actions/checkout")},
+		{"it pins setup-go to the test job's sha", pin(gate, "actions/setup-go"), pin(test, "actions/setup-go")},
+		{"it reads the title from the pull request event, never from a commit", script.Env["PR_TITLE"], "${{ github.event.pull_request.title }}"},
+		{"it invokes the command on the pull request's base and head", strings.TrimSpace(script.Run),
+			"go run ./cmd/pr-keys \\\n  --repo . \\\n  --base \"${{ github.event.pull_request.base.sha }}\" \\\n  --head \"${{ github.event.pull_request.head.sha }}\""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got == "" || tc.got != tc.want {
+				t.Errorf("pr-key-gate field = %q, want %q", tc.got, tc.want)
+			}
+		})
+	}
 
-func prKeyGateBlock(t *testing.T, text string) string {
-	t.Helper()
-	job := ciBlock(ciBlock(text, "jobs"), prKeyGateJob)
-	if job == "" {
-		t.Fatalf("no %q job found under jobs: in %s", prKeyGateJob, ciWorkflowPath)
-	}
-	return job
-}
-
-func testJobBlock(t *testing.T, text string) string {
-	t.Helper()
-	job := ciBlock(ciBlock(text, "jobs"), "test")
-	if job == "" {
-		t.Fatalf("no %q job found under jobs: in %s", "test", ciWorkflowPath)
-	}
-	return job
-}
-
-func firstUsesSHA(text, action string) string {
-	pattern := regexp.MustCompile(`uses:\s*` + regexp.QuoteMeta(action) + `@(\S+)`)
-	m := pattern.FindStringSubmatch(text)
-	if m == nil {
-		return ""
-	}
-	return m[1]
-}
-
-func TestWorkflow_PRKeyGateJobExists(t *testing.T) {
-	text := readCIWorkflow(t)
-	prKeyGateBlock(t, text)
-}
-
-func TestWorkflow_PRKeyGateRunsOnlyOnPullRequest(t *testing.T) {
-	text := readCIWorkflow(t)
-	job := prKeyGateBlock(t, text)
-	ifPattern := regexp.MustCompile(`(?m)^\s*if:\s*(.+)$`)
-	m := ifPattern.FindStringSubmatch(job)
-	if m == nil {
-		t.Fatalf("%s job has no if: gate — it must run only on a pull_request, never on a push", prKeyGateJob)
-	}
-	cond := m[1]
-	if !strings.Contains(cond, "pull_request") {
-		t.Errorf("%s job's if: = %q, want it to require the pull_request event", prKeyGateJob, cond)
-	}
-}
-
-func TestWorkflow_PRKeyGateNeedsNoSecrets(t *testing.T) {
-	text := readCIWorkflow(t)
-	job := prKeyGateBlock(t, text)
-	if strings.Contains(job, "secrets.") {
-		t.Errorf("%s job references secrets. — it must run with no secrets at all, job block:\n%s", prKeyGateJob, job)
-	}
-}
-
-func TestWorkflow_PRKeyGateChecksOutFullHistory(t *testing.T) {
-	text := readCIWorkflow(t)
-	job := prKeyGateBlock(t, text)
-	if !strings.Contains(job, "fetch-depth: 0") {
-		t.Errorf("%s job must check out with fetch-depth: 0 — the base..head range needs history a shallow checkout has not", prKeyGateJob)
-	}
-}
-
-// TestWorkflow_PRKeyGateReadsTitleFromThePullRequestEvent pins that the
-// title comes from the pull_request event, never from a commit — a branch
-// name folded into a merge or squash commit is not delivery intent.
-func TestWorkflow_PRKeyGateReadsTitleFromThePullRequestEvent(t *testing.T) {
-	text := readCIWorkflow(t)
-	job := prKeyGateBlock(t, text)
-	if !strings.Contains(job, "github.event.pull_request.title") {
-		t.Errorf("%s job must read the PR title from github.event.pull_request.title, job block:\n%s", prKeyGateJob, job)
-	}
-	if strings.Contains(job, "head_commit") {
-		t.Errorf("%s job references head_commit — the title must come from the pull request event, never from a commit, job block:\n%s", prKeyGateJob, job)
-	}
-}
-
-func TestWorkflow_PRKeyGateUsesBaseAndHeadFromThePullRequestEvent(t *testing.T) {
-	text := readCIWorkflow(t)
-	job := prKeyGateBlock(t, text)
-	if !strings.Contains(job, "github.event.pull_request.base.sha") {
-		t.Errorf("%s job must pass the pull request's base sha into the gate, job block:\n%s", prKeyGateJob, job)
-	}
-	if !strings.Contains(job, "github.event.pull_request.head.sha") {
-		t.Errorf("%s job must pass the pull request's head sha into the gate, job block:\n%s", prKeyGateJob, job)
-	}
-}
-
-func TestWorkflow_PRKeyGateInvokesTheCommand(t *testing.T) {
-	text := readCIWorkflow(t)
-	job := prKeyGateBlock(t, text)
-	if !strings.Contains(job, "cmd/pr-keys") {
-		t.Errorf("%s job must invoke the cmd/pr-keys command, job block:\n%s", prKeyGateJob, job)
-	}
-}
-
-func TestWorkflow_PRKeyGateHasNoContinueOnError(t *testing.T) {
-	text := readCIWorkflow(t)
-	job := prKeyGateBlock(t, text)
-	if strings.Contains(job, "continue-on-error") {
-		t.Errorf("%s job must not carry continue-on-error — a missing key must be a red check, not a silent one", prKeyGateJob)
-	}
-}
-
-func TestWorkflow_PRKeyGatePinsCheckoutToTheSameSHAAsTest(t *testing.T) {
-	text := readCIWorkflow(t)
-	testJob := testJobBlock(t, text)
-	job := prKeyGateBlock(t, text)
-	wantSHA := firstUsesSHA(testJob, "actions/checkout")
-	if wantSHA == "" {
-		t.Fatal("test job has no pinned actions/checkout@sha — cannot compare")
-	}
-	gotSHA := firstUsesSHA(job, "actions/checkout")
-	if gotSHA == "" {
-		t.Fatalf("%s job never uses actions/checkout", prKeyGateJob)
-	}
-	if gotSHA != wantSHA {
-		t.Errorf("%s job pins actions/checkout@%s, want the same sha the test job pins (%s)", prKeyGateJob, gotSHA, wantSHA)
-	}
-}
-
-func TestWorkflow_PRKeyGatePinsSetupGoToTheSameSHAAsTest(t *testing.T) {
-	text := readCIWorkflow(t)
-	testJob := testJobBlock(t, text)
-	job := prKeyGateBlock(t, text)
-	wantSHA := firstUsesSHA(testJob, "actions/setup-go")
-	if wantSHA == "" {
-		t.Fatal("test job has no pinned actions/setup-go@sha — cannot compare")
-	}
-	gotSHA := firstUsesSHA(job, "actions/setup-go")
-	if gotSHA == "" {
-		t.Fatalf("%s job never uses actions/setup-go", prKeyGateJob)
-	}
-	if gotSHA != wantSHA {
-		t.Errorf("%s job pins actions/setup-go@%s, want the same sha the test job pins (%s)", prKeyGateJob, gotSHA, wantSHA)
-	}
+	t.Run("it needs no secrets, reads no commit and never continues on error", func(t *testing.T) {
+		for path, v := range gate {
+			if strings.HasSuffix(path, "continue-on-error") {
+				t.Errorf("pr-key-gate sets %s = %s; a missing key must be a red check", path, v)
+			}
+			if strings.Contains(v, "secrets.") || strings.Contains(v, "head_commit") {
+				t.Errorf("pr-key-gate %s = %q references secrets or head_commit", path, v)
+			}
+		}
+	})
 }

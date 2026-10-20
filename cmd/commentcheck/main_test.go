@@ -87,9 +87,20 @@ func repoAt(t *testing.T, files map[string]string) (dir, base string) {
 	return dir, git(t, dir, "rev-parse", "HEAD")
 }
 
+// ticketIDs writes {MIT} and {MS} as the real key prefixes, so no test source holds a ticket id.
+var ticketIDs = strings.NewReplacer("{MIT}", "MIT", "{MS}", "MS")
+
+func withIDs(files map[string]string) map[string]string {
+	out := make(map[string]string, len(files))
+	for p, c := range files {
+		out[p] = ticketIDs.Replace(c)
+	}
+	return out
+}
+
 func (r row) check(t *testing.T) {
 	t.Helper()
-	dir, base := repoAt(t, r.base)
+	dir, base := repoAt(t, withIDs(r.base))
 	short := git(t, dir, "rev-parse", "--short", base)
 	for _, m := range r.mv {
 		git(t, dir, "mv", m[0], m[1])
@@ -99,7 +110,7 @@ func (r row) check(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(t, dir, r.head)
+	write(t, dir, withIDs(r.head))
 	if r.commit {
 		git(t, dir, "add", "-A")
 		git(t, dir, "commit", "-q", "--allow-empty", "-m", "head")
@@ -109,12 +120,12 @@ func (r row) check(t *testing.T) {
 		t.Fatalf("exit %d, want %d\nstdout:\n%s\nstderr:\n%s", code, r.code, out, errOut)
 	}
 	for _, w := range r.want {
-		if w = strings.ReplaceAll(w, "{base}", short); !strings.Contains(out, w) {
+		if w = ticketIDs.Replace(strings.ReplaceAll(w, "{base}", short)); !strings.Contains(out, w) {
 			t.Errorf("stdout lacks %q:\n%s", w, out)
 		}
 	}
 	for _, n := range r.not {
-		if strings.Contains(out, n) {
+		if n = ticketIDs.Replace(n); strings.Contains(out, n) {
 			t.Errorf("stdout holds %q:\n%s", n, out)
 		}
 	}

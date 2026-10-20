@@ -332,10 +332,10 @@ func TestEC2PostgresDatabase_ProbesItsContainerOnTheInstance(t *testing.T) {
 			if len(host.ranOn) != 1 || host.ranOn[0] != "i-0abc" {
 				t.Fatalf("ran on %q, want i-0abc once", host.ranOn)
 			}
-			for _, part := range []string{"pg-sub-1", "docker inspect", "pg_isready", "PRESENT=", "READY="} {
-				if !strings.Contains(host.scripts[0], part) {
-					t.Errorf("probe script %q does not carry %q", host.scripts[0], part)
-				}
+			want := "if docker inspect pg-sub-1 >/dev/null 2>&1; then echo PRESENT=1; docker exec pg-sub-1 pg_isready -U postgres >/dev/null 2>&1; echo READY=$?\n" +
+				"elif docker version >/dev/null 2>&1; then echo PRESENT=0; else echo PRESENT=unknown; fi"
+			if host.scripts[0] != want {
+				t.Errorf("probe script = %q, want %q", host.scripts[0], want)
 			}
 		})
 	}
