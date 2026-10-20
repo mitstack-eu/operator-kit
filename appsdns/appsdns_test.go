@@ -265,136 +265,106 @@ func TestPublish_ARefusedWriteReturnsTheClientErrorAndNothingPublished(t *testin
 	}
 }
 
-func TestRetire_DeletesTheRecord(t *testing.T) {
-	f := newFake()
-	z := f.zone()
-	if _, err := z.Publish(context.Background(), appName, address); err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-
-	err := z.Retire(context.Background(), appName)
-
-	if rec, held := f.record(hostname); err != nil || held {
-		t.Errorf("Retire = %v and the zone still holds %s = %+v (held %t); want nil and no record", err, hostname, rec, held)
-	}
-}
-
-func TestRetire_DeletesWithTheStoredTTLAndValuesExactly(t *testing.T) {
-	f := newFake()
-	f.seed(hostname, 300, "198.51.100.1", "198.51.100.2")
-
-	err := f.zone().Retire(context.Background(), appName)
-
-	if err != nil || len(f.changes) != 1 {
-		t.Fatalf("Retire = %v with changes %+v; want nil and one DELETE", err, f.changes)
-	}
-	want := appsdns.Change{Action: appsdns.ActionDelete, RecordSet: appsdns.RecordSet{
-		Name: hostname, Type: appsdns.TypeA, TTL: 300, Values: []string{"198.51.100.1", "198.51.100.2"},
-	}}
-	if got := f.changes[0]; !reflect.DeepEqual(got, want) {
-		t.Errorf("DELETE change = %+v; want %+v", got, want)
-	}
-}
-
-func TestRetire_ARefusedDeleteReturnsTheClientError(t *testing.T) {
-	f := newFake()
-	f.seed(hostname, 60, address)
-	f.changeErr[appsdns.ActionDelete] = errAccessDenied
-
-	err := f.zone().Retire(context.Background(), appName)
-
-	if !errors.Is(err, errAccessDenied) {
-		t.Errorf("Retire over a refused DELETE = %v; want an error wrapping %v", err, errAccessDenied)
-	}
-	if err != nil && !strings.Contains(err.Error(), hostname) {
-		t.Errorf("Retire error %q does not name the hostname %s", err, hostname)
-	}
-	if _, held := f.record(hostname); !held {
-		t.Error("the record is gone though the DELETE was refused")
-	}
-}
-
-func TestRetire_ADeleteRefusedForARecordThatChangedReturnsTheError(t *testing.T) {
-	f := newFake()
-	f.seed(hostname, 60, address)
-	f.beforeDelete = func(records map[string]fakeRecord) {
+func TestRetire(t *testing.T) {
+	throttled := errors.New("Throttling: Rate exceeded")
+	neighbour := "myapp2.apps.mitstack.dev"
+	repoint := func(records map[string]fakeRecord) {
 		records[hostname] = fakeRecord{ttl: 60, values: []string{"198.51.100.9"}}
 	}
-
-	err := f.zone().Retire(context.Background(), appName)
-
-	if err == nil || !strings.Contains(err.Error(), "but it was not found") {
-		t.Errorf("Retire over a record re-pointed between the read and the delete = %v; want the refused DELETE's error", err)
+	cases := []struct {
+		name      string
+		noZoneID  bool
+		arrange   func(f *fakeRoute53)
+		wantErrIs error
+		wantInErr string
+		check     func(t *testing.T, f *fakeRoute53)
+	}{
+		{"a published record is deleted", false, func(f *fakeRoute53) { f.seed(hostname, 60, address) }, nil, "",
+			func(t *testing.T, f *fakeRoute53) {
+				if rec, held := f.record(hostname); held {
+					t.Errorf("the zone still holds %s = %+v", hostname, rec)
+				}
+			}},
+		{"the DELETE carries the stored TTL and values exactly, which Route 53 requires", false, func(f *fakeRoute53) { f.seed(hostname, 300, "198.51.100.1", "198.51.100.2") }, nil, "",
+			func(t *testing.T, f *fakeRoute53) {
+				want := []appsdns.Change{{Action: appsdns.ActionDelete, RecordSet: appsdns.RecordSet{Name: hostname, Type: appsdns.TypeA, TTL: 300, Values: []string{"198.51.100.1", "198.51.100.2"}}}}
+				if !reflect.DeepEqual(f.changes, want) {
+					t.Errorf("changes = %+v; want %+v", f.changes, want)
+				}
+			}},
+		{"the record is read from its name alone", false, func(f *fakeRoute53) { f.seed(hostname, 60, address) }, nil, "",
+			func(t *testing.T, f *fakeRoute53) {
+				want := appsdns.ListInput{ZoneID: zoneID, StartName: hostname, StartType: appsdns.TypeA, MaxItems: 1}
+				if len(f.lists) == 0 || !reflect.DeepEqual(f.lists[0], want) {
+					t.Errorf("first listing = %+v; want %+v", f.lists, want)
+				}
+			}},
+		{"a refused DELETE returns the client error naming the hostname and keeps the record", false, func(f *fakeRoute53) {
+			f.seed(hostname, 60, address)
+			f.changeErr[appsdns.ActionDelete] = errAccessDenied
+		}, errAccessDenied, hostname, func(t *testing.T, f *fakeRoute53) {
+			if _, held := f.record(hostname); !held {
+				t.Error("the record is gone though the DELETE was refused")
+			}
+		}},
+		{"a DELETE refused because the record changed after the read returns that error", false, func(f *fakeRoute53) {
+			f.seed(hostname, 60, address)
+			f.beforeDelete = repoint
+		}, nil, "but it was not found", nil},
+		{"a record already gone needs no change", false, nil, nil, "", func(t *testing.T, f *fakeRoute53) {
+			if slices.Contains(f.calls, "ChangeRecordSet") {
+				t.Errorf("calls = %v; want no change", f.calls)
+			}
+		}},
+		{"a record deleted between the read and the delete counts as deleted", false, func(f *fakeRoute53) {
+			f.seed(hostname, 60, address)
+			f.beforeDelete = func(records map[string]fakeRecord) { delete(records, hostname) }
+		}, nil, "", nil},
+		{"a failed read returns the client error and changes nothing", false, func(f *fakeRoute53) {
+			f.seed(hostname, 60, address)
+			f.listErr = throttled
+		}, throttled, "", func(t *testing.T, f *fakeRoute53) {
+			if slices.Contains(f.calls, "ChangeRecordSet") {
+				t.Errorf("calls = %v; want no change", f.calls)
+			}
+		}},
+		{"a neighbouring record is left alone", false, func(f *fakeRoute53) { f.seed(neighbour, 60, "198.51.100.7") }, nil, "",
+			func(t *testing.T, f *fakeRoute53) {
+				if _, held := f.record(neighbour); !held {
+					t.Errorf("the neighbour %s is gone", neighbour)
+				}
+			}},
+		{"no zone id configured does nothing", true, nil, nil, "", func(t *testing.T, f *fakeRoute53) {
+			if len(f.calls) != 0 {
+				t.Errorf("calls = %v; want none", f.calls)
+			}
+		}},
 	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			if tc.arrange != nil {
+				tc.arrange(f)
+			}
+			z := f.zone()
+			if tc.noZoneID {
+				z.ID = ""
+			}
 
-func TestRetire_ARecordAlreadyGoneReturnsNil(t *testing.T) {
-	f := newFake()
+			err := z.Retire(context.Background(), appName)
 
-	err := f.zone().Retire(context.Background(), appName)
-
-	if err != nil || slices.Contains(f.calls, "ChangeRecordSet") {
-		t.Errorf("Retire with no record = %v with calls %v; want nil and no change", err, f.calls)
-	}
-}
-
-func TestRetire_ARecordGoneBetweenTheReadAndTheDeleteReturnsNil(t *testing.T) {
-	f := newFake()
-	f.seed(hostname, 60, address)
-	f.beforeDelete = func(records map[string]fakeRecord) { delete(records, hostname) }
-
-	err := f.zone().Retire(context.Background(), appName)
-
-	if err != nil {
-		t.Errorf("Retire over a record deleted between the read and the delete = %v; want nil", err)
-	}
-}
-
-func TestRetire_AFailedReadReturnsTheClientError(t *testing.T) {
-	f := newFake()
-	f.seed(hostname, 60, address)
-	f.listErr = errors.New("Throttling: Rate exceeded")
-
-	err := f.zone().Retire(context.Background(), appName)
-
-	if !errors.Is(err, f.listErr) || slices.Contains(f.calls, "ChangeRecordSet") {
-		t.Errorf("Retire over a throttled read = %v with calls %v; want an error wrapping %v and no change", err, f.calls, f.listErr)
-	}
-}
-
-func TestRetire_LeavesANeighbouringRecordAlone(t *testing.T) {
-	f := newFake()
-	f.seed("myapp2.apps.mitstack.dev", 60, "198.51.100.7")
-
-	err := f.zone().Retire(context.Background(), appName)
-
-	if _, held := f.record("myapp2.apps.mitstack.dev"); err != nil || !held {
-		t.Errorf("Retire = %v and neighbour held %t; want nil and the neighbour kept", err, held)
-	}
-}
-
-func TestRetire_WithNoZoneConfiguredDoesNothing(t *testing.T) {
-	f := newFake()
-	z := appsdns.Zone{Name: zoneName, Client: f}
-
-	err := z.Retire(context.Background(), appName)
-
-	if err != nil || len(f.calls) != 0 {
-		t.Errorf("Retire with no zone id = %v with calls %v; want nil and no call", err, f.calls)
-	}
-}
-
-func TestRetire_ReadsTheARecordFromItsNameOnly(t *testing.T) {
-	f := newFake()
-	f.seed(hostname, 60, address)
-
-	if err := f.zone().Retire(context.Background(), appName); err != nil {
-		t.Fatalf("Retire: %v", err)
-	}
-
-	want := appsdns.ListInput{ZoneID: zoneID, StartName: hostname, StartType: appsdns.TypeA, MaxItems: 1}
-	if len(f.lists) == 0 || !reflect.DeepEqual(f.lists[0], want) {
-		t.Errorf("first listing = %+v; want %+v", f.lists, want)
+			switch {
+			case tc.wantErrIs == nil && tc.wantInErr == "" && err != nil:
+				t.Errorf("Retire = %v; want nil", err)
+			case tc.wantErrIs != nil && !errors.Is(err, tc.wantErrIs):
+				t.Errorf("Retire = %v; want an error wrapping %v", err, tc.wantErrIs)
+			case tc.wantInErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantInErr)):
+				t.Errorf("Retire = %v; want an error naming %q", err, tc.wantInErr)
+			}
+			if tc.check != nil {
+				tc.check(t, f)
+			}
+		})
 	}
 }
 

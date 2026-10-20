@@ -119,44 +119,42 @@ func buildArgs(t *testing.T, dir, tokenURL, outPath string) []string {
 	}
 }
 
+const (
+	passReport = `{"suiteVersion":"1.0.0","kitVersion":"v0.1.0","mode":"standalone","manifestDigest":"sha256:aa","verdict":"pass","resultsDigest":"sha256:bb","suites":[]}`
+	failReport = `{"suiteVersion":"1.0.0","kitVersion":"v0.1.0","mode":"standalone","manifestDigest":"sha256:aa","verdict":"fail","resultsDigest":"sha256:bb","suites":[]}`
+)
+
 func TestRun_Build_FailedReportExitsNonZeroAndWritesNoFile(t *testing.T) {
 	dir := t.TempDir()
-	reportPath := writeFile(t, dir, "report.json", `{"suiteVersion":"1.0.0","kitVersion":"v0.1.0","mode":"standalone","manifestDigest":"sha256:aa","verdict":"fail","resultsDigest":"sha256:bb","suites":[]}`)
 	outPath := filepath.Join(dir, "record.json")
-
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("blockprov build must not mint a token when the report verdict is not pass")
+		t.Error("blockprov build minted a token for a report whose verdict is not pass")
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer tokenSrv.Close()
-
-	args := buildArgs(t, dir, tokenSrv.URL, outPath)
-	args = append(args, "--report", reportPath)
+	args := append(buildArgs(t, dir, tokenSrv.URL, outPath), "--report", writeFile(t, dir, "report.json", failReport))
 
 	stdout, exit := runBlockprov(t, args...)
+
 	if exit == 0 {
-		t.Fatalf("want non-zero exit for a failed blockverify report, got 0\nstdout:\n%s", stdout)
+		t.Fatalf("exit = 0 for a failed blockverify report, want non-zero\nstdout:\n%s", stdout)
 	}
 	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
-		t.Errorf("build must write NO output file when the report verdict is not pass (stat err = %v)", err)
+		t.Errorf("os.Stat(record) = %v, want no record written for a report that is not a pass", err)
 	}
 }
 
 func TestRun_Build_PassingReportWritesARecordProvenanceVerifyAccepts(t *testing.T) {
 	dir := t.TempDir()
-	reportPath := writeFile(t, dir, "report.json", `{"suiteVersion":"1.0.0","kitVersion":"v0.1.0","mode":"standalone","manifestDigest":"sha256:aa","verdict":"pass","resultsDigest":"sha256:bb","suites":[]}`)
 	outPath := filepath.Join(dir, "record.json")
-
 	tokenURL, resolve := mintServer(t, testRepository, testCommit)
-
-	args := buildArgs(t, dir, tokenURL, outPath)
-	args = append(args, "--report", reportPath)
+	args := append(buildArgs(t, dir, tokenURL, outPath), "--report", writeFile(t, dir, "report.json", passReport))
 
 	stdout, exit := runBlockprov(t, args...)
-	if exit != 0 {
-		t.Fatalf("want exit 0 for a passing report, got %d\nstdout:\n%s", exit, stdout)
-	}
 
+	if exit != 0 {
+		t.Fatalf("exit = %d for a passing report, want 0\nstdout:\n%s", exit, stdout)
+	}
 	raw, err := os.ReadFile(outPath)
 	if err != nil {
 		t.Fatalf("reading written record: %v", err)
@@ -165,52 +163,32 @@ func TestRun_Build_PassingReportWritesARecordProvenanceVerifyAccepts(t *testing.
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		t.Fatalf("written record is not valid JSON: %v", err)
 	}
-
 	if err := provenance.Verify(rec, resolve, provenance.Expect{Repository: testRepository}); err != nil {
 		t.Errorf("provenance.Verify on the written record: %v", err)
 	}
-	if rec.Payload.Conformance.RunURL != "https://github.com/mitstack-eu/sample-block/actions/runs/1" {
-		t.Errorf("runUrl = %q, want the --run-url flag's value", rec.Payload.Conformance.RunURL)
-	}
-	if rec.Payload.SourceRepository != testRepository {
-		t.Errorf("sourceRepository = %q, want %q", rec.Payload.SourceRepository, testRepository)
+	if got, want := [2]string{rec.Payload.Conformance.RunURL, rec.Payload.SourceRepository}, [2]string{"https://github.com/mitstack-eu/sample-block/actions/runs/1", testRepository}; got != want {
+		t.Errorf("runUrl, sourceRepository = %q, want the flags' values %q", got, want)
 	}
 }
 
-func TestRun_Verify_GoldenExitsZero(t *testing.T) {
-	stdout, exit := runBlockprov(t, "verify",
-		"--record", "../provenance/goldens/record.golden.json",
-		"--jwks", "../provenance/goldens/record.golden.jwks.json",
-		"--repository", "mitstack-eu/postgres-db",
-	)
-	if exit != 0 {
-		t.Fatalf("want exit 0 verifying the committed golden, got %d\nstdout:\n%s", exit, stdout)
-	}
-}
+// verify goes through provenance.Decode, because json.Unmarshal drops an attacker-added field and the record would be accepted.
+func TestRun_Verify(t *testing.T) {
+	for _, tc := range []struct {
+		name, record, wantLine string
+		wantExit               int
+	}{
+		{"the committed golden is accepted", "record.golden.json", "blockprov verify: record accepted", 0},
+		{"another identity is rejected naming the mismatch", "invalid-other-identity.json", "blockprov verify: record rejected: provenance: token identity does not match the expected repository", 1},
+		{"an unknown payload field is rejected", "invalid-unknown-field.json", "blockprov verify: record is not valid: provenance: record contains a field its shape does not declare", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, exit := runBlockprov(t, "verify", "--record", "../provenance/goldens/"+tc.record,
+				"--jwks", "../provenance/goldens/record.golden.jwks.json", "--repository", "mitstack-eu/postgres-db")
 
-func TestRun_Verify_OtherIdentityExitsNonZeroAndNamesTheMismatch(t *testing.T) {
-	stdout, exit := runBlockprov(t, "verify",
-		"--record", "../provenance/goldens/invalid-other-identity.json",
-		"--jwks", "../provenance/goldens/record.golden.jwks.json",
-		"--repository", "mitstack-eu/postgres-db",
-	)
-	if exit == 0 {
-		t.Fatalf("want non-zero exit verifying invalid-other-identity.json, got 0\nstdout:\n%s", stdout)
-	}
-	if !strings.Contains(strings.ToLower(stdout), "identity") {
-		t.Errorf("stdout must name the identity mismatch, got:\n%s", stdout)
-	}
-}
-
-// verify must go through provenance.Decode, because json.Unmarshal drops an attacker-added field and the record would be accepted.
-func TestRun_Verify_UnknownFieldExitsNonZero(t *testing.T) {
-	stdout, exit := runBlockprov(t, "verify",
-		"--record", "../provenance/goldens/invalid-unknown-field.json",
-		"--jwks", "../provenance/goldens/record.golden.jwks.json",
-		"--repository", "mitstack-eu/postgres-db",
-	)
-	if exit == 0 {
-		t.Fatalf("want non-zero exit verifying a record with an unknown payload field, got 0 (blockprov verify must decode through provenance.Decode, not json.Unmarshal)\nstdout:\n%s", stdout)
+			if exit != tc.wantExit || !strings.HasPrefix(stdout, tc.wantLine) {
+				t.Errorf("verify %s = exit %d, stdout %q; want exit %d starting %q", tc.record, exit, stdout, tc.wantExit, tc.wantLine)
+			}
+		})
 	}
 }
 
@@ -337,37 +315,23 @@ func TestRun_Push_FailsLoudlyOnNon2xxFromRegistry(t *testing.T) {
 	}
 }
 
-func TestRun_UsageError_NoSubcommand(t *testing.T) {
-	stdout, exit := runBlockprov(t)
-	if exit != 2 {
-		t.Fatalf("want exit 2 with no subcommand, got %d\nstdout:\n%s", exit, stdout)
-	}
-}
+func TestRun_UsageErrorsExitTwo(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"no subcommand", nil},
+		{"an unknown subcommand", []string{"frobnicate"}},
+		{"build missing required flags", []string{"build", "--manifest", "/nonexistent"}},
+		{"verify missing required flags", []string{"verify", "--record", "/nonexistent"}},
+		{"push missing required flags", []string{"push", "--record", "/nonexistent"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, exit := runBlockprov(t, tc.args...)
 
-func TestRun_UsageError_UnknownSubcommand(t *testing.T) {
-	stdout, exit := runBlockprov(t, "frobnicate")
-	if exit != 2 {
-		t.Fatalf("want exit 2 for an unknown subcommand, got %d\nstdout:\n%s", exit, stdout)
-	}
-}
-
-func TestRun_UsageError_BuildMissingRequiredFlags(t *testing.T) {
-	stdout, exit := runBlockprov(t, "build", "--manifest", "/nonexistent")
-	if exit != 2 {
-		t.Fatalf("want exit 2 when required build flags are missing, got %d\nstdout:\n%s", exit, stdout)
-	}
-}
-
-func TestRun_UsageError_VerifyMissingRequiredFlags(t *testing.T) {
-	stdout, exit := runBlockprov(t, "verify", "--record", "/nonexistent")
-	if exit != 2 {
-		t.Fatalf("want exit 2 when required verify flags are missing, got %d\nstdout:\n%s", exit, stdout)
-	}
-}
-
-func TestRun_UsageError_PushMissingRequiredFlags(t *testing.T) {
-	stdout, exit := runBlockprov(t, "push", "--record", "/nonexistent")
-	if exit != 2 {
-		t.Fatalf("want exit 2 when required push flags are missing, got %d\nstdout:\n%s", exit, stdout)
+			if exit != 2 {
+				t.Errorf("Run(%q) = exit %d, want 2\nstdout:\n%s", tc.args, exit, stdout)
+			}
+		})
 	}
 }

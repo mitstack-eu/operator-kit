@@ -3,6 +3,7 @@ package teardown_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/mitstack-eu/operator-kit/v2/adopt"
@@ -13,207 +14,90 @@ func probeIdentity() adopt.Identity {
 	return adopt.Identity{AppID: "app_1", Name: "checkout"}
 }
 
-func TestProbe_NothingFoundIsAbsent(t *testing.T) {
-	got, err := teardown.Probe(context.Background(), probeIdentity(),
-		[]teardown.Class{&stub{kind: "ebs-volume"}})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !got.Absent {
-		t.Fatalf("an empty discovery across every class is absent, got %+v", got)
-	}
+func volume(rid string, tags map[string]string, inUse bool) teardown.Resource {
+	return teardown.Resource{ID: rid, Tags: tags, InUse: inUse}
 }
 
-func TestProbe_AResourceStillThereIsNotAbsent(t *testing.T) {
-	c := &stub{kind: "ebs-volume", found: []teardown.Resource{
-		{ID: "vol-1", Tags: map[string]string{adopt.TagAppID: "app_1"}},
-	}}
-	got, err := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{c})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+var (
+	ours          = map[string]string{adopt.TagAppID: "app_1"}
+	anotherApp    = map[string]string{adopt.TagAppID: "app_2"}
+	otherPlatform = map[string]string{adopt.TagAppID: "app_1", adopt.TagManagedBy: "some-other-platform"}
+)
+
+func ids(rs []teardown.Resource) []string {
+	var out []string
+	for _, r := range rs {
+		out = append(out, r.ID)
 	}
-	if got.Absent {
-		t.Fatal("a resource that is still there means not absent")
-	}
-	if len(got.Remaining) != 1 || got.Remaining[0].ID != "vol-1" {
-		t.Fatalf("the probe must name what is left, got %+v", got.Remaining)
-	}
+	return out
 }
 
-// "We could not look" must never be reported as "there is nothing there".
-func TestProbe_ADiscoveryFailureIsNeverAbsent(t *testing.T) {
-	c := &stub{kind: "ebs-volume", findErr: errors.New("throttled")}
-	got, err := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{c})
-	if err == nil {
-		t.Fatal("a discovery failure must surface as an error, not be swallowed")
+// Probe runs on live subscriptions too, so every row also checks that it deleted nothing.
+func TestProbe(t *testing.T) {
+	cases := []struct {
+		name           string
+		identity       adopt.Identity
+		stubs          []*stub
+		wantErr        bool
+		wantAbsent     bool
+		wantRemaining  []string
+		wantUnsearched []string
+	}{
+		{"nothing found across every class is absent", probeIdentity(), []*stub{{kind: "ebs-volume"}}, false, true, nil, nil},
+		{"a resource still there is not absent and is named", probeIdentity(), []*stub{{kind: "ebs-volume", found: []teardown.Resource{volume("vol-1", ours, false)}}},
+			false, false, []string{"vol-1"}, nil},
+		{"a discovery failure surfaces and names the class it could not search", probeIdentity(), []*stub{{kind: "ebs-volume", findErr: errors.New("throttled")}},
+			true, false, nil, []string{"ebs-volume"}},
+		{"one unsearchable class defeats the clean ones", probeIdentity(), []*stub{{kind: "ebs-volume"}, {kind: "ecr-repository", findErr: errors.New("access denied")}},
+			true, false, nil, []string{"ecr-repository"}},
+		{"another app's resource is dropped and does not hold us back", probeIdentity(), []*stub{{kind: "ebs-volume", found: []teardown.Resource{volume("vol-other", anotherApp, false)}}},
+			false, true, nil, nil},
+		{"a resource another platform manages is dropped", probeIdentity(), []*stub{{kind: "ebs-volume", found: []teardown.Resource{volume("vol-foreign-mb", otherPlatform, false)}}},
+			false, true, nil, nil},
+		{"an untagged resource marks its class unsearched, never absent", probeIdentity(), []*stub{{kind: "ebs-volume", found: []teardown.Resource{volume("vol-untagged", map[string]string{}, false)}}},
+			false, false, nil, []string{"ebs-volume"}},
+		{"our own resource in use is affirmative evidence and is named", probeIdentity(), []*stub{{kind: "ebs-volume", found: []teardown.Resource{volume("vol-inuse", ours, true)}}},
+			false, false, []string{"vol-inuse"}, nil},
+		{"an empty identity is refused, and a refused probe is not absent", adopt.Identity{}, []*stub{{kind: "ebs-volume"}}, true, false, nil, nil},
 	}
-	if got.Absent {
-		t.Fatal("a class that could not be searched is not a class that is clean")
-	}
-	if len(got.Unsearched) != 1 || got.Unsearched[0] != "ebs-volume" {
-		t.Fatalf("the probe must name the class it could not search, got %+v", got.Unsearched)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := teardown.Probe(context.Background(), tc.identity, classes(tc.stubs))
 
-func TestProbe_OneUnsearchableClassDefeatsTheCleanOnes(t *testing.T) {
-	got, _ := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{
-		&stub{kind: "ebs-volume"},
-		&stub{kind: "ecr-repository", findErr: errors.New("access denied")},
-	})
-	if got.Absent {
-		t.Fatal("absent must require EVERY class to have been searched and found empty")
-	}
-}
-
-func TestProbe_AnotherAppsResourceDoesNotHoldUsBack(t *testing.T) {
-	c := &stub{kind: "ebs-volume", found: []teardown.Resource{
-		{ID: "vol-other", Tags: map[string]string{adopt.TagAppID: "app_2"}},
-	}}
-	got, err := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{c})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !got.Absent {
-		t.Fatalf("a foreign app's resource must not make our app look present: %+v", got)
-	}
-}
-
-// Probe runs on live subscriptions too, so it must never delete.
-func TestProbe_NeverDeletesAnything(t *testing.T) {
-	c := &stub{kind: "ebs-volume", found: []teardown.Resource{
-		{ID: "vol-1", Tags: map[string]string{adopt.TagAppID: "app_1"}},
-	}}
-	if _, err := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{c}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(c.deleted) != 0 {
-		t.Fatalf("Probe deleted %v — it is a read, and validate calls it on live apps", c.deleted)
-	}
-}
-
-func TestProbe_RefusesAnEmptyIdentity(t *testing.T) {
-	got, err := teardown.Probe(context.Background(), adopt.Identity{}, []teardown.Class{&stub{kind: "ebs-volume"}})
-	if err == nil {
-		t.Fatal("an unvalidated identity must be refused")
-	}
-	if got.Absent {
-		t.Fatal("a refused probe is not an absent one")
-	}
-}
-
-// An untagged resource means "we could not tell", which is the Unsearched case, not a vote for absent.
-func TestProbe_UntaggedResourceIsUnsearchedNotAbsent(t *testing.T) {
-	c := &stub{kind: "ebs-volume", found: []teardown.Resource{
-		{ID: "vol-untagged", Tags: map[string]string{}},
-	}}
-	got, _ := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{c})
-
-	if got.Absent {
-		t.Fatal("an untagged resource has no identity — we could not tell, so this must not be absent")
-	}
-	found := false
-	for _, u := range got.Unsearched {
-		if u == "ebs-volume" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("an untagged resource must mark its class UNSEARCHED, got %+v", got)
-	}
-}
-
-func TestProbe_OwnedResourceInUseAppearsInRemaining(t *testing.T) {
-	c := &stub{kind: "ebs-volume", found: []teardown.Resource{
-		{ID: "vol-inuse", Tags: map[string]string{adopt.TagAppID: "app_1"}, InUse: true},
-	}}
-	got, err := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{c})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Absent {
-		t.Fatal("our own in-use resource is affirmative evidence we are not absent")
-	}
-	if len(got.Remaining) != 1 || got.Remaining[0].ID != "vol-inuse" {
-		t.Fatalf("an in-use resource of ours must be named in Remaining, got %+v", got.Remaining)
-	}
-}
-
-func TestProbe_ForeignAppIDResourceStaysDropped(t *testing.T) {
-	c := &stub{kind: "ebs-volume", found: []teardown.Resource{
-		{ID: "vol-foreign", Tags: map[string]string{adopt.TagAppID: "app_2"}},
-	}}
-	got, err := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{c})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !got.Absent {
-		t.Fatalf("a foreign app's resource must not hold our teardown back: %+v", got)
-	}
-	if len(got.Remaining) != 0 || len(got.Unsearched) != 0 {
-		t.Fatalf("a foreign app's resource must be dropped, not surfaced: %+v", got)
-	}
-}
-
-func TestProbe_ForeignManagedByResourceStaysDropped(t *testing.T) {
-	c := &stub{kind: "ebs-volume", found: []teardown.Resource{
-		{ID: "vol-foreign-mb", Tags: map[string]string{
-			adopt.TagAppID:     "app_1",
-			adopt.TagManagedBy: "some-other-platform",
-		}},
-	}}
-	got, err := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{c})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !got.Absent {
-		t.Fatalf("a resource managed by another platform must not hold our teardown back: %+v", got)
-	}
-	if len(got.Remaining) != 0 || len(got.Unsearched) != 0 {
-		t.Fatalf("a foreign-managed resource must be dropped, not surfaced: %+v", got)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Probe error = %v, want error %v", err, tc.wantErr)
+			}
+			if got.Absent != tc.wantAbsent || !slices.Equal(ids(got.Remaining), tc.wantRemaining) || !slices.Equal(got.Unsearched, tc.wantUnsearched) {
+				t.Errorf("Probe = absent %v, remaining %q, unsearched %q; want %v, %q, %q", got.Absent, ids(got.Remaining), got.Unsearched, tc.wantAbsent, tc.wantRemaining, tc.wantUnsearched)
+			}
+			for _, s := range tc.stubs {
+				if len(s.deleted) != 0 {
+					t.Errorf("Probe deleted %v from %s; it is a read", s.deleted, s.kind)
+				}
+			}
+		})
 	}
 }
 
 // Sweep and Probe must never disagree about the same evidence, since Probe is what settles a subscription.
 func TestProbeAndSweep_AgreeOnASharedFixture(t *testing.T) {
 	fixture := []teardown.Resource{
-		{ID: "vol-untagged", Tags: map[string]string{}},
-		{ID: "vol-inuse", Tags: map[string]string{adopt.TagAppID: "app_1"}, InUse: true},
-		{ID: "vol-foreign-app", Tags: map[string]string{adopt.TagAppID: "app_2"}},
-		{ID: "vol-foreign-mb", Tags: map[string]string{
-			adopt.TagAppID:     "app_1",
-			adopt.TagManagedBy: "some-other-platform",
-		}},
+		volume("vol-untagged", map[string]string{}, false),
+		volume("vol-inuse", ours, true),
+		volume("vol-foreign-app", anotherApp, false),
+		volume("vol-foreign-mb", otherPlatform, false),
 	}
 
-	sweepStub := &stub{kind: "ebs-volume", found: fixture}
-	sweepRep, sweepErr := teardown.Sweep(context.Background(), probeIdentity(), []teardown.Class{sweepStub})
-	if sweepErr != nil {
-		t.Fatalf("unexpected sweep error: %v", sweepErr)
-	}
-	if sweepRep.Clean() {
-		t.Fatalf("sweep fixture sanity check failed — expected skips to make this not-clean: %+v", sweepRep)
-	}
+	sweep, sweepErr := teardown.Sweep(context.Background(), probeIdentity(), []teardown.Class{&stub{kind: "ebs-volume", found: fixture}})
+	probe, probeErr := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{&stub{kind: "ebs-volume", found: fixture}})
 
-	probeStub := &stub{kind: "ebs-volume", found: fixture}
-	probePresence, probeErr := teardown.Probe(context.Background(), probeIdentity(), []teardown.Class{probeStub})
-	if probeErr != nil {
-		t.Fatalf("unexpected probe error: %v", probeErr)
+	if sweepErr != nil || probeErr != nil {
+		t.Fatalf("Sweep error %v, Probe error %v; want neither", sweepErr, probeErr)
 	}
-
-	if probePresence.Absent {
-		t.Fatalf("the sweep sees this app as not-clean (%+v) but the probe says absent:true (%+v) — "+
-			"the same fixture must not yield contradictory verdicts", sweepRep, probePresence)
+	if sweep.Clean() || probe.Absent {
+		t.Errorf("sweep clean %v (%s), probe absent %v; want the same fixture to read as not done by both", sweep.Clean(), sweep, probe.Absent)
 	}
-	if len(probePresence.Remaining) != 1 || probePresence.Remaining[0].ID != "vol-inuse" {
-		t.Errorf("Remaining must name exactly the in-use resource of ours, got %+v", probePresence.Remaining)
-	}
-	unsearched := false
-	for _, u := range probePresence.Unsearched {
-		if u == "ebs-volume" {
-			unsearched = true
-		}
-	}
-	if !unsearched {
-		t.Errorf("Unsearched must carry the class the untagged resource made unprovable, got %+v", probePresence.Unsearched)
+	if !slices.Equal(ids(probe.Remaining), []string{"vol-inuse"}) || !slices.Equal(probe.Unsearched, []string{"ebs-volume"}) {
+		t.Errorf("probe remaining %q, unsearched %q; want [vol-inuse] and [ebs-volume]", ids(probe.Remaining), probe.Unsearched)
 	}
 }
