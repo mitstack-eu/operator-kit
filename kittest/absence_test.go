@@ -28,48 +28,31 @@ spec:
   layer: infra
 `
 
-func TestCheckAbsenceProbe_NoProblemsForADeclaringManifestWithTheGoldenReply(t *testing.T) {
+func TestCheckAbsenceProbe(t *testing.T) {
 	golden := kittest.ValidResponseGoldens(t)["absent"]
 	if len(golden) == 0 {
 		t.Fatal("the absent response golden must exist and be non-empty for this test to prove anything")
 	}
-	if problems := kittest.CheckAbsenceProbe([]byte(declaringManifest), golden); len(problems) != 0 {
-		t.Errorf("a declaring manifest answering with the absent.json golden must have no problems, got %v", problems)
+	cases := []struct {
+		name, manifest string
+		reply          []byte
+		wantProblems   bool
+	}{
+		{"a declaring manifest answering with the absent golden has no problem", declaringManifest, golden, false},
+		{"a declaring manifest's reply with no absent key is flagged", declaringManifest, []byte(`{}`), true},
+		{"a declaring manifest's reply with a non-boolean absent is flagged", declaringManifest, []byte(`{"absent":"yes"}`), true},
+		{"a declaring manifest's reply that is no JSON object is flagged", declaringManifest, []byte(`[1,2,3]`), true},
+		{"an undeclared manifest owes nothing for an empty object", undeclaredManifest, []byte(`{}`), false},
+		{"an undeclared manifest owes nothing for the absent golden", undeclaredManifest, golden, false},
+		{"an undeclared manifest owes nothing for a non-object", undeclaredManifest, []byte(`[1,2,3]`), false},
+		{"an undeclared manifest owes nothing for a non-boolean absent", undeclaredManifest, []byte(`{"absent":"yes"}`), false},
 	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			problems := kittest.CheckAbsenceProbe([]byte(tc.manifest), tc.reply)
 
-func TestCheckAbsenceProbe_ProblemForADeclaringManifestWithAnEmptyObjectReply(t *testing.T) {
-	problems := kittest.CheckAbsenceProbe([]byte(declaringManifest), []byte(`{}`))
-	if len(problems) == 0 {
-		t.Fatal("a declaring manifest's validate reply with no absent key must be flagged")
-	}
-}
-
-func TestCheckAbsenceProbe_ProblemForADeclaringManifestWithAbsentNotABoolean(t *testing.T) {
-	problems := kittest.CheckAbsenceProbe([]byte(declaringManifest), []byte(`{"absent":"yes"}`))
-	if len(problems) == 0 {
-		t.Fatal("a declaring manifest's validate reply with a non-boolean absent value must be flagged")
-	}
-}
-
-func TestCheckAbsenceProbe_ProblemForADeclaringManifestWithANonObjectReply(t *testing.T) {
-	problems := kittest.CheckAbsenceProbe([]byte(declaringManifest), []byte(`[1,2,3]`))
-	if len(problems) == 0 {
-		t.Fatal("a declaring manifest's validate reply that is not a JSON object must be flagged")
-	}
-}
-
-func TestCheckAbsenceProbe_NilForAnUndeclaredManifestWhateverTheReply(t *testing.T) {
-	cases := map[string][]byte{
-		"empty object":    []byte(`{}`),
-		"absent golden":   kittest.ValidResponseGoldens(t)["absent"],
-		"not an object":   []byte(`[1,2,3]`),
-		"absent not bool": []byte(`{"absent":"yes"}`),
-	}
-	for name, reply := range cases {
-		t.Run(name, func(t *testing.T) {
-			if problems := kittest.CheckAbsenceProbe([]byte(undeclaredManifest), reply); problems != nil {
-				t.Errorf("an undeclared manifest owes nothing, got %v for reply %s", problems, reply)
+			if tc.wantProblems != (len(problems) > 0) || (tc.manifest == undeclaredManifest && problems != nil) {
+				t.Errorf("CheckAbsenceProbe(reply %s) = %#v, want problems %v (nil for an undeclared manifest)", tc.reply, problems, tc.wantProblems)
 			}
 		})
 	}

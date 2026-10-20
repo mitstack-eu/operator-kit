@@ -220,9 +220,14 @@ func quietLog(t *testing.T) *bytes.Buffer {
 	return &sink
 }
 
-func containsAllFold(s string, parts ...string) bool {
-	for _, p := range parts {
-		if !strings.Contains(strings.ToLower(s), strings.ToLower(p)) {
+// namesAll reports whether problem names each part, case-insensitively, where a part "a|b" is named by either a or b.
+func namesAll(problem string, parts []string) bool {
+	for _, part := range parts {
+		hit := false
+		for _, alt := range strings.Split(part, "|") {
+			hit = hit || strings.Contains(strings.ToLower(problem), strings.ToLower(alt))
+		}
+		if !hit {
 			return false
 		}
 	}
@@ -235,102 +240,31 @@ func TestCheckNoSecretLeak_ReportsEachLeakAndVacuousFixture(t *testing.T) {
 		name   string
 		knobs  leakKnobs
 		adjust func(fx *kittest.SecretLeak)
-		// match is nil when the fixture must yield no problem at all.
-		match func(problem string) bool
-		desc  string
+		// want lists what one problem must name; nil means the fixture must yield no problem at all.
+		want []string
 	}{
-		{
-			name: "clean handler",
-		},
-		{
-			name:  "leaks a seeded secret through /logs",
-			knobs: leakKnobs{leakToLogs: true},
-			match: func(p string) bool { return containsAllFold(p, "/logs") },
-			desc:  "a problem naming /logs",
-		},
-		{
-			name:  "leaks the minted OBO token through /logs",
-			knobs: leakKnobs{leakOBOToLogs: true},
-			match: func(p string) bool { return containsAllFold(p, "/logs") },
-			desc:  "a problem naming /logs",
-		},
-		{
-			name:  "leaks a seeded secret through a verb's error",
-			knobs: leakKnobs{leakInError: true},
-			match: func(p string) bool { return containsAllFold(p, "response", "subscribe-refused") },
-			desc:  "a response problem naming the request subscribe-refused",
-		},
-		{
-			name:  "leaks a seeded secret through log.Printf",
-			knobs: leakKnobs{leakToPrintf: true},
-			match: func(p string) bool {
-				return containsAllFold(p, "log output") || containsAllFold(p, "standard logger")
-			},
-			desc: "a problem naming the log output or the standard logger",
-		},
-		{
-			name:   "a seeded secret in no request body",
-			adjust: func(fx *kittest.SecretLeak) { fx.Secrets = append(fx.Secrets, neverSent) },
-			match:  func(p string) bool { return containsAllFold(p, "in no request body") },
-			desc:   "a problem saying the secret is in no request body",
-		},
-		{
-			name:   "an empty seeded secret",
-			adjust: func(fx *kittest.SecretLeak) { fx.Secrets = append(fx.Secrets, "") },
-			match:  func(p string) bool { return containsAllFold(p, "proves nothing") },
-			desc:   "a problem saying the empty secret's absence proves nothing",
-		},
-		{
-			name:   "no request marked Fails",
-			adjust: func(fx *kittest.SecretLeak) { fx.Requests = fx.Requests[:1] },
-			match:  func(p string) bool { return containsAllFold(p, "no request is marked Fails") },
-			desc:   "a problem saying no request is marked Fails",
-		},
-		{
-			name:  "a Fails request answering 200",
-			knobs: leakKnobs{failAnswersOK: true},
-			match: func(p string) bool { return containsAllFold(p, "subscribe-refused", "200") },
-			desc:  "a problem naming subscribe-refused and its status 200",
-		},
-		{
-			name:  "/logs answering 401",
-			knobs: leakKnobs{logsStatus: http.StatusUnauthorized},
-			match: func(p string) bool { return containsAllFold(p, "/logs", "401") },
-			desc:  "a problem naming /logs and its status 401",
-		},
-		{
-			name:  "a Fails request answering 401 on /hook",
-			knobs: leakKnobs{failAnswers401: true},
-			match: func(p string) bool { return containsAllFold(p, "subscribe-refused", "401") },
-			desc:  "a problem naming subscribe-refused and its status 401",
-		},
-		{
-			name:  "/logs serving no lines",
-			knobs: leakKnobs{noLogLines: true},
-			match: func(p string) bool { return containsAllFold(p, "/logs", "lines") },
-			desc:  "a problem saying /logs served no lines",
-		},
-		{
-			name:   "a Fails request whose body is not an envelope",
-			adjust: func(fx *kittest.SecretLeak) { fx.Requests[1].Body["operation"] = "subscrib" },
-			match: func(p string) bool {
-				return containsAllFold(p, "subscribe-refused", "not an envelope", "no verb ran")
-			},
-			desc: "a problem naming subscribe-refused, saying it is not an envelope and no verb ran",
-		},
-		{
-			name: "a Serve that replaces the standard logger",
-			adjust: func(fx *kittest.SecretLeak) {
-				serve := fx.Serve
-				fx.Serve = func(logs *webhook.LogBuffer) (http.Handler, *kittest.Signer) {
-					h, s := serve(logs)
-					log.SetOutput(io.Discard)
-					return h, s
-				}
-			},
-			match: func(p string) bool { return containsAllFold(p, "replaced the standard logger") },
-			desc:  "a problem saying Serve replaced the standard logger",
-		},
+		{name: "clean handler"},
+		{name: "leaks a seeded secret through /logs", knobs: leakKnobs{leakToLogs: true}, want: []string{"/logs"}},
+		{name: "leaks the minted OBO token through /logs", knobs: leakKnobs{leakOBOToLogs: true}, want: []string{"/logs"}},
+		{name: "leaks a seeded secret through a verb's error", knobs: leakKnobs{leakInError: true}, want: []string{"response", "subscribe-refused"}},
+		{name: "leaks a seeded secret through log.Printf", knobs: leakKnobs{leakToPrintf: true}, want: []string{"log output|standard logger"}},
+		{name: "a seeded secret in no request body", adjust: func(fx *kittest.SecretLeak) { fx.Secrets = append(fx.Secrets, neverSent) }, want: []string{"in no request body"}},
+		{name: "an empty seeded secret", adjust: func(fx *kittest.SecretLeak) { fx.Secrets = append(fx.Secrets, "") }, want: []string{"proves nothing"}},
+		{name: "no request marked Fails", adjust: func(fx *kittest.SecretLeak) { fx.Requests = fx.Requests[:1] }, want: []string{"no request is marked Fails"}},
+		{name: "a Fails request answering 200", knobs: leakKnobs{failAnswersOK: true}, want: []string{"subscribe-refused", "200"}},
+		{name: "/logs answering 401", knobs: leakKnobs{logsStatus: http.StatusUnauthorized}, want: []string{"/logs", "401"}},
+		{name: "a Fails request answering 401 on /hook", knobs: leakKnobs{failAnswers401: true}, want: []string{"subscribe-refused", "401"}},
+		{name: "/logs serving no lines", knobs: leakKnobs{noLogLines: true}, want: []string{"/logs", "lines"}},
+		{name: "a Fails request whose body is not an envelope", adjust: func(fx *kittest.SecretLeak) { fx.Requests[1].Body["operation"] = "subscrib" },
+			want: []string{"subscribe-refused", "not an envelope", "no verb ran"}},
+		{name: "a Serve that replaces the standard logger", adjust: func(fx *kittest.SecretLeak) {
+			serve := fx.Serve
+			fx.Serve = func(logs *webhook.LogBuffer) (http.Handler, *kittest.Signer) {
+				h, s := serve(logs)
+				log.SetOutput(io.Discard)
+				return h, s
+			}
+		}, want: []string{"replaced the standard logger"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -346,22 +280,16 @@ func TestCheckNoSecretLeak_ReportsEachLeakAndVacuousFixture(t *testing.T) {
 			if log.Writer() != io.Writer(sink) {
 				t.Errorf("log.Writer() after CheckNoSecretLeak is %T, want the writer set before it ran", log.Writer())
 			}
-			if tc.match == nil {
-				if len(problems) != 0 {
-					t.Errorf("problems = %q, want none for a clean handler", problems)
-				}
-			} else {
-				found := false
-				for _, p := range problems {
-					if tc.match(p) {
-						found = true
-					}
-				}
-				if !found {
-					t.Errorf("problems = %q, want %s", problems, tc.desc)
-				}
+			found := false
+			for _, p := range problems {
+				found = found || namesAll(p, tc.want)
 			}
-
+			if tc.want == nil && len(problems) != 0 {
+				t.Errorf("problems = %q, want none for a clean handler", problems)
+			}
+			if tc.want != nil && !found {
+				t.Errorf("problems = %q, want one naming each of %q", problems, tc.want)
+			}
 			f.mu.Lock()
 			values := []string{leakSecret, neverSent}
 			for _, req := range f.accepted {

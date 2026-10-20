@@ -1,17 +1,6 @@
 package gitops_test
 
-// commit_test.go pins CommitManifests and SecretValues:
-//
-//   - CommitManifests commits the files on top of head and returns the new
-//     revision; files that already stand at head commit nothing and return
-//     head unchanged;
-//   - a tip that moves between reading head and committing is re-read and
-//     retried, a bounded number of times;
-//   - a file holding any non-empty secret value, verbatim or as its standard
-//     base64 encoding, is refused before anything is written, with an error
-//     wrapping ErrSecretInManifest that names the path and never the value;
-//   - SecretValues collects every value a Desired carries in SecretInputs,
-//     AppSecrets and Secrets.
+// CommitManifests commits on head what differs, retrying a moved tip, and refuses a secret before any write; Revert restores what a revision changed.
 
 import (
 	"context"
@@ -19,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -29,8 +19,10 @@ import (
 )
 
 const (
-	nsPath = "apps/app-alpha/namespace.yaml"
-	saPath = "apps/app-alpha/serviceaccount.yaml"
+	nsPath     = "apps/app-alpha/namespace.yaml"
+	saPath     = "apps/app-alpha/serviceaccount.yaml"
+	betaPath   = "apps/app-beta/namespace.yaml"
+	dbPassword = "s3cr3t-db-password-value"
 )
 
 func alphaFiles() map[string][]byte {
@@ -40,7 +32,12 @@ func alphaFiles() map[string][]byte {
 	}
 }
 
-// wantFilesAt checks every file stands at revision with exactly its content.
+func with(files map[string][]byte, path string, content []byte) map[string][]byte {
+	files[path] = content
+	return files
+}
+
+// wantFilesAt checks every file stands at revision with exactly its content, a nil content meaning absent.
 func wantFilesAt(t *testing.T, repo gitops.Repository, revision string, files map[string][]byte) {
 	t.Helper()
 	for path, want := range files {
@@ -56,195 +53,195 @@ func wantFilesAt(t *testing.T, repo gitops.Repository, revision string, files ma
 	}
 }
 
-func TestCommitManifests_CommitsTheFilesOnAnEmptyRepositoryAndReturnsTheNewHead(t *testing.T) {
+func TestCommitManifests(t *testing.T) {
 	ctx := context.Background()
-	repo := gitopstest.NewRepository()
+	foreign := map[string][]byte{betaPath: []byte("beta\n")}
+	cases := []struct {
+		name        string
+		seed        func(t *testing.T, repo *gitopstest.Repository) string
+		files       map[string][]byte
+		secrets     []string
+		wantChanged bool
+		wantErr     error
+		check       func(t *testing.T, repo *gitopstest.Repository, seeded, rev string, err error)
+	}{
+		{"on an empty repository it commits the files under the message and returns the new head", nil, alphaFiles(), nil, true, nil,
+			func(t *testing.T, repo *gitopstest.Repository, _, rev string, _ error) {
+				head, _ := repo.Head(ctx)
+				commits := repo.Commits()
+				if rev == "" || rev != head || len(commits) != 1 || commits[0].Parent != "" || commits[0].Message != "app-alpha" {
+					t.Errorf("revision %q, head %q, commits %+v; want one parentless commit with the message handed in at head", rev, head, commits)
+				}
+				wantFilesAt(t, repo, rev, alphaFiles())
+			}},
+		{"files already at head commit nothing and return head", func(t *testing.T, repo *gitopstest.Repository) string {
+			return mustCommit(t, repo, alphaFiles())
+		}, alphaFiles(), nil, false, nil,
+			func(t *testing.T, repo *gitopstest.Repository, seeded, rev string, _ error) {
+				if rev != seeded || len(repo.Commits()) != 1 {
+					t.Errorf("revision %q with %d commits, want head %q and no new commit", rev, len(repo.Commits()), seeded)
+				}
+			}},
+		{"one changed file commits on top of head and keeps every other path", func(t *testing.T, repo *gitopstest.Repository) string {
+			if _, err := repo.Commit(ctx, "", foreign, "app-beta"); err != nil {
+				t.Fatal(err)
+			}
+			return mustCommit(t, repo, alphaFiles())
+		}, with(alphaFiles(), saPath, []byte("kind: ServiceAccount\nlabels: {tier: web}\n")), nil, true, nil,
+			func(t *testing.T, repo *gitopstest.Repository, seeded, rev string, _ error) {
+				commits := repo.Commits()
+				if last := commits[len(commits)-1]; rev == seeded || last.Parent != seeded {
+					t.Errorf("revision %q on parent %q, want a new revision on head %q", rev, last.Parent, seeded)
+				}
+				wantFilesAt(t, repo, rev, with(alphaFiles(), saPath, []byte("kind: ServiceAccount\nlabels: {tier: web}\n")))
+				wantFilesAt(t, repo, rev, foreign)
+			}},
+		{"a tip another writer moves twice is re-read and the commit lands on its latest commit", func(t *testing.T, repo *gitopstest.Repository) string {
+			repo.MoveTip(2, foreign)
+			return ""
+		}, alphaFiles(), nil, true, nil,
+			func(t *testing.T, repo *gitopstest.Repository, _, rev string, _ error) {
+				commits := repo.Commits()
+				if len(commits) != 3 || commits[2].Revision != rev || commits[2].Parent != commits[1].Revision {
+					t.Fatalf("commits %+v, want two foreign commits, then ours %q on the second", commits, rev)
+				}
+				wantFilesAt(t, repo, rev, alphaFiles())
+				wantFilesAt(t, repo, rev, foreign)
+			}},
+		{"a tip that keeps moving ends in ErrStaleBase after a bounded number of tries", func(t *testing.T, repo *gitopstest.Repository) string {
+			repo.MoveTip(1000, foreign)
+			return ""
+		}, alphaFiles(), nil, false, gitops.ErrStaleBase,
+			func(t *testing.T, repo *gitopstest.Repository, _, _ string, _ error) {
+				// Each try lands one foreign commit and none of ours.
+				if tries := len(repo.Commits()); tries < 2 || tries >= 1000 {
+					t.Errorf("CommitManifests tried %d times, want a retry and a bound well below 1000", tries)
+				}
+				head, _ := repo.Head(ctx)
+				wantFilesAt(t, repo, head, map[string][]byte{nsPath: nil})
+			}},
+		{"a file holding a secret verbatim is refused before any write", nil,
+			with(alphaFiles(), "apps/app-alpha/configmap.yaml", []byte("kind: ConfigMap\ndata:\n  DATABASE_URL: postgres://app:"+dbPassword+"@db/app\n")),
+			[]string{"unrelated-value", dbPassword}, false, gitops.ErrSecretInManifest, refusedNaming("apps/app-alpha/configmap.yaml")},
+		{"a file holding a secret as its standard base64 is refused before any write", nil,
+			with(alphaFiles(), "apps/app-alpha/secret.yaml", []byte("kind: Secret\ndata:\n  password: "+base64.StdEncoding.EncodeToString([]byte(dbPassword))+"\n")),
+			[]string{dbPassword}, false, gitops.ErrSecretInManifest, refusedNaming("apps/app-alpha/secret.yaml")},
+		{"an empty secret value refuses nothing", nil, alphaFiles(), []string{"", "never-in-a-file"}, true, nil,
+			func(t *testing.T, repo *gitopstest.Repository, _, _ string, _ error) {
+				if got := len(repo.Commits()); got != 1 {
+					t.Errorf("Commits = %d, want 1", got)
+				}
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := gitopstest.NewRepository()
+			seeded := ""
+			if tc.seed != nil {
+				seeded = tc.seed(t, repo)
+			}
 
-	rev, changed, err := gitops.CommitManifests(ctx, repo, alphaFiles(), "app-alpha: namespace", nil)
-	if err != nil {
-		t.Fatalf("CommitManifests: %v", err)
-	}
-	if !changed {
-		t.Error("changed = false, want true: the repository held none of the files")
-	}
-	head, _ := repo.Head(ctx)
-	if rev == "" || rev != head {
-		t.Errorf("revision = %q, want the new head %q", rev, head)
-	}
-	commits := repo.Commits()
-	if len(commits) != 1 {
-		t.Fatalf("Commits = %d, want 1", len(commits))
-	}
-	if commits[0].Parent != "" || commits[0].Message != "app-alpha: namespace" {
-		t.Errorf("commit parent %q message %q, want parent \"\" and the message handed in", commits[0].Parent, commits[0].Message)
-	}
-	wantFilesAt(t, repo, rev, alphaFiles())
-}
+			rev, changed, err := gitops.CommitManifests(ctx, repo, tc.files, "app-alpha", tc.secrets)
 
-func TestCommitManifests_FilesAlreadyAtHeadCommitNothingAndReturnHeadUnchanged(t *testing.T) {
-	ctx := context.Background()
-	repo := gitopstest.NewRepository()
-	first, _, err := gitops.CommitManifests(ctx, repo, alphaFiles(), "app-alpha: namespace", nil)
-	if err != nil {
-		t.Fatalf("first CommitManifests: %v", err)
-	}
-
-	rev, changed, err := gitops.CommitManifests(ctx, repo, alphaFiles(), "app-alpha: namespace", nil)
-	if err != nil {
-		t.Fatalf("second CommitManifests: %v", err)
-	}
-	if changed {
-		t.Error("changed = true, want false: every file already stood at head with that content")
-	}
-	if rev != first {
-		t.Errorf("revision = %q, want head %q", rev, first)
-	}
-	if got := len(repo.Commits()); got != 1 {
-		t.Errorf("Commits = %d, want 1: an unchanged commit must land nothing", got)
-	}
-}
-
-func TestCommitManifests_OneChangedFileCommitsOnTopOfHeadAndKeepsOtherPaths(t *testing.T) {
-	ctx := context.Background()
-	repo := gitopstest.NewRepository()
-	if _, err := repo.Commit(ctx, "", map[string][]byte{"apps/app-beta/namespace.yaml": []byte("beta\n")}, "app-beta"); err != nil {
-		t.Fatalf("seeding app-beta: %v", err)
-	}
-	first, _, err := gitops.CommitManifests(ctx, repo, alphaFiles(), "app-alpha", nil)
-	if err != nil {
-		t.Fatalf("first CommitManifests: %v", err)
-	}
-
-	files := alphaFiles()
-	files[saPath] = []byte("apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: app-alpha-runtime\n  namespace: app-alpha\n  labels: {tier: web}\n")
-	rev, changed, err := gitops.CommitManifests(ctx, repo, files, "app-alpha: label", nil)
-	if err != nil {
-		t.Fatalf("second CommitManifests: %v", err)
-	}
-	if !changed || rev == first {
-		t.Fatalf("revision %q changed %v, want a new revision on top of %q", rev, changed, first)
-	}
-	commits := repo.Commits()
-	if last := commits[len(commits)-1]; last.Parent != first {
-		t.Errorf("the new commit's parent = %q, want head %q", last.Parent, first)
-	}
-	wantFilesAt(t, repo, rev, files)
-	wantFilesAt(t, repo, rev, map[string][]byte{"apps/app-beta/namespace.yaml": []byte("beta\n")})
-}
-
-func TestCommitManifests_AMovedTipIsReReadAndRetriedOnTopOfTheOtherWritersCommit(t *testing.T) {
-	ctx := context.Background()
-	repo := gitopstest.NewRepository()
-	foreign := map[string][]byte{"apps/app-beta/namespace.yaml": []byte("beta\n")}
-	repo.MoveTip(2, foreign)
-
-	rev, changed, err := gitops.CommitManifests(ctx, repo, alphaFiles(), "app-alpha", nil)
-	if err != nil {
-		t.Fatalf("CommitManifests after two moved tips: %v, want it to retry and land", err)
-	}
-	if !changed {
-		t.Error("changed = false, want true")
-	}
-	commits := repo.Commits()
-	if len(commits) != 3 {
-		t.Fatalf("Commits = %d, want 3: two foreign commits, then ours", len(commits))
-	}
-	ours := commits[2]
-	if ours.Revision != rev || ours.Parent != commits[1].Revision {
-		t.Errorf("our commit %q on parent %q, want %q on the second foreign commit %q", ours.Revision, ours.Parent, rev, commits[1].Revision)
-	}
-	wantFilesAt(t, repo, rev, alphaFiles())
-	wantFilesAt(t, repo, rev, foreign)
-}
-
-func TestCommitManifests_ATipThatKeepsMovingEndsInErrStaleBaseAfterABoundedNumberOfTries(t *testing.T) {
-	ctx := context.Background()
-	repo := gitopstest.NewRepository()
-	const forever = 1000
-	repo.MoveTip(forever, map[string][]byte{"apps/app-beta/namespace.yaml": []byte("beta\n")})
-
-	_, _, err := gitops.CommitManifests(ctx, repo, alphaFiles(), "app-alpha", nil)
-	if !errors.Is(err, gitops.ErrStaleBase) {
-		t.Fatalf("err = %v, want one wrapping gitops.ErrStaleBase", err)
-	}
-	tries := len(repo.Commits()) // each try lands one foreign commit and none of ours
-	if tries < 2 {
-		t.Errorf("CommitManifests tried %d time(s), want it to retry at least once", tries)
-	}
-	if tries >= forever {
-		t.Errorf("CommitManifests tried %d times, want a bound well below %d", tries, forever)
-	}
-	head, _ := repo.Head(ctx)
-	if _, ok, _ := repo.ReadFile(ctx, head, nsPath); ok {
-		t.Error("app-alpha's namespace landed although every commit was stale")
+			if changed != tc.wantChanged || !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
+				t.Fatalf("CommitManifests = %q, %v, %v; want changed %v and error %v", rev, changed, err, tc.wantChanged, tc.wantErr)
+			}
+			if err != nil {
+				for _, secret := range tc.secrets {
+					if secret != "" && (strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), base64.StdEncoding.EncodeToString([]byte(secret)))) {
+						t.Errorf("error %q carries a secret value, verbatim or base64", err)
+					}
+				}
+			}
+			tc.check(t, repo, seeded, rev, err)
+		})
 	}
 }
 
-// secretManifest is a Kubernetes Secret carrying value in its data map, the
-// standard base64 form, so a verbatim scan alone misses it.
-func secretManifest(value string) []byte {
-	return []byte("apiVersion: v1\nkind: Secret\nmetadata:\n  name: db\ndata:\n  password: " +
-		base64.StdEncoding.EncodeToString([]byte(value)) + "\n")
-}
-
-func TestCommitManifests_RefusesAFileHoldingASecretValueVerbatimBeforeAnyWrite(t *testing.T) {
-	ctx := context.Background()
-	repo := gitopstest.NewRepository()
-	const secret = "s3cr3t-db-password-value"
-	const leaky = "apps/app-alpha/configmap.yaml"
-	files := alphaFiles()
-	files[leaky] = []byte("apiVersion: v1\nkind: ConfigMap\ndata:\n  DATABASE_URL: postgres://app:" + secret + "@db/app\n")
-
-	_, _, err := gitops.CommitManifests(ctx, repo, files, "app-alpha", []string{"unrelated-value", secret})
-	wantSecretRefusal(t, err, leaky, secret)
-	if got := len(repo.Commits()); got != 0 {
-		t.Errorf("Commits = %d, want 0: a refused manifest set writes nothing, not even its clean files", got)
-	}
-}
-
-func TestCommitManifests_RefusesAFileHoldingASecretValueBase64EncodedBeforeAnyWrite(t *testing.T) {
-	ctx := context.Background()
-	repo := gitopstest.NewRepository()
-	const secret = "s3cr3t-db-password-value"
-	const leaky = "apps/app-alpha/secret.yaml"
-	files := alphaFiles()
-	files[leaky] = secretManifest(secret)
-
-	_, _, err := gitops.CommitManifests(ctx, repo, files, "app-alpha", []string{secret})
-	wantSecretRefusal(t, err, leaky, secret)
-	if got := len(repo.Commits()); got != 0 {
-		t.Errorf("Commits = %d, want 0", got)
-	}
-}
-
-// wantSecretRefusal checks err wraps ErrSecretInManifest, names path and
-// carries the secret neither verbatim nor base64-encoded.
-func wantSecretRefusal(t *testing.T, err error, path, secret string) {
+func mustCommit(t *testing.T, repo *gitopstest.Repository, files map[string][]byte) string {
 	t.Helper()
-	if !errors.Is(err, gitops.ErrSecretInManifest) {
-		t.Fatalf("err = %v, want one wrapping gitops.ErrSecretInManifest", err)
+	rev, _, err := gitops.CommitManifests(context.Background(), repo, files, "seed", nil)
+	if err != nil {
+		t.Fatalf("seeding CommitManifests: %v", err)
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, path) {
-		t.Errorf("error %q does not name the offending path %s", msg, path)
-	}
-	if strings.Contains(msg, secret) {
-		t.Error("the refusal's error text carries the secret value verbatim")
-	}
-	if strings.Contains(msg, base64.StdEncoding.EncodeToString([]byte(secret))) {
-		t.Error("the refusal's error text carries the secret value base64-encoded")
+	return rev
+}
+
+// refusedNaming checks a refused manifest set names its offending path and writes nothing, not even its clean files.
+func refusedNaming(path string) func(t *testing.T, repo *gitopstest.Repository, _, _ string, err error) {
+	return func(t *testing.T, repo *gitopstest.Repository, _, _ string, err error) {
+		t.Helper()
+		if got := len(repo.Commits()); got != 0 {
+			t.Errorf("Commits = %d, want 0", got)
+		}
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("refusal %q does not name the offending path %s", err, path)
+		}
 	}
 }
 
-func TestCommitManifests_AnEmptySecretValueRefusesNothing(t *testing.T) {
+func TestRevert(t *testing.T) {
 	ctx := context.Background()
-	repo := gitopstest.NewRepository()
-
-	if _, _, err := gitops.CommitManifests(ctx, repo, alphaFiles(), "app-alpha", []string{"", "never-in-a-file"}); err != nil {
-		t.Fatalf("CommitManifests with an empty secret value: %v, want the commit to land", err)
+	commit := func(t *testing.T, repo *gitopstest.Repository, parent string, changes map[string][]byte) string {
+		t.Helper()
+		rev, err := repo.Commit(ctx, parent, changes, "seed")
+		if err != nil {
+			t.Fatalf("seeding a commit: %v", err)
+		}
+		return rev
 	}
-	if got := len(repo.Commits()); got != 1 {
-		t.Errorf("Commits = %d, want 1", got)
+	cases := []struct {
+		name string
+		// history lands commits and returns the revision to revert.
+		history     func(t *testing.T, repo *gitopstest.Repository) string
+		wantFiles   map[string][]byte
+		wantCommits int
+		wantErr     bool
+	}{
+		{"each changed path is restored to its parent's content and an added one deleted", func(t *testing.T, repo *gitopstest.Repository) string {
+			base := commit(t, repo, "", map[string][]byte{"a.yaml": []byte("a1\n"), "b.yaml": []byte("b1\n")})
+			return commit(t, repo, base, map[string][]byte{"a.yaml": []byte("a2\n"), "b.yaml": nil, "c.yaml": []byte("c2\n")})
+		}, map[string][]byte{"a.yaml": []byte("a1\n"), "b.yaml": []byte("b1\n"), "c.yaml": nil}, 3, false},
+		{"the revert lands on the current head and leaves a later unrelated commit alone", func(t *testing.T, repo *gitopstest.Repository) string {
+			base := commit(t, repo, "", map[string][]byte{"apps/app-alpha/deploy.yaml": []byte("image: v1\n")})
+			bad := commit(t, repo, base, map[string][]byte{"apps/app-alpha/deploy.yaml": []byte("image: v2\n")})
+			commit(t, repo, bad, map[string][]byte{"apps/app-beta/deploy.yaml": []byte("image: b1\n")})
+			return bad
+		}, map[string][]byte{"apps/app-alpha/deploy.yaml": []byte("image: v1\n"), "apps/app-beta/deploy.yaml": []byte("image: b1\n")}, 4, false},
+		{"reverting the first commit deletes every path it added", func(t *testing.T, repo *gitopstest.Repository) string {
+			return commit(t, repo, "", map[string][]byte{"a.yaml": []byte("a\n"), "b.yaml": []byte("b\n")})
+		}, map[string][]byte{"a.yaml": nil, "b.yaml": nil}, 2, false},
+		{"a head already matching the parent commits nothing and returns head", func(t *testing.T, repo *gitopstest.Repository) string {
+			base := commit(t, repo, "", map[string][]byte{"a.yaml": []byte("a1\n")})
+			bad := commit(t, repo, base, map[string][]byte{"a.yaml": []byte("a2\n")})
+			commit(t, repo, bad, map[string][]byte{"a.yaml": []byte("a1\n")})
+			return bad
+		}, map[string][]byte{"a.yaml": []byte("a1\n")}, 3, false},
+		{"a revision the repository never held fails and commits nothing", func(t *testing.T, repo *gitopstest.Repository) string {
+			commit(t, repo, "", map[string][]byte{"a.yaml": []byte("a\n")})
+			return "no-such-revision"
+		}, nil, 1, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := gitopstest.NewRepository()
+			reverted := tc.history(t, repo)
+			headBefore, _ := repo.Head(ctx)
+
+			rev, err := gitops.Revert(ctx, repo, reverted, "revert")
+
+			commits := repo.Commits()
+			if (err != nil) != tc.wantErr || len(commits) != tc.wantCommits {
+				t.Fatalf("Revert(%s) = %q, %v with %d commits; want error %v and %d commits", reverted, rev, err, len(commits), tc.wantErr, tc.wantCommits)
+			}
+			if tc.wantErr {
+				return
+			}
+			if last := commits[len(commits)-1]; last.Revision != rev || (rev != headBefore && (last.Parent != headBefore || last.Message != "revert")) {
+				t.Errorf("revert %q is commit %+v; want it head, on %q with the message handed in, or head itself when nothing changed", rev, last, headBefore)
+			}
+			wantFilesAt(t, repo, rev, tc.wantFiles)
+		})
 	}
 }
 
@@ -260,10 +257,10 @@ func TestSecretValues_CollectsEveryValueInSecretInputsAppSecretsAndSecrets(t *te
 	}
 
 	got := gitops.SecretValues(d)
+
 	sort.Strings(got)
-	want := []string{"app-secret-1", "ghs_platformMintedToken", "hz-token", "secret-input-1", "ssh-key-material"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("SecretValues = %q, want %q (and never a param value)", got, want)
+	if want := []string{"app-secret-1", "ghs_platformMintedToken", "hz-token", "secret-input-1", "ssh-key-material"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("SecretValues = %q, want %q and never a param value", got, want)
 	}
 }
 
@@ -276,12 +273,7 @@ const (
 
 func sliceRequest() contract.Desired {
 	return contract.Desired{
-		Params: map[string]string{
-			"appName":     "s4168-c1",
-			"repoUrl":     "https://github.com/mitstack-eu/k4168c",
-			"quotaCpu":    "1",
-			"quotaMemory": "1Gi",
-		},
+		Params: map[string]string{"appName": "s4168-c1", "repoUrl": "https://github.com/mitstack-eu/k4168c", "quotaCpu": "1", "quotaMemory": "1Gi"},
 		Secrets: map[string]map[string]string{
 			"github":  {"token": sliceGithubToken, "owner": "mitstack-eu"},
 			"cluster": {"clusterCredential": sliceClusterCred},
@@ -289,67 +281,34 @@ func sliceRequest() contract.Desired {
 	}
 }
 
-func sliceProject(t *testing.T) map[string][]byte {
-	t.Helper()
-	body, err := os.ReadFile("testdata/slice-app-project/app-s4168-c1-app-project.json")
+func TestCommitManifests_TheSliceRequestsSecrets(t *testing.T) {
+	project, err := os.ReadFile("testdata/slice-app-project/app-s4168-c1-app-project.json")
 	if err != nil {
 		t.Fatalf("reading the rendered AppProject: %v", err)
 	}
-	return map[string][]byte{sliceProjectPath: body}
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	cases := []struct {
+		name  string
+		files map[string][]byte
+		want  error
+	}{
+		{"the rendered AppProject of a github org repo commits, since the owner is no credential", map[string][]byte{sliceProjectPath: project}, nil},
+		{"the github token verbatim is refused", map[string][]byte{"cluster/leak.json": []byte(`{"value":"` + sliceGithubToken + `"}`)}, gitops.ErrSecretInManifest},
+		{"the github token as standard base64 is refused", map[string][]byte{"cluster/leak.json": []byte(`{"value":"` + b64(sliceGithubToken) + `"}`)}, gitops.ErrSecretInManifest},
+		{"the cluster credential verbatim is refused", map[string][]byte{"cluster/leak.json": []byte(`{"value":"` + sliceClusterCred + `"}`)}, gitops.ErrSecretInManifest},
+		{"the cluster credential as standard base64 is refused", map[string][]byte{"cluster/leak.json": []byte(`{"value":"` + b64(sliceClusterCred) + `"}`)}, gitops.ErrSecretInManifest},
 	}
-	sort.Strings(keys)
-	return keys
-}
-
-func TestCommitManifests_CommitsTheRenderedAppProjectOfAGithubOrgRepoUnderTheSliceRequest(t *testing.T) {
-	d := sliceRequest()
-	files := sliceProject(t)
-
-	_, _, err := gitops.CommitManifests(context.Background(), gitopstest.NewRepository(), files, "app-s4168-c1: project", gitops.SecretValues(d))
-
-	if err == nil {
-		return
-	}
-	t.Errorf("CommitManifests refused the AppProject: %v (ErrSecretInManifest: %v)", err, errors.Is(err, gitops.ErrSecretInManifest))
-	probe := func(where, value string) {
-		_, _, single := gitops.CommitManifests(context.Background(), gitopstest.NewRepository(), files, "probe", []string{value})
-		if single != nil {
-			t.Errorf("refused by %s = %q (ErrSecretInManifest: %v)", where, value, errors.Is(single, gitops.ErrSecretInManifest))
-		}
-	}
-	for _, k := range sortedKeys(d.SecretInputs) {
-		probe("SecretInputs["+k+"]", d.SecretInputs[k])
-	}
-	for _, k := range sortedKeys(d.AppSecrets) {
-		probe("AppSecrets["+k+"]", d.AppSecrets[k])
-	}
-	for _, g := range sortedKeys(d.Secrets) {
-		for _, k := range sortedKeys(d.Secrets[g]) {
-			probe(`Secrets["`+g+`"]["`+k+`"]`, d.Secrets[g][k])
-		}
-	}
-}
-
-func TestCommitManifests_RefusesAGithubOrClusterCredentialInAManifestEvenWhenAnOwnerIsPresent(t *testing.T) {
-	for _, tc := range []struct{ name, value string }{
-		{"the github token verbatim", sliceGithubToken},
-		{"the github token as standard base64", base64.StdEncoding.EncodeToString([]byte(sliceGithubToken))},
-		{"the cluster credential verbatim", sliceClusterCred},
-		{"the cluster credential as standard base64", base64.StdEncoding.EncodeToString([]byte(sliceClusterCred))},
-	} {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			files := map[string][]byte{"cluster/leak.json": []byte(`{"value":"` + tc.value + `"}`)}
+			_, _, err := gitops.CommitManifests(context.Background(), gitopstest.NewRepository(), tc.files, "app-s4168-c1", gitops.SecretValues(sliceRequest()))
 
-			_, _, err := gitops.CommitManifests(context.Background(), gitopstest.NewRepository(), files, "leak", gitops.SecretValues(sliceRequest()))
-
-			if !errors.Is(err, gitops.ErrSecretInManifest) {
-				t.Errorf("CommitManifests carrying %s: err = %v, want ErrSecretInManifest", tc.name, err)
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Errorf("CommitManifests = %v, want %v", err, tc.want)
+			}
+			for _, v := range gitops.SecretValues(sliceRequest()) {
+				if _, _, single := gitops.CommitManifests(context.Background(), gitopstest.NewRepository(), tc.files, "probe", []string{v}); tc.want == nil && err != nil && single != nil {
+					t.Errorf("the secret value %q alone refuses the AppProject: %v", v, single)
+				}
 			}
 		})
 	}
@@ -361,20 +320,12 @@ func TestSecretValues_CollectsTheCredentialsAndNeverTheGithubOwner(t *testing.T)
 
 	got := gitops.SecretValues(d)
 
-	has := func(v string) bool {
-		for _, g := range got {
-			if g == v {
-				return true
-			}
-		}
-		return false
-	}
 	for _, want := range []string{sliceGithubToken, sliceClusterCred, slicePAT} {
-		if !has(want) {
+		if !slices.Contains(got, want) {
 			t.Errorf("SecretValues = %q, want it to contain the credential %q", got, want)
 		}
 	}
-	if has("mitstack-eu") {
-		t.Errorf("SecretValues contains the github owner %q, want it omitted", "mitstack-eu")
+	if slices.Contains(got, "mitstack-eu") {
+		t.Errorf("SecretValues = %q, want the github owner omitted", got)
 	}
 }

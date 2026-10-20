@@ -252,8 +252,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
 		{
 			name:      "a workflow with no jobs key",
 			workflow:  "name: ci\non: push\n",
-			job:       "j",
-			step:      "s",
 			wantInErr: "no top-level jobs",
 		},
 		{
@@ -266,8 +264,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
       - name: s
         run: echo two
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: `2 steps named "s"`,
 		},
 		{
@@ -278,8 +274,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
       - name: s
         uses: actions/checkout@v4
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: "has no run",
 		},
 		{
@@ -291,8 +285,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
         run: >
           echo folded
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: "folded",
 		},
 		{
@@ -304,8 +296,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
         run: |2
             echo indicated
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: "indentation indicator",
 		},
 		{
@@ -317,8 +307,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
         run: echo one
           echo two
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: "multi-line",
 		},
 		{
@@ -330,8 +318,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
         env: {A: b}
         run: echo flow
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: "flow",
 		},
 		{
@@ -342,15 +328,11 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
       - name: s
         run: *shared
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: "alias",
 		},
 		{
 			name:      "a key indented by a tab",
 			workflow:  "jobs:\n  j:\n    steps:\n      - name: s\n\trun: echo tab\n",
-			job:       "j",
-			step:      "s",
 			wantInErr: "tab",
 		},
 		{
@@ -363,8 +345,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
             echo deep
           echo shallow
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: "less indented",
 		},
 		{
@@ -377,8 +357,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
           A: ~
         run: echo null
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: "null",
 		},
 		{
@@ -389,8 +367,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
       - name: s
         run: null
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: "null",
 		},
 		{
@@ -402,8 +378,6 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
         run: echo first
         run: echo second
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: "given twice",
 		},
 		{
@@ -415,13 +389,15 @@ func TestReadWorkflowScript_RefusesWhatItCannotReadRatherThanGuess(t *testing.T)
         shell: python
         run: print("hi")
 `,
-			job:       "j",
-			step:      "s",
 			wantInErr: `shell "python"`,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.job == "" {
+				tc.job, tc.step = "j", "s"
+			}
+
 			got, err := kittest.ReadWorkflowScript([]byte(tc.workflow), tc.job, tc.step)
 
 			if err == nil {
@@ -447,8 +423,8 @@ func TestRunWorkflowScript_FailsASyntaxErrorThatASubstringAssertionPasses(t *tes
 	if err != nil {
 		t.Fatalf("ReadWorkflowScript(deploy, Deploy) error = %v; want nil", err)
 	}
-	if !strings.Contains(workflow, `echo "deploying to $TARGET"`) {
-		t.Fatalf("the substring assertion this test contrasts with must pass on the broken workflow")
+	if !strings.Contains(step.Run, `echo "deploying to $TARGET"`) {
+		t.Fatalf("Run = %q; the substring assertion this test contrasts with must pass on the broken body", step.Run)
 	}
 
 	res := kittest.RunWorkflowScript(t, step, kittest.ScriptRun{Env: map[string]string{"TARGET": "prod"}})

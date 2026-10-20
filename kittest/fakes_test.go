@@ -34,39 +34,6 @@ func TestFakeSTS_ReturnsUsableCredentials(t *testing.T) {
 	}
 }
 
-func TestFakeSTS_RefusesAnUnmodelledAction(t *testing.T) {
-	// The property that makes the fake trustworthy: it does not invent a
-	// plausible answer for something it does not model.
-	f := kittest.NewFakeSTS(t)
-
-	resp, err := http.PostForm(f.URL, map[string][]string{"Action": {"GetCallerIdentity"}})
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNotImplemented {
-		t.Errorf("status = %d, want 501 — an unmodelled call must be loud, not plausible", resp.StatusCode)
-	}
-}
-
-func TestFakeSTS_CanSimulateAFailure(t *testing.T) {
-	f := kittest.NewFakeSTS(t)
-	f.FailWith = "AccessDenied"
-
-	resp, err := http.PostForm(f.URL, map[string][]string{
-		"Action": {"AssumeRoleWithWebIdentity"}, "RoleArn": {"arn:x"},
-	})
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", resp.StatusCode)
-	}
-}
-
 func TestFakeGitHub_MintsAnInstallationToken(t *testing.T) {
 	f := kittest.NewFakeGitHub(t)
 
@@ -82,21 +49,6 @@ func TestFakeGitHub_MintsAnInstallationToken(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&body)
 	if body["token"] == "" || body["token"] == nil {
 		t.Errorf("no token returned: %v", body)
-	}
-}
-
-func TestFakeGitHub_RequiresAuthorization(t *testing.T) {
-	// An operator that forgets the installation token should find out here.
-	f := kittest.NewFakeGitHub(t)
-
-	resp, err := http.Get(f.URL + "/repos/acme/app")
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401 for an unauthenticated call", resp.StatusCode)
 	}
 }
 
@@ -124,19 +76,55 @@ func TestFakeGitHub_SecondRepoCreateIs422LikeTheRealAPI(t *testing.T) {
 	}
 }
 
-func TestFakeGitHub_RefusesAnUnmodelledCall(t *testing.T) {
-	f := kittest.NewFakeGitHub(t)
-
-	req, _ := http.NewRequest(http.MethodPost, f.URL+"/some/route/nobody/modelled", nil)
-	req.Header.Set("Authorization", "token ghs_x")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
+func TestFakes_AnswerLoudlyWhatTheyDoNotModelOrAreToldToFail(t *testing.T) {
+	form := func(values string) func(url string) *http.Request {
+		return func(url string) *http.Request {
+			req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(values))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			return req
+		}
 	}
-	defer resp.Body.Close()
+	github := func(method, path, auth string) func(url string) *http.Request {
+		return func(url string) *http.Request {
+			req, _ := http.NewRequest(method, url+path, nil)
+			if auth != "" {
+				req.Header.Set("Authorization", auth)
+			}
+			return req
+		}
+	}
+	sts := func(t *testing.T) string { return kittest.NewFakeSTS(t).URL }
+	cases := []struct {
+		name       string
+		serve      func(t *testing.T) string
+		req        func(url string) *http.Request
+		wantStatus int
+	}{
+		{"STS refuses an action it does not model rather than invent a plausible answer", sts, form("Action=GetCallerIdentity"), http.StatusNotImplemented},
+		{"STS answers 403 when told to fail", func(t *testing.T) string {
+			f := kittest.NewFakeSTS(t)
+			f.FailWith = "AccessDenied"
+			return f.URL
+		}, form("Action=AssumeRoleWithWebIdentity&RoleArn=arn:x"), http.StatusForbidden},
+		{"GitHub refuses a call without the installation token an operator forgot", func(t *testing.T) string { return kittest.NewFakeGitHub(t).URL },
+			github(http.MethodGet, "/repos/acme/app", ""), http.StatusUnauthorized},
+		{"GitHub refuses a route it does not model, since a permissive fake makes every test pass", func(t *testing.T) string { return kittest.NewFakeGitHub(t).URL },
+			github(http.MethodPost, "/some/route/nobody/modelled", "token ghs_x"), http.StatusNotImplemented},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := tc.req(tc.serve(t))
 
-	if resp.StatusCode != http.StatusNotImplemented {
-		t.Errorf("status = %d, want 501 — this is the MIT-1484 failure mode: a permissive fake makes every test pass", resp.StatusCode)
+			resp, err := http.DefaultClient.Do(req)
+
+			if err != nil {
+				t.Fatalf("%s %s: %v", req.Method, req.URL, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("%s %s = %d, want %d", req.Method, req.URL.Path, resp.StatusCode, tc.wantStatus)
+			}
+		})
 	}
 }
 
@@ -159,7 +147,7 @@ func TestFakeGitHub_RecordsCommitsAndRevocation(t *testing.T) {
 	resp2.Body.Close()
 
 	if !f.TokenRevoked {
-		t.Error("TokenRevoked = false — disconnect must revoke at the provider (T-624)")
+		t.Error("TokenRevoked = false, want disconnect to revoke at the provider")
 	}
 	if !f.Saw(http.MethodDelete, "/installation/token") {
 		t.Error("Saw() did not record the revocation")

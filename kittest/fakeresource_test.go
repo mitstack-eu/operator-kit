@@ -18,193 +18,98 @@ func testDesired() contract.Desired {
 	return contract.Desired{Identity: testIdentity()}
 }
 
-func TestFakeResource_ObserveReflectsCountByDefault(t *testing.T) {
-	f := &kittest.FakeResource{}
-	ctx := context.Background()
-
-	obs, err := f.Observe(ctx, testDesired())
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	if obs.State != contract.Absent {
-		t.Errorf("State = %v, want Absent when Count == 0", obs.State)
-	}
-
-	if err := f.Ensure(ctx, testDesired()); err != nil {
-		t.Fatalf("Ensure: %v", err)
-	}
-	obs, err = f.Observe(ctx, testDesired())
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	if obs.State != contract.Present {
-		t.Errorf("State = %v, want Present when Count > 0", obs.State)
-	}
-
-	if _, err := f.Delete(ctx, testDesired()); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	obs, err = f.Observe(ctx, testDesired())
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	if obs.State != contract.Absent {
-		t.Errorf("State = %v, want Absent after Delete converges Count back to 0", obs.State)
-	}
+// call is one verb on a FakeResource: op is ensure, observe or delete, state the observed state it must give when set, and err the error it must return.
+type call struct {
+	op    string
+	state contract.State
+	err   error
 }
 
-func TestFakeResource_ObserveStateOverridesCount(t *testing.T) {
+func TestFakeResource(t *testing.T) {
 	unknown := contract.Unknown
-	f := &kittest.FakeResource{Count: 1, ObserveState: &unknown}
+	ensureErr, observeErr, deleteErr := errors.New("ensure failed"), errors.New("observe failed"), errors.New("delete failed")
+	anyErr := errors.New("any error")
+	cases := []struct {
+		name  string
+		fake  *kittest.FakeResource
+		calls []call
+		// check sees the fake, every observation and the Count after each call.
+		check func(t *testing.T, f *kittest.FakeResource, obs []contract.Observation, counts []int)
+	}{
+		{"Observe reflects Count by default, absent until Ensure and again after Delete", &kittest.FakeResource{},
+			[]call{{"observe", contract.Absent, nil}, {"ensure", "", nil}, {"observe", contract.Present, nil}, {"delete", "", nil}, {"observe", contract.Absent, nil}}, nil},
+		{"ObserveState overrides Count", &kittest.FakeResource{Count: 1, ObserveState: &unknown}, []call{{"observe", contract.Unknown, nil}}, nil},
+		{"DeadReportedPending answers Unknown with no error even with ObserveErr set",
+			&kittest.FakeResource{DeadReportedPending: true, ObserveErr: errors.New("this would normally be a permanent failure")},
+			[]call{{"observe", contract.Unknown, nil}}, nil},
+		{"Observe reports the fake's outputs and status detail",
+			&kittest.FakeResource{Outputs: map[string]string{"url": "https://example.test"}, StatusDetail: "all good"}, []call{{"observe", "", nil}},
+			func(t *testing.T, _ *kittest.FakeResource, obs []contract.Observation, _ []int) {
+				if obs[0].Outputs["url"] != "https://example.test" || obs[0].StatusDetail != "all good" {
+					t.Errorf("Observe = %+v, want the fake's own url output and detail", obs[0])
+				}
+			}},
+		{"Ensure, Observe and Delete return their configured errors", &kittest.FakeResource{EnsureErr: ensureErr, ObserveErr: observeErr, DeleteErr: deleteErr},
+			[]call{{"ensure", "", ensureErr}, {"observe", "", observeErr}, {"delete", "", deleteErr}}, nil},
+		{"DuplicateOnEnsure adds a resource on every call", &kittest.FakeResource{DuplicateOnEnsure: true}, []call{{"ensure", "", nil}, {"ensure", "", nil}},
+			func(t *testing.T, _ *kittest.FakeResource, _ []contract.Observation, counts []int) {
+				if counts[1] <= counts[0] {
+					t.Errorf("Count after a retried Ensure = %d, want it grown past %d", counts[1], counts[0])
+				}
+			}},
+		{"LeakOnDelete leaves a resource behind", &kittest.FakeResource{LeakOnDelete: true}, []call{{"ensure", "", nil}, {"delete", "", nil}},
+			func(t *testing.T, f *kittest.FakeResource, _ []contract.Observation, _ []int) {
+				if f.Count == 0 {
+					t.Error("Count == 0 after Delete, want at least one resource left behind")
+				}
+			}},
+		{"ErrorWhenAlreadyAbsent fails a Delete of nothing provisioned", &kittest.FakeResource{ErrorWhenAlreadyAbsent: true}, []call{{"delete", "", anyErr}}, nil},
+		{"ClobberOnUpgrade drops prior outputs on a second Ensure only",
+			&kittest.FakeResource{Outputs: map[string]string{"url": "https://example.test"}, ClobberOnUpgrade: true},
+			[]call{{"ensure", "", nil}, {"observe", "", nil}, {"ensure", "", nil}, {"observe", "", nil}},
+			func(t *testing.T, _ *kittest.FakeResource, obs []contract.Observation, _ []int) {
+				if obs[0].Outputs["url"] == "" || obs[1].Outputs["url"] != "" {
+					t.Errorf("outputs after the first and second Ensure = %v, %v; want kept, then dropped by the destructive upgrade", obs[0].Outputs, obs[1].Outputs)
+				}
+			}},
+		{"the call counters record every call, an erroring one included", &kittest.FakeResource{EnsureErr: errors.New("boom")},
+			[]call{{"ensure", "", anyErr}, {"ensure", "", anyErr}, {"observe", "", nil}, {"observe", "", nil}, {"observe", "", nil}, {"delete", "", nil}},
+			func(t *testing.T, f *kittest.FakeResource, _ []contract.Observation, _ []int) {
+				if got := [3]int{f.EnsureCalls, f.ObserveCalls, f.DeleteCalls}; got != [3]int{2, 3, 1} {
+					t.Errorf("Ensure, Observe, Delete calls = %v, want [2 3 1]", got)
+				}
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			var obs []contract.Observation
+			var counts []int
 
-	obs, err := f.Observe(context.Background(), testDesired())
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	if obs.State != contract.Unknown {
-		t.Errorf("State = %v, want the overridden Unknown even though Count > 0", obs.State)
-	}
-}
+			for i, c := range tc.calls {
+				var err error
+				switch c.op {
+				case "ensure":
+					err = tc.fake.Ensure(ctx, testDesired())
+				case "observe":
+					var o contract.Observation
+					o, err = tc.fake.Observe(ctx, testDesired())
+					obs = append(obs, o)
+					if c.state != "" && o.State != c.state {
+						t.Errorf("call %d Observe state = %v, want %v", i+1, o.State, c.state)
+					}
+				case "delete":
+					_, err = tc.fake.Delete(ctx, testDesired())
+				}
+				counts = append(counts, tc.fake.Count)
+				if (c.err == anyErr && err == nil) || (c.err != anyErr && !errors.Is(err, c.err)) {
+					t.Errorf("call %d %s error = %v, want %v", i+1, c.op, err, c.err)
+				}
+			}
 
-// With DeadReportedPending set, Observe answers Unknown with no error even where ObserveErr is also set.
-func TestFakeResource_DeadReportedPendingReportsUnknownEvenWithObserveErrSet(t *testing.T) {
-	f := &kittest.FakeResource{
-		DeadReportedPending: true,
-		ObserveErr:          errors.New("this would normally be a permanent failure"),
-	}
-
-	obs, err := f.Observe(context.Background(), testDesired())
-	if err != nil {
-		t.Fatalf("Observe: %v, want no error even though ObserveErr is set (DeadReportedPending)", err)
-	}
-	if obs.State != contract.Unknown {
-		t.Errorf("State = %v, want Unknown", obs.State)
-	}
-}
-
-func TestFakeResource_ObserveReportsOutputsAndStatusDetail(t *testing.T) {
-	f := &kittest.FakeResource{
-		Outputs:      map[string]string{"url": "https://example.test"},
-		StatusDetail: "all good",
-	}
-
-	obs, err := f.Observe(context.Background(), testDesired())
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	if obs.Outputs["url"] != "https://example.test" {
-		t.Errorf("Outputs[url] = %q, want the fake's own output", obs.Outputs["url"])
-	}
-	if obs.StatusDetail != "all good" {
-		t.Errorf("StatusDetail = %q, want the fake's own detail", obs.StatusDetail)
-	}
-}
-
-func TestFakeResource_EnsureObserveDeleteReturnTheirConfiguredErrors(t *testing.T) {
-	ensureErr := errors.New("ensure failed")
-	observeErr := errors.New("observe failed")
-	deleteErr := errors.New("delete failed")
-	f := &kittest.FakeResource{EnsureErr: ensureErr, ObserveErr: observeErr, DeleteErr: deleteErr}
-	ctx := context.Background()
-
-	if err := f.Ensure(ctx, testDesired()); !errors.Is(err, ensureErr) {
-		t.Errorf("Ensure error = %v, want %v", err, ensureErr)
-	}
-	if _, err := f.Observe(ctx, testDesired()); !errors.Is(err, observeErr) {
-		t.Errorf("Observe error = %v, want %v", err, observeErr)
-	}
-	if _, err := f.Delete(ctx, testDesired()); !errors.Is(err, deleteErr) {
-		t.Errorf("Delete error = %v, want %v", err, deleteErr)
-	}
-}
-
-func TestFakeResource_DuplicateOnEnsureAddsAResourceEveryCall(t *testing.T) {
-	f := &kittest.FakeResource{DuplicateOnEnsure: true}
-	ctx := context.Background()
-
-	if err := f.Ensure(ctx, testDesired()); err != nil {
-		t.Fatalf("first Ensure: %v", err)
-	}
-	first := f.Count
-	if err := f.Ensure(ctx, testDesired()); err != nil {
-		t.Fatalf("second Ensure: %v", err)
-	}
-	if f.Count <= first {
-		t.Errorf("Count after a retried Ensure = %d, want it to have grown past %d (DuplicateOnEnsure)", f.Count, first)
-	}
-}
-
-func TestFakeResource_LeakOnDeleteLeavesOneResourceBehind(t *testing.T) {
-	f := &kittest.FakeResource{LeakOnDelete: true}
-	ctx := context.Background()
-
-	if err := f.Ensure(ctx, testDesired()); err != nil {
-		t.Fatalf("Ensure: %v", err)
-	}
-	if _, err := f.Delete(ctx, testDesired()); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	if f.Count == 0 {
-		t.Error("Count == 0 after Delete, want at least one resource left behind (LeakOnDelete)")
-	}
-}
-
-func TestFakeResource_ErrorWhenAlreadyAbsentFailsDeleteOnNothingProvisioned(t *testing.T) {
-	f := &kittest.FakeResource{ErrorWhenAlreadyAbsent: true}
-
-	if _, err := f.Delete(context.Background(), testDesired()); err == nil {
-		t.Error("Delete on a never-provisioned resource returned nil, want an error (ErrorWhenAlreadyAbsent)")
-	}
-}
-
-func TestFakeResource_ClobberOnUpgradeDropsPriorOutputsOnASecondEnsure(t *testing.T) {
-	f := &kittest.FakeResource{
-		Outputs:          map[string]string{"url": "https://example.test"},
-		ClobberOnUpgrade: true,
-	}
-	ctx := context.Background()
-
-	if err := f.Ensure(ctx, testDesired()); err != nil {
-		t.Fatalf("first Ensure: %v", err)
-	}
-	obs, err := f.Observe(ctx, testDesired())
-	if err != nil {
-		t.Fatalf("Observe after first Ensure: %v", err)
-	}
-	if obs.Outputs["url"] == "" {
-		t.Fatal("the first Ensure must not itself have dropped the seeded outputs")
-	}
-
-	if err := f.Ensure(ctx, testDesired()); err != nil {
-		t.Fatalf("second Ensure: %v", err)
-	}
-	obs, err = f.Observe(ctx, testDesired())
-	if err != nil {
-		t.Fatalf("Observe after second Ensure: %v", err)
-	}
-	if obs.Outputs["url"] != "" {
-		t.Error("outputs survived a second Ensure under ClobberOnUpgrade, want them dropped (a destructive upgrade)")
-	}
-}
-
-func TestFakeResource_CallCountersRecordEveryCall(t *testing.T) {
-	f := &kittest.FakeResource{EnsureErr: errors.New("boom")}
-	ctx := context.Background()
-
-	_ = f.Ensure(ctx, testDesired())
-	_ = f.Ensure(ctx, testDesired())
-	_, _ = f.Observe(ctx, testDesired())
-	_, _ = f.Observe(ctx, testDesired())
-	_, _ = f.Observe(ctx, testDesired())
-	_, _ = f.Delete(ctx, testDesired())
-
-	if f.EnsureCalls != 2 {
-		t.Errorf("EnsureCalls = %d, want 2 (counted even though each call errored)", f.EnsureCalls)
-	}
-	if f.ObserveCalls != 3 {
-		t.Errorf("ObserveCalls = %d, want 3", f.ObserveCalls)
-	}
-	if f.DeleteCalls != 1 {
-		t.Errorf("DeleteCalls = %d, want 1", f.DeleteCalls)
+			if tc.check != nil {
+				tc.check(t, tc.fake, obs, counts)
+			}
+		})
 	}
 }

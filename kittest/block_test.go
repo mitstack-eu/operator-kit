@@ -1,7 +1,6 @@
 package kittest_test
 
-// Each fakeBlock misbehaviour breaks one of ADR 0085's guards, and every
-// problem names its resource as resource "<name>".
+// Each fakeBlock misbehaviour breaks one of ADR 0085's guards, and every problem names its resource as resource "<name>".
 
 import (
 	"context"
@@ -346,35 +345,6 @@ func wantProblemNaming(t *testing.T, problems []string, wants ...string) {
 	t.Errorf("CheckBlock problems %q, want one naming each of %q", problems, wants)
 }
 
-func TestCheckBlock_PassesABlockThatHoldsEveryGuard(t *testing.T) {
-	_, in := hostBlock(t)
-	wantNoProblems(t, kittest.CheckBlock(in))
-}
-
-func TestCheckBlock_FailsAnObserveThatStillReportsAResourceTheProviderLost(t *testing.T) {
-	b, in := hostBlock(t)
-	in.Observers["aws.ec2-instance"] = rememberingObserver{b: b, name: "aws.ec2-instance"}
-	wantProblemNaming(t, kittest.CheckBlock(in), `resource "aws.ec2-instance"`, "provider")
-}
-
-func TestCheckBlock_FailsATaggedResourceTheManifestDoesNotDeclare(t *testing.T) {
-	b, in := hostBlock(t)
-	b.extraTagged = true
-	wantProblemNaming(t, kittest.CheckBlock(in), `resource "state-bucket"`, "aws.s3-bucket")
-}
-
-func TestCheckBlock_FailsADeclaredResourceLeftPresentAfterUnsubscribe(t *testing.T) {
-	b, in := hostBlock(t)
-	b.leaveOnDelete = "aws.ebs-volume"
-	wantProblemNaming(t, kittest.CheckBlock(in), `resource "aws.ebs-volume"`, "unsubscribe")
-}
-
-func TestCheckBlock_FailsAValidateThatHidesTheReplacementOfAStatefulResource(t *testing.T) {
-	b, in := hostBlock(t)
-	b.hideReplacement = true
-	wantProblemNaming(t, kittest.CheckBlock(in), `resource "aws.ebs-volume"`, "stateful")
-}
-
 func containerBlock(t *testing.T) (*fakeBlock, kittest.Block) {
 	t.Helper()
 	p := newFakeProvider()
@@ -393,11 +363,6 @@ func containerBlock(t *testing.T) (*fakeBlock, kittest.Block) {
 			},
 		},
 	}
-}
-
-func TestCheckBlock_RunsOncePerListedTypeAndPasses(t *testing.T) {
-	_, in := containerBlock(t)
-	wantNoProblems(t, kittest.CheckBlock(in))
 }
 
 func TestCheckBlock_NamesTheListedTypeWhoseRunFails(t *testing.T) {
@@ -434,31 +399,6 @@ func TestAssertBlock_FailsTheTestWithEveryProblem(t *testing.T) {
 			t.Errorf("AssertBlock reported %q, want it to carry the problem %q", tb.logs, p)
 		}
 	}
-}
-
-func TestCheckBlock_FailsADeclaredResourceWithNoIdentityAfterSubscribe(t *testing.T) {
-	b, in := hostBlock(t)
-	in.Handler = silentBlock{b: b}
-	in.Observers = map[string]handler.Observer{
-		"aws.ec2-instance": byTypeObserver{p: b.p},
-		"aws.ebs-volume":   byTypeObserver{p: b.p},
-	}
-	in.Upgrade = nil
-	problems := kittest.CheckBlock(in)
-	wantProblemNaming(t, problems, `resource "aws.ec2-instance"`, "identity")
-	wantProblemNaming(t, problems, `resource "aws.ebs-volume"`, "identity")
-}
-
-func TestCheckBlock_FailsAStatefulResourceWithNoUpgradeToProveItsReplacement(t *testing.T) {
-	_, in := hostBlock(t)
-	in.Upgrade = nil
-	wantProblemNaming(t, kittest.CheckBlock(in), `resource "aws.ebs-volume"`, "Upgrade")
-}
-
-func TestCheckBlock_FailsAProvidedResourceMissingARequiredOutput(t *testing.T) {
-	b, in := hostBlock(t)
-	in.Observers["aws.ec2-instance"] = providerObserver{p: b.p, drop: "hostId"}
-	wantProblemNaming(t, kittest.CheckBlock(in), `resource "aws.ec2-instance"`, "hostId")
 }
 
 const contributionBlockManifest = `apiVersion: mitstack/v1beta
@@ -512,35 +452,6 @@ func contributionBlock(t *testing.T) (*fakeBlock, kittest.Block) {
 	}
 }
 
-func TestCheckBlock_PassesAResourceOfAMarkedTypeLeftPresentAfterUnsubscribe(t *testing.T) {
-	_, in := contributionBlock(t)
-
-	problems := kittest.CheckBlock(in)
-
-	wantNoProblems(t, problems)
-}
-
-func TestCheckBlock_FailsAResourceOfAnUnmarkedTypeLeftPresentAfterUnsubscribe(t *testing.T) {
-	cases := []struct {
-		label, leave string
-		marked       []string
-	}{
-		{"an unmarked resource beside a marked one", "aws.ec2-instance", []string{"github.scaffold-contribution"}},
-		{"a contribution whose snapshot leaves its type unmarked", "github.scaffold-contribution", nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			b, in := contributionBlock(t)
-			b.leaveOnDelete = tc.leave
-			in.Types = markedSnapshot(t, tc.marked...)
-
-			problems := kittest.CheckBlock(in)
-
-			wantProblemNaming(t, problems, `resource "`+tc.leave+`"`, "unsubscribe")
-		})
-	}
-}
-
 func TestAssertBlock_PassesAMarkedResourceLeftPresentAndFailsAnUnmarkedOne(t *testing.T) {
 	_, marked := contributionBlock(t)
 	b, unmarked := contributionBlock(t)
@@ -555,12 +466,6 @@ func TestAssertBlock_PassesAMarkedResourceLeftPresentAndFailsAnUnmarkedOne(t *te
 	if !failing.failed {
 		t.Errorf("AssertBlock passed a block that leaves unmarked aws.ec2-instance present: %q", failing.logs)
 	}
-}
-
-func TestCheckBlock_PassesAProvidedResourceMissingOnlyAnOptionalOutput(t *testing.T) {
-	b, in := hostBlock(t)
-	in.Observers["aws.ec2-instance"] = providerObserver{p: b.p, drop: "publicIp"}
-	wantNoProblems(t, kittest.CheckBlock(in))
 }
 
 // partlessSnapshot is the platform's snapshot with every type's parts removed.
@@ -583,67 +488,6 @@ func hostParts() []observe.Tagged {
 		{Type: "aws.elastic-ip", ID: "eipalloc-0host"},
 		{Type: "aws.iam-role", ID: "mitstack-app-myapp-dlm"},
 		{Type: "aws.dlm-lifecycle-policy", ID: "policy-0data"},
-	}
-}
-
-func TestCheckBlock_PassesATaggedPartOfATypeTheRecordedResourcesTypeLists(t *testing.T) {
-	b, in := hostBlock(t)
-	b.parts = hostParts()
-
-	problems := kittest.CheckBlock(in)
-
-	wantNoProblems(t, problems)
-}
-
-func TestCheckBlock_PassesATaggedInstanceProfileTheRecordedInstancesTypeListsAsAPart(t *testing.T) {
-	b, in := hostBlock(t)
-	b.parts = []observe.Tagged{{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile"}}
-
-	problems := kittest.CheckBlock(in)
-
-	wantNoProblems(t, problems)
-}
-
-func TestCheckBlock_FailsASecondTaggedInstanceProfileBeyondTheInstancesPartRoom(t *testing.T) {
-	b, in := hostBlock(t)
-	b.parts = []observe.Tagged{
-		{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile"},
-		{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile-stray"},
-	}
-
-	problems := kittest.CheckBlock(in)
-
-	wantProblemNaming(t, problems, `resource "mitstack-app-myapp-profile-stray"`, "aws.iam-instance-profile")
-	if len(problems) != 1 {
-		t.Errorf("CheckBlock problems = %q; want exactly the instance profile beyond the one the instance's type lists", problems)
-	}
-}
-
-func TestCheckBlock_FailsEveryTaggedPartWhenTheSnapshotListsNoParts(t *testing.T) {
-	b, in := hostBlock(t)
-	b.parts = hostParts()
-	in.Types = partlessSnapshot(t)
-
-	problems := kittest.CheckBlock(in)
-
-	for _, part := range hostParts() {
-		wantProblemNaming(t, problems, `resource "`+part.ID+`"`, part.Type)
-	}
-}
-
-func TestCheckBlock_FailsATaggedObjectBeyondTheRoomItsDeclaredResourcesAndTheirPartsGive(t *testing.T) {
-	b, in := hostBlock(t)
-	b.parts = append(hostParts(),
-		observe.Tagged{Type: "aws.vpc", ID: "vpc-0stray"},
-		observe.Tagged{Type: "aws.iam-role", ID: "mitstack-app-myapp-stray"},
-	)
-
-	problems := kittest.CheckBlock(in)
-
-	wantProblemNaming(t, problems, `resource "vpc-0stray"`, "aws.vpc")
-	wantProblemNaming(t, problems, `resource "mitstack-app-myapp-stray"`, "aws.iam-role")
-	if len(problems) != 2 {
-		t.Errorf("CheckBlock problems = %q; want exactly the stray VPC and the role beyond the parts' room", problems)
 	}
 }
 
@@ -731,14 +575,6 @@ func cfnBlock(t *testing.T) kittest.Block {
 	}
 }
 
-func TestCheckBlock_PassesTheCfnBlockWhoseDeployAndPushRolesAreParts(t *testing.T) {
-	in := cfnBlock(t)
-
-	problems := kittest.CheckBlock(in)
-
-	wantNoProblems(t, problems)
-}
-
 const repoHostBlockManifest = `apiVersion: mitstack/v1beta
 type: block
 metadata:
@@ -807,24 +643,6 @@ func TestCheckBlock_HandsTheAdaptedListerTheGuardsDesiredWithItsRepositoryBindin
 	}
 }
 
-func TestCheckBlock_ThroughTheAdaptedListerFailsATaggedResourceTheManifestDoesNotDeclare(t *testing.T) {
-	b, in, _ := listedHostBlock(t)
-	b.extraTagged = true
-
-	problems := kittest.CheckBlock(in)
-
-	wantProblemNaming(t, problems, `resource "state-bucket"`, "aws.s3-bucket")
-}
-
-func TestCheckBlock_ThroughTheAdaptedListerLosesEachResourceThroughTheLoser(t *testing.T) {
-	b, in, _ := listedHostBlock(t)
-	in.Observers["aws.ec2-instance"] = rememberingObserver{b: b, name: "aws.ec2-instance"}
-
-	problems := kittest.CheckBlock(in)
-
-	wantProblemNaming(t, problems, `resource "aws.ec2-instance"`, "provider")
-}
-
 func TestListerProvider_RefusesAListingWithoutTheGuardsDesired(t *testing.T) {
 	p := newFakeProvider()
 	var seen []contract.Desired
@@ -837,5 +655,103 @@ func TestListerProvider_RefusesAListingWithoutTheGuardsDesired(t *testing.T) {
 	}
 	if len(seen) != 0 {
 		t.Errorf("ListerProvider.ListTagged called its lister with %+v; want no call without the guard's Desired", seen)
+	}
+}
+
+func TestCheckBlock(t *testing.T) {
+	type mutation func(b *fakeBlock, in *kittest.Block)
+	host := func(m mutation) func(t *testing.T) kittest.Block {
+		return func(t *testing.T) kittest.Block {
+			b, in := hostBlock(t)
+			if m != nil {
+				m(b, &in)
+			}
+			return in
+		}
+	}
+	contribution := func(leave string, marked ...string) func(t *testing.T) kittest.Block {
+		return func(t *testing.T) kittest.Block {
+			b, in := contributionBlock(t)
+			if leave != "" {
+				b.leaveOnDelete, in.Types = leave, markedSnapshot(t, marked...)
+			}
+			return in
+		}
+	}
+	listed := func(m mutation) func(t *testing.T) kittest.Block {
+		return func(t *testing.T) kittest.Block {
+			b, in, _ := listedHostBlock(t)
+			m(b, &in)
+			return in
+		}
+	}
+	remembering := func(b *fakeBlock, in *kittest.Block) {
+		in.Observers["aws.ec2-instance"] = rememberingObserver{b: b, name: "aws.ec2-instance"}
+	}
+	withParts := func(parts ...observe.Tagged) mutation {
+		return func(b *fakeBlock, _ *kittest.Block) { b.parts = parts }
+	}
+	var noPartNamings [][]string
+	for _, part := range hostParts() {
+		noPartNamings = append(noPartNamings, []string{`resource "` + part.ID + `"`, part.Type})
+	}
+	cases := []struct {
+		name  string
+		block func(t *testing.T) kittest.Block
+		// want lists, per expected problem, what it must name; none means the block conforms.
+		want  [][]string
+		exact bool
+	}{
+		{"a block that holds every guard passes", host(nil), nil, true},
+		{"an observe still reporting a resource the provider lost fails", host(remembering), [][]string{{`resource "aws.ec2-instance"`, "provider"}}, false},
+		{"a tagged resource the manifest does not declare fails", host(func(b *fakeBlock, _ *kittest.Block) { b.extraTagged = true }), [][]string{{`resource "state-bucket"`, "aws.s3-bucket"}}, false},
+		{"a declared resource left present after unsubscribe fails", host(func(b *fakeBlock, _ *kittest.Block) { b.leaveOnDelete = "aws.ebs-volume" }), [][]string{{`resource "aws.ebs-volume"`, "unsubscribe"}}, false},
+		{"a validate hiding the replacement of a stateful resource fails", host(func(b *fakeBlock, _ *kittest.Block) { b.hideReplacement = true }), [][]string{{`resource "aws.ebs-volume"`, "stateful"}}, false},
+		{"a block run once per listed requirement type passes", func(t *testing.T) kittest.Block { _, in := containerBlock(t); return in }, nil, true},
+		{"declared resources with no identity after subscribe fail", host(func(b *fakeBlock, in *kittest.Block) {
+			in.Handler = silentBlock{b: b}
+			in.Observers = map[string]handler.Observer{"aws.ec2-instance": byTypeObserver{p: b.p}, "aws.ebs-volume": byTypeObserver{p: b.p}}
+			in.Upgrade = nil
+		}), [][]string{{`resource "aws.ec2-instance"`, "identity"}, {`resource "aws.ebs-volume"`, "identity"}}, false},
+		{"a stateful resource with no Upgrade to prove its replacement fails", host(func(_ *fakeBlock, in *kittest.Block) { in.Upgrade = nil }), [][]string{{`resource "aws.ebs-volume"`, "Upgrade"}}, false},
+		{"a provided resource missing a required output fails", host(func(b *fakeBlock, in *kittest.Block) {
+			in.Observers["aws.ec2-instance"] = providerObserver{p: b.p, drop: "hostId"}
+		}), [][]string{{`resource "aws.ec2-instance"`, "hostId"}}, false},
+		{"a provided resource missing only an optional output passes", host(func(b *fakeBlock, in *kittest.Block) {
+			in.Observers["aws.ec2-instance"] = providerObserver{p: b.p, drop: "publicIp"}
+		}), nil, true},
+		{"a resource of a marked type left present after unsubscribe passes", contribution(""), nil, true},
+		{"an unmarked resource left present beside a marked one fails", contribution("aws.ec2-instance", "github.scaffold-contribution"), [][]string{{`resource "aws.ec2-instance"`, "unsubscribe"}}, false},
+		{"a contribution whose snapshot leaves its type unmarked fails", contribution("github.scaffold-contribution"), [][]string{{`resource "github.scaffold-contribution"`, "unsubscribe"}}, false},
+		{"tagged parts of types the recorded resources' types list pass", host(withParts(hostParts()...)), nil, true},
+		{"a tagged instance profile the recorded instance's type lists as a part passes", host(withParts(observe.Tagged{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile"})), nil, true},
+		{"a second tagged instance profile beyond the instance's part room fails alone", host(withParts(
+			observe.Tagged{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile"},
+			observe.Tagged{Type: "aws.iam-instance-profile", ID: "mitstack-app-myapp-profile-stray"},
+		)), [][]string{{`resource "mitstack-app-myapp-profile-stray"`, "aws.iam-instance-profile"}}, true},
+		{"every tagged part fails when the snapshot lists no parts", host(func(b *fakeBlock, in *kittest.Block) {
+			b.parts, in.Types = hostParts(), partlessSnapshot(t)
+		}), noPartNamings, false},
+		{"tagged objects beyond the room the declared resources and their parts give fail alone", host(withParts(append(hostParts(),
+			observe.Tagged{Type: "aws.vpc", ID: "vpc-0stray"}, observe.Tagged{Type: "aws.iam-role", ID: "mitstack-app-myapp-stray"})...)),
+			[][]string{{`resource "vpc-0stray"`, "aws.vpc"}, {`resource "mitstack-app-myapp-stray"`, "aws.iam-role"}}, true},
+		{"the cfn block, whose deploy and push roles are parts, passes", cfnBlock, nil, true},
+		{"through the adapted lister, a tagged resource the manifest does not declare fails", listed(func(b *fakeBlock, _ *kittest.Block) { b.extraTagged = true }),
+			[][]string{{`resource "state-bucket"`, "aws.s3-bucket"}}, false},
+		{"through the adapted lister, each resource is lost through the loser", listed(remembering), [][]string{{`resource "aws.ec2-instance"`, "provider"}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := tc.block(t)
+
+			problems := kittest.CheckBlock(in)
+
+			for _, wants := range tc.want {
+				wantProblemNaming(t, problems, wants...)
+			}
+			if tc.exact && len(problems) != len(tc.want) {
+				t.Errorf("CheckBlock problems = %q; want exactly %d", problems, len(tc.want))
+			}
+		})
 	}
 }

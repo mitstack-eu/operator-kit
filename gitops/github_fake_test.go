@@ -1,10 +1,6 @@
 package gitops_test
 
-// github_fake_test.go is an in-memory GitHub serving one repository through
-// just enough of the REST API for GitHubRepository: the main ref, the Git
-// Data commits, trees and refs, the contents API and the commits API. It
-// keeps real trees, so a tree that equals its base answers the same sha, and
-// it refuses a ref update that is not a fast forward the way GitHub does.
+// fakeGitHub serves one repository through just enough of GitHub's REST API for GitHubRepository, keeping real trees and refusing a ref update that is no fast forward.
 
 import (
 	"crypto/sha1"
@@ -35,14 +31,10 @@ type fakeGitHub struct {
 	trees   map[string]map[string]string
 	seq     int
 
-	// fastForwardRefusals counts the ref updates refused as not a fast forward.
 	fastForwardRefusals int
-	// beforeRefUpdate, when set, runs once with the lock held just before
-	// the first ref update is judged, so a test can land another writer's
-	// commit in between.
+	// beforeRefUpdate runs once, lock held, just before the first ref update is judged, so a test can land another writer's commit in between.
 	beforeRefUpdate func(f *fakeGitHub)
-	// failStatus, when set, answers every request with that status and a
-	// body echoing the Authorization header.
+	// failStatus answers every request with that status and a body echoing the Authorization header.
 	failStatus int
 }
 

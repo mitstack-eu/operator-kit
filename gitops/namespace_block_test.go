@@ -152,23 +152,75 @@ func expect(t *testing.T, want int) func(int, []byte) contract.Response {
 	}
 }
 
-func TestNamespaceBlock_ASubscribeCommitsTheAppsManifestsOnceAndAnswersTheObservedNamespace(t *testing.T) {
-	b := newNamespaceBlock()
-	h, s := serveNamespace(t, b, nil)
+func TestNamespaceBlock(t *testing.T) {
+	cases := []struct {
+		name string
+		// before is posted first and must answer 200.
+		before      map[string]any
+		fields      map[string]any
+		failSync    bool
+		wantStatus  int
+		wantCommits int
+		check       func(t *testing.T, b *gitopsBlock, resp contract.Response)
+	}{
+		{"a subscribe commits the app's manifests once through Deploy and answers the observed namespace", nil, requestFields("subscribe", "app-alpha"), false, 200, 1,
+			func(t *testing.T, b *gitopsBlock, resp contract.Response) {
+				if o := resp.Resources[resourceName].Observe; resp.Pending || !reflect.DeepEqual(resp.Outputs, alphaOutputs()) || o == nil || o.State != contract.Present {
+					t.Errorf("subscribe answered pending %v outputs %v observe %+v, want settled present with %v", resp.Pending, resp.Outputs, o, alphaOutputs())
+				}
+				wantFilesAt(t, b.repo, b.repo.Commits()[0].Revision, renderApp("app-alpha", clusterParam).Files)
+			}},
+		{"an unsubscribe commits the removal and settles absent", requestFields("subscribe", "app-alpha"), requestFields("unsubscribe", "app-alpha"), false, 200, 2,
+			func(t *testing.T, b *gitopsBlock, resp contract.Response) {
+				if o := resp.Resources[resourceName].Observe; resp.Absent == nil || !*resp.Absent || o == nil || o.State != contract.Absent {
+					t.Errorf("unsubscribe answered absent %v observe %+v detail %q, want absent", resp.Absent, o, resp.StatusDetail)
+				}
+				wantFilesAt(t, b.repo, b.head(t), map[string][]byte{alphaNamespacePath: nil, alphaServiceAccountPath: nil})
+			}},
+		{"a named validate is observed with the recorded identity and type and never commits", requestFields("subscribe", "app-alpha"), namedFields("validate", "app-alpha"), false, 200, 1,
+			func(t *testing.T, b *gitopsBlock, resp contract.Response) {
+				o := resp.Resources[resourceName].Observe
+				if o == nil || o.State != contract.Present || o.Type != resourceType || !reflect.DeepEqual(o.Identity, map[string]string{"app": "app-alpha"}) {
+					t.Errorf("%s observe = %+v, want present of type %q with the recorded {app: app-alpha}", resourceName, o, resourceType)
+				}
+			}},
+		{"a named subscribe is refused naming the resource", nil, namedFields("subscribe", "app-alpha"), false, 400, 0, wantErrorNaming(resourceName)},
+		{"a named unsubscribe is refused naming the resource", nil, namedFields("unsubscribe", "app-alpha"), false, 400, 0, wantErrorNaming(resourceName)},
+		{"a failed Argo CD sync is refused as deploy-failed carrying its message", nil, requestFields("subscribe", "app-alpha"), true, 400, 1,
+			func(t *testing.T, _ *gitopsBlock, resp contract.Response) {
+				if got := handler.RefusedClass(resp.StatusDetail); got != "deploy-failed" || !strings.Contains(resp.StatusDetail, "failed to apply") {
+					t.Errorf("statusDetail = %q, want the deploy-failed refusal carrying Argo CD's message", resp.StatusDetail)
+				}
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newNamespaceBlock()
+			if tc.failSync {
+				b.resource.Notifications = func(context.Context, contract.Desired) (gitops.Notifications, error) { return failingNotes{}, nil }
+			}
+			h, s := serveNamespace(t, b, nil)
+			if tc.before != nil {
+				expect(t, http.StatusOK)(post(t, h, s, tc.before))
+			}
 
-	resp := expect(t, http.StatusOK)(post(t, h, s, requestFields("subscribe", "app-alpha")))
+			resp := expect(t, tc.wantStatus)(post(t, h, s, tc.fields))
 
-	if resp.Pending || !reflect.DeepEqual(resp.Outputs, alphaOutputs()) {
-		t.Errorf("subscribe answered pending %v outputs %v, want settled with %v", resp.Pending, resp.Outputs, alphaOutputs())
+			if got := len(b.repo.Commits()); got != tc.wantCommits {
+				t.Errorf("Commits = %d, want %d", got, tc.wantCommits)
+			}
+			tc.check(t, b, resp)
+		})
 	}
-	if o := resp.Resources[resourceName].Observe; o == nil || o.State != contract.Present {
-		t.Errorf("%s observe = %+v, want present", resourceName, o)
+}
+
+func wantErrorNaming(name string) func(t *testing.T, _ *gitopsBlock, resp contract.Response) {
+	return func(t *testing.T, _ *gitopsBlock, resp contract.Response) {
+		t.Helper()
+		if !strings.Contains(resp.Error, `"`+name+`"`) {
+			t.Errorf("error = %q, want it to name %q", resp.Error, name)
+		}
 	}
-	commits := b.repo.Commits()
-	if len(commits) != 1 {
-		t.Fatalf("Commits = %d, want 1", len(commits))
-	}
-	wantFilesAt(t, b.repo, commits[0].Revision, renderApp("app-alpha", clusterParam).Files)
 }
 
 func TestNamespaceBlock_ASubscribeSentTwiceUnderOneKeyCommitsOnceAndAnswersIdentically(t *testing.T) {
@@ -181,67 +233,8 @@ func TestNamespaceBlock_ASubscribeSentTwiceUnderOneKeyCommitsOnceAndAnswersIdent
 	secondStatus, second := post(t, h, s, fields)
 
 	expect(t, http.StatusOK)(firstStatus, first)
-	if secondStatus != firstStatus || string(second) != string(first) {
-		t.Errorf("the second delivery answered %d %s, want the first's %d %s", secondStatus, second, firstStatus, first)
-	}
-	if got := len(b.repo.Commits()); got != 1 {
-		t.Errorf("Commits = %d, want exactly 1", got)
-	}
-}
-
-func TestNamespaceBlock_AnUnsubscribeCommitsTheRemovalAndSettlesAbsent(t *testing.T) {
-	b := newNamespaceBlock()
-	h, s := serveNamespace(t, b, nil)
-	expect(t, http.StatusOK)(post(t, h, s, requestFields("subscribe", "app-alpha")))
-
-	resp := expect(t, http.StatusOK)(post(t, h, s, requestFields("unsubscribe", "app-alpha")))
-
-	if resp.Absent == nil || !*resp.Absent {
-		t.Fatalf("unsubscribe answered absent %v, want true; detail %q", resp.Absent, resp.StatusDetail)
-	}
-	if o := resp.Resources[resourceName].Observe; o == nil || o.State != contract.Absent {
-		t.Errorf("%s observe = %+v, want absent", resourceName, o)
-	}
-	if got := len(b.repo.Commits()); got != 2 {
-		t.Errorf("Commits = %d, want 2: the manifests and their removal", got)
-	}
-	wantFilesAt(t, b.repo, b.head(t), map[string][]byte{alphaNamespacePath: nil, alphaServiceAccountPath: nil})
-}
-
-func TestNamespaceBlock_ANamedValidateIsObservedWithTheRecordedIdentityAndType(t *testing.T) {
-	b := newNamespaceBlock()
-	h, s := serveNamespace(t, b, nil)
-	expect(t, http.StatusOK)(post(t, h, s, requestFields("subscribe", "app-alpha")))
-
-	resp := expect(t, http.StatusOK)(post(t, h, s, namedFields("validate", "app-alpha")))
-
-	o := resp.Resources[resourceName].Observe
-	if o == nil || o.State != contract.Present {
-		t.Fatalf("%s observe = %+v, want present", resourceName, o)
-	}
-	if o.Type != resourceType || !reflect.DeepEqual(o.Identity, map[string]string{"app": "app-alpha"}) {
-		t.Errorf("%s observe type, identity = %q, %v; want %q, the recorded {app: app-alpha}", resourceName, o.Type, o.Identity, resourceType)
-	}
-	if got := len(b.repo.Commits()); got != 1 {
-		t.Errorf("Commits = %d, want 1: a validate never commits", got)
-	}
-}
-
-func TestNamespaceBlock_ANamedSubscribeOrUnsubscribeIsRefusedNamingTheResourceAndCommitsNothing(t *testing.T) {
-	for _, operation := range []string{"subscribe", "unsubscribe"} {
-		t.Run(operation, func(t *testing.T) {
-			b := newNamespaceBlock()
-			h, s := serveNamespace(t, b, nil)
-
-			resp := expect(t, http.StatusBadRequest)(post(t, h, s, namedFields(operation, "app-alpha")))
-
-			if !strings.Contains(resp.Error, `"`+resourceName+`"`) {
-				t.Errorf("error = %q, want it to name %q", resp.Error, resourceName)
-			}
-			if got := len(b.repo.Commits()); got != 0 {
-				t.Errorf("Commits = %d, want 0", got)
-			}
-		})
+	if secondStatus != firstStatus || string(second) != string(first) || len(b.repo.Commits()) != 1 {
+		t.Errorf("the second delivery answered %d %s after %d commits, want the first's %d %s and exactly 1 commit", secondStatus, second, len(b.repo.Commits()), firstStatus, first)
 	}
 }
 

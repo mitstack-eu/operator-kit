@@ -1,20 +1,6 @@
 package gitopstest_test
 
-// gitopstest_test.go pins the behaviour a block author relies on from the
-// two exported fakes:
-//
-//   - Repository is an in-memory gitops.Repository: an empty repository has
-//     head "", a commit lands only on the current tip, a nil change deletes
-//     its path, Changed reports a commit's parent and sorted paths, every
-//     landed commit is recorded in order, and MoveTip makes the next commits
-//     find another writer's commit landed first;
-//   - Notifications is a gitops.Notifications that answers what a test
-//     seeded, can answer a sequence, can answer Succeeded and Healthy for
-//     every revision a Repository holds for one app, can fail every read,
-//     and counts its reads. Asked for revision "", it answers the app's
-//     newest notification: the one most recently Set for the app, and
-//     otherwise, under SucceedCommits, Succeeded and Healthy for the
-//     repository's current head.
+// Repository and Notifications behave as the gitops.Repository and gitops.Notifications a block author tests against, as their doc comments say.
 
 import (
 	"context"
@@ -240,14 +226,14 @@ func TestNotifications_LatestAnswersWhatSetSeededAndNothingElse(t *testing.T) {
 	notes.Set(seeded)
 
 	got, ok, err := notes.Latest(ctx, "app-alpha", "rev-1")
+
 	if err != nil || !ok || !reflect.DeepEqual(got, seeded) {
 		t.Errorf("Latest(app-alpha, rev-1) = %+v, %v, %v, want the seeded notification", got, ok, err)
 	}
-	if _, ok, err := notes.Latest(ctx, "app-alpha", "rev-2"); err != nil || ok {
-		t.Errorf("Latest(app-alpha, rev-2) = %v, %v, want none for a revision never seeded", ok, err)
-	}
-	if _, ok, err := notes.Latest(ctx, "app-beta", "rev-1"); err != nil || ok {
-		t.Errorf("Latest(app-beta, rev-1) = %v, %v, want none for another app", ok, err)
+	for _, q := range [][2]string{{"app-alpha", "rev-2"}, {"app-beta", "rev-1"}} {
+		if _, ok, err := notes.Latest(ctx, q[0], q[1]); err != nil || ok {
+			t.Errorf("Latest(%s, %s) = %v, %v, want none for what was never seeded", q[0], q[1], ok, err)
+		}
 	}
 }
 
