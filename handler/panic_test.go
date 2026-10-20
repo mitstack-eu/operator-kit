@@ -1,3 +1,4 @@
+// A panic is a fault in the block, not a refusal, so it answers HTTP 500 with a fixed error, is never cached, and leaks no secret to the answer or the log.
 package handler_test
 
 import (
@@ -17,32 +18,20 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// A panic is a fault in the block, not a refusal, so it answers HTTP 500 with an "error" and no "refused:<class>" statusDetail.
-
 const panicSecret = "top-secret-panic-db-password"
 
 const panicMessage = "backend exploded mid-converge"
 
 type panickingResource struct {
-	mu          sync.Mutex
-	ensureCalls int
-	observeCall int
-	deleteCalls int
-	entered     chan struct{}
-	release     chan struct{}
-	value       any
+	mu               sync.Mutex
+	calls            int
+	entered, release chan struct{}
+	value            any
 }
 
-func (r *panickingResource) panicValue() any {
-	if r.value != nil {
-		return r.value
-	}
-	return fmt.Sprintf("%s using credential %s", panicMessage, panicSecret)
-}
-
-func (r *panickingResource) Ensure(ctx context.Context, d contract.Desired) error {
+func (r *panickingResource) panics() {
 	r.mu.Lock()
-	r.ensureCalls++
+	r.calls++
 	r.mu.Unlock()
 	if r.entered != nil {
 		r.entered <- struct{}{}
@@ -50,32 +39,31 @@ func (r *panickingResource) Ensure(ctx context.Context, d contract.Desired) erro
 	if r.release != nil {
 		<-r.release
 	}
-	panic(r.panicValue())
+	if r.value != nil {
+		panic(r.value)
+	}
+	panic(fmt.Sprintf("%s using credential %s", panicMessage, panicSecret))
 }
 
-func (r *panickingResource) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
-	r.mu.Lock()
-	r.observeCall++
-	r.mu.Unlock()
-	panic(r.panicValue())
+func (r *panickingResource) Ensure(context.Context, contract.Desired) error { r.panics(); return nil }
+
+func (r *panickingResource) Observe(context.Context, contract.Desired) (contract.Observation, error) {
+	r.panics()
+	return contract.Observation{}, nil
 }
 
-func (r *panickingResource) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
-	r.mu.Lock()
-	r.deleteCalls++
-	r.mu.Unlock()
-	panic(r.panicValue())
+func (r *panickingResource) Delete(context.Context, contract.Desired) (map[string]string, error) {
+	r.panics()
+	return nil, nil
 }
 
-func (r *panickingResource) calls() int {
+func (r *panickingResource) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.ensureCalls
+	return r.calls
 }
 
-var _ handler.Resource = (*panickingResource)(nil)
-
-// servedResult's escaped holds the panic value when ServeHTTP panicked instead of answering, which an answered request never sets.
+// servedResult's escaped holds the panic value when ServeHTTP panicked instead of answering.
 type servedResult struct {
 	status  int
 	body    []byte
@@ -94,20 +82,16 @@ func serveRecovering(h http.Handler, req *http.Request) (res servedResult) {
 	return servedResult{status: w.Code, body: w.Body.Bytes()}
 }
 
-func panicEnvelope(t *testing.T, s *kittest.Signer, nonce string, extra map[string]any) *http.Request {
-	t.Helper()
-	fields := map[string]any{
-		"blockId":        "block-panicky",
-		"subscriptionId": "sub-panicky",
-		"secrets":        map[string]any{"db": map[string]any{"password": panicSecret}},
-	}
+func panicRequest(x *harness, extra map[string]any) *http.Request {
+	x.t.Helper()
+	fields := map[string]any{"blockId": "block-panicky", "subscriptionId": "sub-panicky", "secrets": map[string]any{"db": map[string]any{"password": panicSecret}}}
 	for k, v := range extra {
 		fields[k] = v
 	}
-	return s.HookRequest(t, "/hook", envelope(t, s, nonce, fields))
+	return x.request(fields)
 }
 
-func assertPanicAnswer(t *testing.T, who string, res servedResult) {
+func assertPanicAnswer(t *testing.T, who string, res servedResult) contract.Response {
 	t.Helper()
 	if res.escaped != nil {
 		t.Fatalf("%s: the Resource's panic escaped ServeHTTP instead of being answered: %v", who, res.escaped)
@@ -117,53 +101,39 @@ func assertPanicAnswer(t *testing.T, who string, res servedResult) {
 	}
 	assertConforms(t, res.body)
 	resp := decodeResponse(t, res.body)
-	if resp.Error == "" {
-		t.Errorf("%s: error is empty, want a message the engine can surface, body: %s", who, res.body)
-	}
 	if !strings.Contains(strings.ToLower(resp.Error), "panic") {
-		t.Errorf("%s: error = %q, want it to say the block panicked", who, resp.Error)
+		t.Errorf("%s: error = %q, want a message saying the block panicked", who, resp.Error)
 	}
 	if class := handler.RefusedClass(resp.StatusDetail); class != "" {
 		t.Errorf("%s: statusDetail carries refusal class %q, want none: a panic is a fault, not a refusal", who, class)
 	}
 	kittest.AssertNoSecret(t, who+" response body", string(res.body), panicSecret)
+	return resp
 }
 
-func TestServe_PanickingResourceAnswers500WithABody(t *testing.T) {
+func TestServe_APanickingResourceAnswers500WithABody(t *testing.T) {
 	for _, op := range []string{"subscribe", "upgrade", "validate", "unsubscribe"} {
 		for _, key := range []string{"", "idem-panic-" + op} {
-			name := op + "/no-idempotency-key"
-			if key != "" {
-				name = op + "/with-idempotency-key"
-			}
-			t.Run(name, func(t *testing.T) {
-				s := kittest.NewSigner(t, "kid-1", 7)
-				r := &panickingResource{}
-				h := newHandler(t, r, s)
+			t.Run(fmt.Sprintf("%s with idempotency key %q", op, key), func(t *testing.T) {
+				x := newHarness(t, &panickingResource{})
 
-				extra := map[string]any{"operation": op}
-				if key != "" {
-					extra["idempotencyKey"] = key
-				}
-				res := serveRecovering(h, panicEnvelope(t, s, "nonce-panic-"+name, extra))
+				res := serveRecovering(x.h, panicRequest(x, map[string]any{"operation": op, "idempotencyKey": key}))
+
 				assertPanicAnswer(t, "calling delivery", res)
 			})
 		}
 	}
 }
 
-func TestServe_PanickingResourceIsNotCachedRetryReachesTheResourceAgain(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-1", 7)
+func TestServe_APanicIsNotCachedSoARetryReachesTheResourceAgain(t *testing.T) {
 	r := &panickingResource{}
-	h := newHandler(t, r, s)
-
+	x := newHarness(t, r)
 	extra := map[string]any{"idempotencyKey": "idem-panic-retry"}
-	first := serveRecovering(h, panicEnvelope(t, s, "nonce-panic-retry-a", extra))
-	assertPanicAnswer(t, "first delivery", first)
 
-	second := serveRecovering(h, panicEnvelope(t, s, "nonce-panic-retry-b", extra))
-	assertPanicAnswer(t, "retry", second)
-	if got := r.calls(); got != 2 {
+	assertPanicAnswer(t, "first delivery", serveRecovering(x.h, panicRequest(x, extra)))
+	assertPanicAnswer(t, "retry", serveRecovering(x.h, panicRequest(x, extra)))
+
+	if got := r.count(); got != 2 {
 		t.Errorf("Ensure called %d times, want 2: a panic's 500 must not be cached under the key", got)
 	}
 }
@@ -177,8 +147,7 @@ func waitForSingleFlightWaiters(t *testing.T, want int, timeout time.Duration) {
 		n := runtime.Stack(buf, true)
 		got := 0
 		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
-			if strings.Contains(g, "operator-kit/v2/handler.(*idempotencyCache).") &&
-				strings.Contains(g, "sync.(*WaitGroup).Wait") &&
+			if strings.Contains(g, "operator-kit/v2/handler.(*idempotencyCache).") && strings.Contains(g, "sync.(*WaitGroup).Wait") &&
 				!strings.Contains(g, "(*panickingResource).Ensure") {
 				got++
 			}
@@ -193,32 +162,24 @@ func waitForSingleFlightWaiters(t *testing.T, want int, timeout time.Duration) {
 	}
 }
 
-// overlappingPanic fails through its own timeout rather than hanging if either delivery never returns.
-func overlappingPanic(t *testing.T, key string) (first, waiter servedResult, r *panickingResource) {
-	t.Helper()
-	s := kittest.NewSigner(t, "kid-1", 7)
-	r = &panickingResource{entered: make(chan struct{}, 8), release: make(chan struct{})}
-	h := newHandler(t, r, s)
-
-	extra := map[string]any{"idempotencyKey": key}
-	reqA := panicEnvelope(t, s, "nonce-"+key+"-a", extra)
-	reqB := panicEnvelope(t, s, "nonce-"+key+"-b", extra)
-
-	firstCh := make(chan servedResult, 1)
-	waiterCh := make(chan servedResult, 1)
-
-	go func() { firstCh <- serveRecovering(h, reqA) }()
+// Every waiter on a panicking call is released, and fails through its own timeout rather than hanging.
+func TestServe_AWaiterOnAPanickingCallIsReleasedWithTheSameAnswer(t *testing.T) {
+	r := &panickingResource{entered: make(chan struct{}, 8), release: make(chan struct{})}
+	x := newHarness(t, r)
+	extra := map[string]any{"idempotencyKey": "idem-panic-waiter"}
+	reqA, reqB := panicRequest(x, extra), panicRequest(x, extra)
+	firstCh, waiterCh := make(chan servedResult, 1), make(chan servedResult, 1)
+	go func() { firstCh <- serveRecovering(x.h, reqA) }()
 	select {
 	case <-r.entered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the first delivery never reached Ensure")
 	}
-
-	go func() { waiterCh <- serveRecovering(h, reqB) }()
+	go func() { waiterCh <- serveRecovering(x.h, reqB) }()
 	waitForSingleFlightWaiters(t, 1, 5*time.Second)
 
 	close(r.release)
-
+	var first, waiter servedResult
 	timeout := time.After(5 * time.Second)
 	for got := 0; got < 2; got++ {
 		select {
@@ -228,49 +189,18 @@ func overlappingPanic(t *testing.T, key string) (first, waiter servedResult, r *
 			t.Fatalf("a delivery was left waiting after the Resource panicked (%d of 2 returned)", got)
 		}
 	}
-	if calls := r.calls(); calls != 1 {
+
+	if calls := r.count(); calls != 1 {
 		t.Fatalf("Ensure called %d times, want 1: the second delivery must have waited on the first, not run the verb", calls)
 	}
-	return first, waiter, r
-}
-
-func TestServe_PanickingResourceWaiterOnTheSameKeyGetsTheSameResponse(t *testing.T) {
-	first, waiter, _ := overlappingPanic(t, "idem-panic-waiter")
-
 	if waiter.escaped == nil && waiter.status == 0 {
 		t.Fatalf("waiter answered status 0, the zero value the in-flight call held when the Resource panicked")
 	}
 	assertPanicAnswer(t, "waiter", waiter)
 	assertPanicAnswer(t, "calling delivery", first)
-	if waiter.status != first.status {
-		t.Errorf("waiter status = %d, want the calling delivery's %d", waiter.status, first.status)
+	if waiter.status != first.status || !bytes.Equal(waiter.body, first.body) {
+		t.Errorf("waiter answered %d %s, want the calling delivery's exact %d %s", waiter.status, waiter.body, first.status, first.body)
 	}
-	if !bytes.Equal(waiter.body, first.body) {
-		t.Errorf("waiter body = %s, want the calling delivery's exact body %s", waiter.body, first.body)
-	}
-}
-
-func TestServe_PanickingResourceReleasesEveryWaiter(t *testing.T) {
-	overlappingPanic(t, "idem-panic-liveness")
-}
-
-func TestServe_PanickingResourceIsLoggedWithTheBlockAndNoSecret(t *testing.T) {
-	logBuf := captureLog(t)
-
-	s := kittest.NewSigner(t, "kid-1", 7)
-	r := &panickingResource{}
-	h := newHandler(t, r, s)
-
-	res := serveRecovering(h, panicEnvelope(t, s, "nonce-panic-log", map[string]any{"idempotencyKey": "idem-panic-log"}))
-	assertPanicAnswer(t, "calling delivery", res)
-
-	logged := logBuf.String()
-	for _, want := range []string{"panic", "block-panicky", "sub-panicky", "subscribe", panicMessage} {
-		if !strings.Contains(strings.ToLower(logged), strings.ToLower(want)) {
-			t.Errorf("log does not carry %q, want it to identify the panicking block; log:\n%s", want, logged)
-		}
-	}
-	kittest.AssertNoSecret(t, "log output", logged, panicSecret)
 }
 
 // secretHolder renders the secret as decimal bytes when formatted, which a literal substring scrub cannot find.
@@ -286,53 +216,43 @@ func decimalBytes(v string, n int) string {
 	return strings.Join(parts, " ")
 }
 
-func panicAnswerFor(t *testing.T, nonce string, value any) (servedResult, contract.Response) {
-	t.Helper()
-	s := kittest.NewSigner(t, "kid-1", 7)
-	r := &panickingResource{value: value}
-	h := newHandler(t, r, s)
-	res := serveRecovering(h, panicEnvelope(t, s, nonce, map[string]any{"operation": "subscribe"}))
-	assertPanicAnswer(t, "calling delivery", res)
-	return res, decodeResponse(t, res.body)
-}
-
-// The platform stores the response body, so the answer must be a fixed message.
-func TestServe_PanicAnswerCarriesNothingFromANonStringPanicValue(t *testing.T) {
-	res, resp := panicAnswerFor(t, "nonce-panic-holder", secretHolder{Pw: []byte(panicSecret)})
-
+// The platform stores the response body, so the answer is a fixed message whatever the panic value, and the log keeps only the type of a value that is not a string.
+func TestServe_APanicIsAnsweredAndLoggedWithoutTheSecret(t *testing.T) {
 	rendered := decimalBytes(panicSecret, 5)
-	if strings.Contains(string(res.body), rendered) {
-		t.Errorf("response body carries the secret's decimal byte rendering %q: %s", rendered, res.body)
+	cases := []struct {
+		name   string
+		value  any
+		extra  map[string]any
+		logged string
+	}{
+		{"a string panic value", nil, map[string]any{"idempotencyKey": "idem-panic-log"}, panicMessage},
+		{"a value that is not a string", secretHolder{Pw: []byte(panicSecret)}, nil, "secretHolder"},
 	}
-	kittest.AssertNoSecret(t, "response body", string(res.body), panicSecret)
-	if !strings.Contains(resp.Error, "subscribe") {
-		t.Errorf("error = %q, want it to name the verb subscribe", resp.Error)
+	errs := map[string]string{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logBuf := captureLog(t)
+			x := newHarness(t, &panickingResource{value: tc.value})
+
+			res := serveRecovering(x.h, panicRequest(x, tc.extra))
+
+			resp := assertPanicAnswer(t, "calling delivery", res)
+			errs[tc.name] = resp.Error
+			if !strings.Contains(resp.Error, "subscribe") {
+				t.Errorf("error = %q, want it to name the verb subscribe", resp.Error)
+			}
+			logged := logBuf.String()
+			for what, haystack := range map[string]string{"response body": string(res.body), "log output": logged} {
+				kittest.AssertNoSecret(t, what, haystack, panicSecret, rendered)
+			}
+			for _, want := range []string{"panic", "block-panicky", "sub-panicky", "subscribe", tc.logged} {
+				if !strings.Contains(strings.ToLower(logged), strings.ToLower(want)) {
+					t.Errorf("log does not carry %q, want it to identify the panicking block; log:\n%s", want, logged)
+				}
+			}
+		})
 	}
-}
-
-func TestServe_PanicAnswerIsTheSameForDifferentPanicValues(t *testing.T) {
-	_, fromString := panicAnswerFor(t, "nonce-panic-value-a", "an unrelated failure")
-	_, fromHolder := panicAnswerFor(t, "nonce-panic-value-b", secretHolder{Pw: []byte(panicSecret)})
-
-	if fromString.Error != fromHolder.Error {
-		t.Errorf("error differs by panic value: %q vs %q, want one fixed message per verb", fromString.Error, fromHolder.Error)
-	}
-}
-
-func TestServe_PanicLogKeepsOnlyTheTypeOfANonStringPanicValue(t *testing.T) {
-	logBuf := captureLog(t)
-
-	panicAnswerFor(t, "nonce-panic-holder-log", secretHolder{Pw: []byte(panicSecret)})
-
-	logged := logBuf.String()
-	rendered := decimalBytes(panicSecret, 5)
-	if strings.Contains(logged, rendered) {
-		t.Errorf("log carries the secret's decimal byte rendering %q; log:\n%s", rendered, logged)
-	}
-	kittest.AssertNoSecret(t, "log output", logged, panicSecret)
-	for _, want := range []string{"panic", "block-panicky", "sub-panicky", "subscribe", "secretHolder"} {
-		if !strings.Contains(strings.ToLower(logged), strings.ToLower(want)) {
-			t.Errorf("log does not carry %q, want it to identify the block and the panic value's type; log:\n%s", want, logged)
-		}
+	if errs[cases[0].name] != errs[cases[1].name] {
+		t.Errorf("error differs by panic value: %q vs %q, want one fixed message per verb", errs[cases[0].name], errs[cases[1].name])
 	}
 }

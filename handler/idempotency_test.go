@@ -1,257 +1,225 @@
+// The idempotency cache replays only a settled answer under the same subscription and key, and stores no secret.
 package handler_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"net/http"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-// The two deliveries use different nonces, as a genuine retry would, since a repeated nonce is rejected by the replay guard regardless of idempotencyKey.
-func TestServe_IdempotencyReplaysTheFirstResponseForTheSameKey(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-1", 7)
-	f := &kittest.FakeResource{}
-	h := newHandler(t, f, s)
+// delivery is one webhook delivery of a row: between runs first, replays names the earlier delivery whose exact answer it must get, or -1, and calls are the Resource's totals after it.
+type delivery struct {
+	fields  map[string]any
+	between func(f *kittest.FakeResource)
+	replays int
+	differs bool
+	status  int
+	calls   [3]int
+	check   func(t *testing.T, resp contract.Response)
+}
 
-	extra := map[string]any{"idempotencyKey": "idem-1", "subscriptionId": "sub-1"}
-	status1, raw1 := postHook(t, h, s, envelope(t, s, "nonce-idem-1a", extra))
-	if status1 != http.StatusOK {
-		t.Fatalf("first delivery: status = %d, body: %s", status1, raw1)
-	}
-	if f.EnsureCalls != 1 {
-		t.Fatalf("EnsureCalls after first delivery = %d, want 1", f.EnsureCalls)
-	}
-
-	status2, raw2 := postHook(t, h, s, envelope(t, s, "nonce-idem-1b", extra))
-	if status2 != status1 {
-		t.Errorf("replay status = %d, want the first delivery's status %d", status2, status1)
-	}
-	if !bytes.Equal(raw1, raw2) {
-		t.Errorf("replay body = %s, want the exact first-delivery body %s", raw2, raw1)
-	}
-	if f.EnsureCalls != 1 {
-		t.Errorf("EnsureCalls after the replay = %d, want still 1 — the Resource must not be called again", f.EnsureCalls)
+func wantPending(want bool) func(*testing.T, contract.Response) {
+	return func(t *testing.T, resp contract.Response) {
+		if resp.Pending != want {
+			t.Errorf("pending = %v, want %v; statusDetail %q", resp.Pending, want, resp.StatusDetail)
+		}
 	}
 }
 
-func TestServe_IdempotencyDifferentKeyCallsTheResourceAgain(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-1", 7)
-	f := &kittest.FakeResource{}
-	h := newHandler(t, f, s)
+func wantAbsentAnswer(want bool) func(*testing.T, contract.Response) {
+	return func(t *testing.T, resp contract.Response) { wantAbsent(t, resp, want) }
+}
 
-	postHook(t, h, s, envelope(t, s, "nonce-idem-2a", map[string]any{"idempotencyKey": "idem-A", "subscriptionId": "sub-1"}))
-	if f.EnsureCalls != 1 {
-		t.Fatalf("EnsureCalls after first delivery = %d, want 1", f.EnsureCalls)
+func TestServe_IdempotencyCache(t *testing.T) {
+	key := func(op, k, sub string) map[string]any {
+		return map[string]any{"operation": op, "idempotencyKey": k, "subscriptionId": sub, "secrets": guardSecrets()}
 	}
+	settled := func(t *testing.T, resp contract.Response) {
+		if resp.Pending || resp.Outputs["endpoint"] != "https://ready" {
+			t.Errorf("pending, outputs = %v, %v; want the settled observation's outputs", resp.Pending, resp.Outputs)
+		}
+	}
+	cases := []struct {
+		name       string
+		f          *kittest.FakeResource
+		config     []func(*handler.Config)
+		deliveries []delivery
+	}{
+		{name: "the same key replays the first answer without calling the Resource", f: &kittest.FakeResource{},
+			deliveries: []delivery{
+				{fields: key("subscribe", "idem-1", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{1, 1, 0}},
+				{fields: key("subscribe", "idem-1", "sub-1"), replays: 0, status: http.StatusOK, calls: [3]int{1, 1, 0}},
+			}},
+		{name: "a different key is a distinct request", f: &kittest.FakeResource{},
+			deliveries: []delivery{
+				{fields: key("subscribe", "idem-A", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{1, 1, 0}},
+				{fields: key("subscribe", "idem-B", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{2, 2, 0}},
+			}},
+		{name: "an empty key is never cached", f: &kittest.FakeResource{},
+			deliveries: []delivery{
+				{fields: key("subscribe", "", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{1, 1, 0}},
+				{fields: key("subscribe", "", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{2, 2, 0}},
+			}},
+		{name: "a key is cached per subscription, and each subscription still replays its own", f: &kittest.FakeResource{},
+			deliveries: []delivery{
+				{fields: key("subscribe", "idem-shared", "sub-A"), replays: -1, status: http.StatusOK, calls: [3]int{1, 1, 0}},
+				{fields: key("subscribe", "idem-shared", "sub-B"), replays: -1, status: http.StatusOK, calls: [3]int{2, 2, 0}},
+				{fields: key("subscribe", "idem-shared", "sub-A"), replays: 0, status: http.StatusOK, calls: [3]int{2, 2, 0}},
+			}},
+		{name: "a 500 is never cached, so the retry reaches the Resource and answers its own success", f: &kittest.FakeResource{EnsureErr: errors.New("transient backend error")},
+			deliveries: []delivery{
+				{fields: key("subscribe", "idem-500", "sub-1"), replays: -1, status: http.StatusInternalServerError, calls: [3]int{1, 0, 0}},
+				{fields: key("subscribe", "idem-500", "sub-1"), between: func(f *kittest.FakeResource) { f.EnsureErr = nil }, replays: -1, differs: true,
+					status: http.StatusOK, calls: [3]int{2, 1, 0}, check: func(t *testing.T, resp contract.Response) {
+						if resp.Error != "" {
+							t.Errorf("retry error = %q, want the second attempt's own success", resp.Error)
+						}
+					}},
+			}},
+		{name: "a settled subscribe is replayed", f: &kittest.FakeResource{Outputs: map[string]string{"endpoint": "https://ready"}},
+			deliveries: []delivery{
+				{fields: key("subscribe", "idem-settled", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{1, 1, 0}, check: settled},
+				{fields: key("subscribe", "idem-settled", "sub-1"), replays: 0, status: http.StatusOK, calls: [3]int{1, 1, 0}},
+			}},
+		{name: "a refusal is deterministic, so it is replayed", f: &kittest.FakeResource{EnsureErr: handler.Refuse("quota-exceeded", "org quota exhausted")},
+			deliveries: []delivery{
+				{fields: key("subscribe", "idem-refused", "sub-1"), replays: -1, status: http.StatusBadRequest, calls: [3]int{1, 0, 0}},
+				{fields: key("subscribe", "idem-refused", "sub-1"), replays: 0, status: http.StatusBadRequest, calls: [3]int{1, 0, 0}},
+			}},
+		{name: "a validate is never cached, since a probe must observe the current state", f: &kittest.FakeResource{Count: 1},
+			deliveries: []delivery{
+				{fields: key("validate", "idem-validate", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{0, 1, 0}, check: wantAbsentAnswer(false)},
+				{fields: key("validate", "idem-validate", "sub-1"), between: func(f *kittest.FakeResource) { f.Count = 0 }, replays: -1,
+					status: http.StatusOK, calls: [3]int{0, 2, 0}, check: wantAbsentAnswer(true)},
+			}},
+		{name: "a pending subscribe is never cached, so the re-delivery answers the converged resource",
+			f: &kittest.FakeResource{ObserveState: stateOf(contract.Absent), Outputs: map[string]string{"endpoint": "https://ready"}},
+			deliveries: []delivery{
+				{fields: key("subscribe", "idem-pending-subscribe", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{1, 3, 0}, check: wantPending(true)},
+				{fields: key("subscribe", "idem-pending-subscribe", "sub-1"), between: func(f *kittest.FakeResource) { f.ObserveState = nil }, replays: -1, differs: true,
+					status: http.StatusOK, calls: [3]int{2, 4, 0}, check: settled},
+			}},
+		{name: "a pending upgrade is never cached, so the re-delivery answers the converged resource",
+			f: &kittest.FakeResource{ObserveState: stateOf(contract.Absent), Outputs: map[string]string{"endpoint": "https://ready"}},
+			deliveries: []delivery{
+				{fields: key("upgrade", "idem-pending-upgrade", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{1, 3, 0}, check: wantPending(true)},
+				{fields: key("upgrade", "idem-pending-upgrade", "sub-1"), between: func(f *kittest.FakeResource) { f.ObserveState = nil }, replays: -1, differs: true,
+					status: http.StatusOK, calls: [3]int{2, 4, 0}, check: settled},
+			}},
+		{name: "an unsubscribe answered absent false is never cached, so the re-delivery observes again", f: &kittest.FakeResource{Count: 1, ObserveState: stateOf(contract.Present)},
+			config: []func(*handler.Config){withBudget(2)},
+			deliveries: []delivery{
+				{fields: key("unsubscribe", "idem-unsub-present", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{0, 2, 1}, check: wantAbsentAnswer(false)},
+				{fields: key("unsubscribe", "idem-unsub-present", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{0, 4, 2}, check: wantAbsentAnswer(false)},
+			}},
+		{name: "an unsubscribe settled absent is replayed without observing", f: &kittest.FakeResource{Count: 1},
+			deliveries: []delivery{
+				{fields: key("unsubscribe", "idem-unsub-absent", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{0, 1, 1}, check: wantAbsentAnswer(true)},
+				{fields: key("unsubscribe", "idem-unsub-absent", "sub-1"), replays: 0, status: http.StatusOK, calls: [3]int{0, 1, 1}},
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logged := captureLog(t)
+			x := newHarness(t, tc.f, tc.config...)
+			var bodies [][]byte
 
-	postHook(t, h, s, envelope(t, s, "nonce-idem-2b", map[string]any{"idempotencyKey": "idem-B", "subscriptionId": "sub-1"}))
-	if f.EnsureCalls != 2 {
-		t.Errorf("EnsureCalls after a different idempotencyKey = %d, want 2 — a distinct key is a distinct request", f.EnsureCalls)
+			for i, d := range tc.deliveries {
+				if d.between != nil {
+					d.between(tc.f)
+				}
+
+				status, raw := x.post(d.fields)
+
+				if status != d.status {
+					t.Fatalf("delivery %d: status = %d, want %d, body: %s", i, status, d.status, raw)
+				}
+				assertConforms(t, raw)
+				assertCalls(t, tc.f, d.calls)
+				if d.replays >= 0 && !bytes.Equal(raw, bodies[d.replays]) {
+					t.Errorf("delivery %d body = %s, want delivery %d's exact body %s", i, raw, d.replays, bodies[d.replays])
+				}
+				for j, earlier := range bodies {
+					if d.differs && bytes.Equal(raw, earlier) {
+						t.Errorf("delivery %d body is byte-identical to delivery %d's %s, so it was replayed", i, j, earlier)
+					}
+				}
+				if d.check != nil {
+					d.check(t, decodeResponse(t, raw))
+				}
+				kittest.AssertNoSecret(t, "a response body", string(raw), guardSecret)
+				bodies = append(bodies, raw)
+			}
+			kittest.AssertNoSecret(t, "log output", logged.String(), guardSecret)
+		})
 	}
 }
 
-func TestServe_IdempotencyEmptyKeyIsNeverCached(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-1", 7)
-	f := &kittest.FakeResource{}
-	h := newHandler(t, f, s)
-
-	postHook(t, h, s, envelope(t, s, "nonce-idem-3a", nil))
-	postHook(t, h, s, envelope(t, s, "nonce-idem-3b", nil))
-
-	if f.EnsureCalls != 2 {
-		t.Errorf("EnsureCalls = %d, want 2 — an empty idempotencyKey must never be cached/replayed", f.EnsureCalls)
-	}
+type served struct {
+	status int
+	body   []byte
 }
 
-func TestServe_IdempotencyKeyedPerSubscription_NoCrossSubscriptionCollision(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-1", 7)
-	f := &kittest.FakeResource{}
-	h := newHandler(t, f, s)
-
-	sharedKey := "idem-shared"
-
-	statusA, rawA := postHook(t, h, s, envelope(t, s, "nonce-tenant-A", map[string]any{
-		"idempotencyKey": sharedKey, "subscriptionId": "sub-A", "orgId": "org-A",
-	}))
-	if statusA != http.StatusOK {
-		t.Fatalf("subscription A: status = %d, body: %s", statusA, rawA)
-	}
-	if f.EnsureCalls != 1 {
-		t.Fatalf("EnsureCalls after subscription A = %d, want 1", f.EnsureCalls)
+// startConcurrent delivers fields twice to one handler, the second once the first holds the Resource, and returns the answers and whether the second reached the Resource within wait.
+func startConcurrent(t *testing.T, r *blockingResource, fields map[string]any, wait time.Duration) (first, second served, reached bool) {
+	t.Helper()
+	x := newHarness(t, r)
+	reqA, reqB := x.request(fields), x.request(fields)
+	results := make(chan served, 2)
+	deliver := func(req *http.Request) {
+		status, raw := x.serve(req)
+		results <- served{status, raw}
 	}
 
-	statusB, rawB := postHook(t, h, s, envelope(t, s, "nonce-tenant-B", map[string]any{
-		"idempotencyKey": sharedKey, "subscriptionId": "sub-B", "orgId": "org-B",
-	}))
-	if statusB != http.StatusOK {
-		t.Fatalf("subscription B: status = %d, body: %s", statusB, rawB)
-	}
-	if f.EnsureCalls != 2 {
-		t.Errorf("EnsureCalls after subscription B = %d, want 2 — a different subscription sharing the same "+
-			"idempotencyKey must still call the Resource; the cache must be keyed on (idempotencyKey, subscriptionId)", f.EnsureCalls)
-	}
-
-	// Replaying subscription A's own key must still replay, so the cache key was not widened into never matching.
-	statusA2, rawA2 := postHook(t, h, s, envelope(t, s, "nonce-tenant-A2", map[string]any{
-		"idempotencyKey": sharedKey, "subscriptionId": "sub-A", "orgId": "org-A",
-	}))
-	if statusA2 != statusA || !bytes.Equal(rawA2, rawA) {
-		t.Errorf("re-delivery for subscription A did not replay: status=%d body=%s, want status=%d body=%s",
-			statusA2, rawA2, statusA, rawA)
-	}
-	if f.EnsureCalls != 2 {
-		t.Errorf("EnsureCalls after replaying subscription A = %d, want still 2", f.EnsureCalls)
-	}
-}
-
-// flakyResource fails its first Ensure call and succeeds after, since a cached 500 would turn one transient error into a permanent one.
-type flakyResource struct {
-	mu          sync.Mutex
-	ensureCalls int
-}
-
-func (f *flakyResource) Ensure(context.Context, contract.Desired) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.ensureCalls++
-	if f.ensureCalls == 1 {
-		return errors.New("transient backend error")
-	}
-	return nil
-}
-
-func (f *flakyResource) Observe(context.Context, contract.Desired) (contract.Observation, error) {
-	return contract.Observation{State: contract.Present}, nil
-}
-
-func (f *flakyResource) Delete(context.Context, contract.Desired) (map[string]string, error) {
-	return nil, nil
-}
-
-func (f *flakyResource) calls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.ensureCalls
-}
-
-func TestServe_Idempotency500IsNeverCachedRetryRunsTheResourceAgain(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-1", 7)
-	r := &flakyResource{}
-	h := newHandler(t, r, s)
-
-	extra := map[string]any{"idempotencyKey": "idem-500", "subscriptionId": "sub-1"}
-
-	status1, raw1 := postHook(t, h, s, envelope(t, s, "nonce-500-a", extra))
-	if status1 != http.StatusInternalServerError {
-		t.Fatalf("first delivery: status = %d, want 500, body: %s", status1, raw1)
-	}
-	if r.calls() != 1 {
-		t.Fatalf("EnsureCalls after the first (failing) delivery = %d, want 1", r.calls())
-	}
-
-	status2, raw2 := postHook(t, h, s, envelope(t, s, "nonce-500-b", extra))
-	if r.calls() != 2 {
-		t.Errorf("EnsureCalls after the retry = %d, want 2 — a 500 must never be cached, so the retry must reach the Resource again", r.calls())
-	}
-	if status2 != http.StatusOK {
-		t.Errorf("retry status = %d, want 200 — the retry's own (successful) answer, not the cached 500, body: %s", status2, raw2)
-	}
-	resp := decodeResponse(t, raw2)
-	if resp.Error != "" {
-		t.Errorf("retry Error = %q, want empty — the second attempt succeeded and must not carry the first attempt's failure", resp.Error)
-	}
-}
-
-// blockingResource holds Ensure open until released; entered is buffered so a wrongly duplicated call never blocks the Resource itself.
-type blockingResource struct {
-	mu          sync.Mutex
-	ensureCalls int
-	entered     chan struct{}
-	release     chan struct{}
-}
-
-func newBlockingResource() *blockingResource {
-	return &blockingResource{entered: make(chan struct{}, 8), release: make(chan struct{})}
-}
-
-func (r *blockingResource) Ensure(ctx context.Context, d contract.Desired) error {
-	r.mu.Lock()
-	r.ensureCalls++
-	r.mu.Unlock()
-	r.entered <- struct{}{}
-	<-r.release
-	return nil
-}
-
-func (r *blockingResource) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
-	return contract.Observation{State: contract.Present}, nil
-}
-
-func (r *blockingResource) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
-	return nil, nil
-}
-
-func (r *blockingResource) calls() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.ensureCalls
-}
-
-// Meaningful under -race: every field blockingResource shares across goroutines is a channel or mutex-guarded, so a race can only come from the cache.
-func TestServe_IdempotencySingleFlightSameKeyCallsEnsureOnce(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-1", 7)
-	r := newBlockingResource()
-	h := newHandler(t, r, s)
-
-	extra := map[string]any{"idempotencyKey": "idem-sf", "subscriptionId": "sub-1"}
-
-	type result struct {
-		status int
-		body   []byte
-	}
-	results := make(chan result, 2)
-
-	go func() {
-		status, raw := postHook(t, h, s, envelope(t, s, "nonce-sf-a", extra))
-		results <- result{status, raw}
-	}()
-
+	go deliver(reqA)
 	select {
 	case <-r.entered:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the first delivery never reached Ensure")
+		close(r.release)
+		t.Fatal("the first delivery never reached the Resource")
 	}
-
-	go func() {
-		status, raw := postHook(t, h, s, envelope(t, s, "nonce-sf-b", extra))
-		results <- result{status, raw}
-	}()
-
-	// Give the second delivery a window to reach Ensure a second time while the first is still blocked.
+	go deliver(reqB)
 	select {
 	case <-r.entered:
-		t.Error("a second concurrent delivery of the same key reached Ensure before the first one returned — the cache must be single-flight")
-	case <-time.After(150 * time.Millisecond):
+		reached = true
+	case <-time.After(wait):
 	}
-
 	close(r.release)
+	return <-results, <-results, reached
+}
 
-	r1 := <-results
-	r2 := <-results
+// Meaningful under -race: every field blockingResource shares across goroutines is a channel or mutex-guarded, so a race can only come from the cache.
+func TestServe_TwoConcurrentDeliveriesOfOneKeyShareOneEnsureAndItsAnswer(t *testing.T) {
+	r := newBlockingResource()
 
-	if calls := r.calls(); calls != 1 {
-		t.Errorf("Ensure called %d times, want exactly 1 for two concurrent deliveries of the same key", calls)
+	first, second, reached := startConcurrent(t, r, map[string]any{"idempotencyKey": "idem-sf", "subscriptionId": "sub-1"}, 150*time.Millisecond)
+
+	if reached {
+		t.Error("a second concurrent delivery of the same key reached Ensure before the first one returned")
 	}
-	if r1.status != r2.status {
-		t.Errorf("concurrent deliveries got different statuses: %d vs %d", r1.status, r2.status)
+	if ensures, _ := r.counts(); ensures != 1 {
+		t.Errorf("Ensure called %d times, want exactly 1 for two concurrent deliveries of the same key", ensures)
 	}
-	if !bytes.Equal(r1.body, r2.body) {
-		t.Errorf("concurrent deliveries got different bodies: %s vs %s", r1.body, r2.body)
+	if first.status != second.status || !bytes.Equal(first.body, second.body) {
+		t.Errorf("concurrent deliveries got %d %s and %d %s, want one answer", first.status, first.body, second.status, second.body)
+	}
+}
+
+func TestServe_AConcurrentValidateNeverJoinsAnInFlightCall(t *testing.T) {
+	r := newBlockingResource()
+
+	_, _, reached := startConcurrent(t, r, map[string]any{"operation": "validate", "idempotencyKey": "idem-validate-sf", "subscriptionId": "sub-1"}, 2*time.Second)
+
+	if !reached {
+		t.Error("a second validate of the same key did not reach Observe while the first was in flight")
+	}
+	if _, observes := r.counts(); observes != 2 {
+		t.Errorf("Observe called %d times, want 2: each validate observes the resource itself", observes)
 	}
 }

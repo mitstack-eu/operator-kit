@@ -1,3 +1,4 @@
+// A verb emits at most one terminal event and no start event, validate emits none, and a broken events channel never changes the answer.
 package handler_test
 
 import (
@@ -5,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -18,13 +20,10 @@ import (
 type recordedEvent struct {
 	SubscriptionID string `json:"subscriptionId"`
 	Token          string `json:"token"`
-	Operation      string `json:"operation"`
 	Status         string `json:"status"`
 	Detail         string `json:"detail"`
-	IdempotencyKey string `json:"idempotencyKey"`
 }
 
-// fakeEventsServer records every event POSTed to it.
 type fakeEventsServer struct {
 	*httptest.Server
 	mu     sync.Mutex
@@ -40,225 +39,84 @@ func newFakeEventsServer(t *testing.T) *fakeEventsServer {
 		f.mu.Lock()
 		f.events = append(f.events, ev)
 		f.mu.Unlock()
-		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(f.Server.Close)
 	return f
 }
 
-func (f *fakeEventsServer) Events() []recordedEvent {
+func (f *fakeEventsServer) recorded() []recordedEvent {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]recordedEvent, len(f.events))
-	copy(out, f.events)
-	return out
+	return slices.Clone(f.events)
 }
 
-func eventsCallbackField(url, token string) map[string]any {
-	return map[string]any{"url": url, "token": token}
-}
-
-// At most one event per verb call: validate emits nothing; the others emit completed on a settled 2xx, progress on a pending:true 2xx, failed on 4xx/5xx, and no start event, which would take the unique-index slot of the terminal event and loop ProbeHealth on validate.
-
-func TestServe_ValidateEmitsNoEvents(t *testing.T) {
-	present := contract.Present
-	unknown := contract.Unknown
+func TestServe_EmitsOneTerminalEventPerVerb(t *testing.T) {
+	withOutputs := func() *kittest.FakeResource {
+		return &kittest.FakeResource{Outputs: map[string]string{"url": "https://example.test"}, StatusDetail: "provisioned"}
+	}
+	completed, progress, failed := []string{"completed"}, []string{"progress"}, []string{"failed"}
 	cases := []struct {
-		name string
-		f    *kittest.FakeResource
+		name   string
+		op     string
+		f      *kittest.FakeResource
+		budget int
+		status int
+		want   []string
+		detail string
 	}{
-		{"present", &kittest.FakeResource{ObserveState: &present}},
-		{"unknown", &kittest.FakeResource{ObserveState: &unknown}},
-		{"observe error", &kittest.FakeResource{ObserveErr: errors.New("observe backend unavailable")}},
+		{"a validate observed present emits nothing", "validate", &kittest.FakeResource{ObserveState: stateOf(contract.Present)}, 3, http.StatusOK, nil, ""},
+		{"a validate observed unknown emits nothing", "validate", &kittest.FakeResource{ObserveState: stateOf(contract.Unknown)}, 3, http.StatusOK, nil, ""},
+		{"a validate whose Observe fails emits nothing", "validate", &kittest.FakeResource{ObserveErr: errors.New("observe backend unavailable")}, 3,
+			http.StatusInternalServerError, nil, ""},
+		{"a settled subscribe emits completed alone", "subscribe", withOutputs(), 3, http.StatusOK, completed, ""},
+		{"a settled upgrade emits completed alone", "upgrade", withOutputs(), 3, http.StatusOK, completed, ""},
+		{"a settled unsubscribe emits completed alone", "unsubscribe", &kittest.FakeResource{Count: 1}, 3, http.StatusOK, completed, ""},
+		{"a pending subscribe emits progress, not completed", "subscribe", &kittest.FakeResource{ObserveState: stateOf(contract.Absent)}, 2, http.StatusOK, progress, ""},
+		{"a pending upgrade emits progress, not completed", "upgrade", &kittest.FakeResource{ObserveState: stateOf(contract.Absent)}, 2, http.StatusOK, progress, ""},
+		{"a failing subscribe emits failed with the error", "subscribe", &kittest.FakeResource{EnsureErr: errors.New("resource backend unavailable")}, 3,
+			http.StatusInternalServerError, failed, "resource backend unavailable"},
+		{"a refused subscribe emits failed with the class", "subscribe", &kittest.FakeResource{EnsureErr: handler.Refuse("quota-exceeded", "org quota exhausted")}, 3,
+			http.StatusBadRequest, failed, "quota-exceeded"},
 	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			s := kittest.NewSigner(t, "kid-1", 7)
-			h := newHandler(t, c.f, s)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			events := newFakeEventsServer(t)
+			x := newHarness(t, tc.f, withBudget(tc.budget))
 
-			body := envelope(t, s, "nonce-events-validate-"+c.name, map[string]any{
-				"operation":      "validate",
-				"eventsCallback": eventsCallbackField(events.URL, "events-tok"),
-			})
-			_, raw := postHook(t, h, s, body)
+			status, resp := x.answer(map[string]any{"operation": tc.op, "eventsCallback": map[string]any{"url": events.URL, "token": "events-tok"}})
 
-			got := events.Events()
-			if len(got) != 0 {
-				t.Errorf("recorded %d events for validate, want 0: %+v\nresponse: %s", len(got), got, raw)
+			if status != tc.status {
+				t.Fatalf("status = %d, want %d; response %+v", status, tc.status, resp)
+			}
+			if slices.Equal(tc.want, progress) && !resp.Pending {
+				t.Fatalf("pending = false, want the pending outcome this row exercises; response %+v", resp)
+			}
+			got := events.recorded()
+			var statuses []string
+			for _, ev := range got {
+				statuses = append(statuses, ev.Status)
+				if ev.SubscriptionID != "sub-1" || ev.Token != "events-tok" || !strings.Contains(ev.Detail, tc.detail) {
+					t.Errorf("event = %+v, want subscription sub-1, the eventsCallback's own token and a detail naming %q", ev, tc.detail)
+				}
+			}
+			if !slices.Equal(statuses, tc.want) {
+				t.Errorf("recorded event statuses %v, want exactly %v: %+v", statuses, tc.want, got)
 			}
 		})
 	}
 }
 
-// A spurious start event beside the right terminal event is the defect the count guards.
-func TestServe_SettledSubscribeEmitsExactlyOneCompletedEvent(t *testing.T) {
-	for _, op := range []string{"subscribe", "upgrade"} {
-		t.Run(op, func(t *testing.T) {
-			s := kittest.NewSigner(t, "kid-1", 7)
-			f := &kittest.FakeResource{Outputs: map[string]string{"url": "https://example.test"}, StatusDetail: "provisioned"}
-			h := newHandler(t, f, s)
-			events := newFakeEventsServer(t)
-
-			body := envelope(t, s, "nonce-events-settled-"+op, map[string]any{
-				"operation":      op,
-				"eventsCallback": eventsCallbackField(events.URL, "events-tok"),
-			})
-			status, raw := postHook(t, h, s, body)
-			if status != http.StatusOK {
-				t.Fatalf("status = %d, want 200, body: %s", status, raw)
-			}
-
-			got := events.Events()
-			if len(got) != 1 {
-				t.Fatalf("recorded %d events, want exactly 1 (completed): %+v", len(got), got)
-			}
-			if got[0].Status != "completed" {
-				t.Errorf("event status = %q, want %q", got[0].Status, "completed")
-			}
-			if got[0].SubscriptionID != "sub-1" {
-				t.Errorf("event SubscriptionID = %q, want %q", got[0].SubscriptionID, "sub-1")
-			}
-			if got[0].Token != "events-tok" {
-				t.Errorf("event Token = %q, want the eventsCallback's own token", got[0].Token)
-			}
-		})
-	}
-}
-
-func TestServe_SettledUnsubscribeEmitsExactlyOneCompletedEvent(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-1", 7)
-	f := &kittest.FakeResource{Count: 1} // Delete drives Count to 0 -> Observe reports Absent
-	h := newHandler(t, f, s)
-	events := newFakeEventsServer(t)
-
-	body := envelope(t, s, "nonce-events-settled-unsub", map[string]any{
-		"operation":      "unsubscribe",
-		"eventsCallback": eventsCallbackField(events.URL, "events-tok"),
-	})
-	status, raw := postHook(t, h, s, body)
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body: %s", status, raw)
-	}
-
-	got := events.Events()
-	if len(got) != 1 {
-		t.Fatalf("recorded %d events, want exactly 1 (completed): %+v", len(got), got)
-	}
-	if got[0].Status != "completed" {
-		t.Errorf("event status = %q, want %q", got[0].Status, "completed")
-	}
-}
-
-func TestServe_PendingSubscribeEmitsExactlyOneProgressEvent(t *testing.T) {
-	for _, op := range []string{"subscribe", "upgrade"} {
-		t.Run(op, func(t *testing.T) {
-			s := kittest.NewSigner(t, "kid-1", 7)
-			absent := contract.Absent
-			f := &kittest.FakeResource{ObserveState: &absent} // never reaches Present
-			h := newHandler(t, f, s, func(c *handler.Config) { c.VerbBudget = 2 })
-			events := newFakeEventsServer(t)
-
-			body := envelope(t, s, "nonce-events-pending-"+op, map[string]any{
-				"operation":      op,
-				"eventsCallback": eventsCallbackField(events.URL, "events-tok"),
-			})
-			status, raw := postHook(t, h, s, body)
-			if status != http.StatusOK {
-				t.Fatalf("status = %d, want 200 (pending is never an error), body: %s", status, raw)
-			}
-			resp := decodeResponse(t, raw)
-			if !resp.Pending {
-				t.Fatalf("response Pending = false, want true — test setup did not reach the pending outcome it means to exercise")
-			}
-
-			got := events.Events()
-			if len(got) != 1 {
-				t.Fatalf("recorded %d events, want exactly 1 (progress): %+v", len(got), got)
-			}
-			if got[0].Status != "progress" {
-				t.Errorf("event status = %q, want %q — a pending outcome is progress, not completed", got[0].Status, "progress")
-			}
-		})
-	}
-}
-
-func TestServe_FailingSubscribeEmitsExactlyOneFailedEventWithDetail(t *testing.T) {
-	cases := []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantDetail string
-	}{
-		{"plain error", errors.New("resource backend unavailable"), http.StatusInternalServerError, "resource backend unavailable"},
-		{"refused", handler.Refuse("quota-exceeded", "org quota exhausted"), http.StatusBadRequest, "quota-exceeded"},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			s := kittest.NewSigner(t, "kid-1", 7)
-			f := &kittest.FakeResource{EnsureErr: c.err}
-			h := newHandler(t, f, s)
-			events := newFakeEventsServer(t)
-
-			body := envelope(t, s, "nonce-events-failed-"+c.name, map[string]any{
-				"eventsCallback": eventsCallbackField(events.URL, "events-tok"),
-			})
-			status, raw := postHook(t, h, s, body)
-			if status != c.wantStatus {
-				t.Fatalf("status = %d, want %d, body: %s", status, c.wantStatus, raw)
-			}
-
-			got := events.Events()
-			if len(got) != 1 {
-				t.Fatalf("recorded %d events, want exactly 1 (failed): %+v", len(got), got)
-			}
-			if got[0].Status != "failed" {
-				t.Errorf("event status = %q, want %q", got[0].Status, "failed")
-			}
-			if !strings.Contains(got[0].Detail, c.wantDetail) {
-				t.Errorf("failed event detail = %q, want it to contain %q", got[0].Detail, c.wantDetail)
-			}
-		})
-	}
-}
-
-// ADR 0042: an events endpoint answering 500, or unreachable, must not change the lifecycle outcome.
 func TestServe_EventsFailureNeverChangesTheLifecycleResponse(t *testing.T) {
-	cases := []struct {
-		name string
-		url  string
-	}{
-		{"events endpoint returns 500", ""}, // filled below with a real 500 server
-		{"events endpoint unreachable", "http://127.0.0.1:1/events"},
-	}
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	t.Cleanup(failing.Close)
+	for name, url := range map[string]string{"an events endpoint answering 500": failing.URL, "an unreachable events endpoint": "http://127.0.0.1:1/events"} {
+		t.Run(name, func(t *testing.T) {
+			x := newHarness(t, &kittest.FakeResource{})
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			s := kittest.NewSigner(t, "kid-1", 7)
-			f := &kittest.FakeResource{}
-			h := newHandler(t, f, s)
+			status, resp := x.answer(map[string]any{"eventsCallback": map[string]any{"url": url, "token": "events-tok"}})
 
-			url := c.url
-			if url == "" {
-				failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					w.WriteHeader(http.StatusInternalServerError)
-				}))
-				t.Cleanup(failing.Close)
-				url = failing.URL
-			}
-
-			body := envelope(t, s, "nonce-events-advisory-"+c.name, map[string]any{
-				"eventsCallback": eventsCallbackField(url, "events-tok"),
-			})
-			status, raw := postHook(t, h, s, body)
-			if status != http.StatusOK {
-				t.Errorf("status = %d, want 200 — a broken events channel must never change the lifecycle response, body: %s", status, raw)
-			}
-			resp := decodeResponse(t, raw)
-			if resp.Error != "" {
-				t.Errorf("Error = %q, want empty — the events channel is advisory only", resp.Error)
+			if status != http.StatusOK || resp.Error != "" {
+				t.Errorf("status, error = %d, %q; want 200 and none, since the events channel is advisory only", status, resp.Error)
 			}
 		})
 	}
