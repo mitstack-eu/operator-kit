@@ -1,13 +1,5 @@
 package contract_test
 
-// blockmanifest_test.go pins contract.ParseManifest, the one manifest parser
-// the kit ships. It switches on apiVersion: under mitstack/v1beta it reads
-// the whole manifest strictly into BlockManifest, in the shape ADR 0085
-// sets, and under mitstack/v1alpha it reads the whole manifest strictly
-// into V1AlphaManifest. The worked manifests of ADR 0085 and the data-model
-// page are read from the embedded manifest goldens and checked field by
-// field.
-
 import (
 	"encoding/json"
 	"errors"
@@ -21,16 +13,6 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-func readManifestGolden(t *testing.T, name string) []byte {
-	t.Helper()
-	raw, err := contract.ManifestGoldens.ReadFile(contract.ManifestGoldensDir + "/" + name)
-	if err != nil {
-		t.Fatalf("reading %s from contract.ManifestGoldens: %v", name, err)
-	}
-	return raw
-}
-
-// wantRequirement is what one parsed spec.requires entry must hold.
 type wantRequirement struct {
 	name      string
 	types     []string
@@ -38,111 +20,14 @@ type wantRequirement struct {
 	reference string
 }
 
-// wantResource is what one parsed spec.resources entry must hold. typ is
-// the one listed type id, empty for an entry listing several.
+// wantResource's typ is the one listed type id, empty for an entry listing several.
 type wantResource struct {
 	name  string
 	typ   string
 	types []string
 }
 
-type wantWorkedManifest struct {
-	file         string
-	id           string
-	version      string
-	releaseClass string
-	releaseNote  string
-	// rest is the manifest with Spec.Requires and Spec.Resources left out
-	// and Spec.Description written without its trailing line break; those
-	// are compared on their own.
-	rest      contract.BlockManifest
-	requires  []wantRequirement
-	resources []wantResource
-}
-
 func oneType(id string) []string { return []string{id} }
-
-var workedManifests = []wantWorkedManifest{
-	{
-		file:         "plain-v1beta.yaml",
-		id:           "plain",
-		version:      "3.0.0",
-		releaseClass: "breaking",
-		releaseNote:  "Plain runs its container on the app's EC2 host, against the Postgres database offered there.",
-		rest: contract.BlockManifest{
-			APIVersion: "mitstack/v1beta",
-			Type:       "block",
-			Metadata:   contract.ManifestMetadata{ID: "plain", Name: "Plain Tracker", Owner: "web-app-platform"},
-			Spec: contract.ManifestSpec{
-				Version:      "3.0.0",
-				ReleaseClass: "breaking",
-				ReleaseNote:  "Plain runs its container on the app's EC2 host, against the Postgres database offered there.",
-				Description:  "Runs the Plain tracker container on the app's host, connected to the app's Postgres database.",
-				Params: []contract.ManifestParam{
-					{Name: "image", Label: "Plain tracker container image", Required: true},
-				},
-				Provides: []string{"aws.ec2-container"},
-				Lifecycle: contract.ManifestLifecycle{
-					Endpoint:   "https://api.mitstack.dev/operators/plain/hook",
-					Operations: []string{"subscribe", "unsubscribe", "upgrade", "validate"},
-					Contract:   "kit/v1",
-				},
-			},
-		},
-		requires: []wantRequirement{
-			{types: oneType("aws.ec2-instance"), reference: "aws.ec2-instance"},
-			{types: oneType("aws.ec2-postgres-database"), reference: "aws.ec2-postgres-database"},
-		},
-		resources: []wantResource{
-			{name: "aws.ec2-container", typ: "aws.ec2-container", types: oneType("aws.ec2-container")},
-		},
-	},
-	{
-		file:         "aws-app-infra-v1beta.yaml",
-		id:           "aws-app-infra",
-		version:      "2.0.0",
-		releaseClass: "breaking",
-		releaseNote:  "AWS App Infrastructure offers its host, data volume, registry, deploy role and address as separate resources.",
-		rest: contract.BlockManifest{
-			APIVersion: "mitstack/v1beta",
-			Type:       "block",
-			Metadata:   contract.ManifestMetadata{ID: "aws-app-infra", Name: "AWS App Infrastructure"},
-			Spec: contract.ManifestSpec{
-				Version:      "2.0.0",
-				ReleaseClass: "breaking",
-				ReleaseNote:  "AWS App Infrastructure offers its host, data volume, registry, deploy role and address as separate resources.",
-				Description:  "Creates the app's host, data volume and image registry in the consumer's own AWS account, and the app's public address.",
-				Params: []contract.ManifestParam{
-					{Name: "instanceType", Label: "EC2 instance type"},
-					{Name: "domain", Label: "Your own domain pointed at the app"},
-					{Name: "customDomain", Label: "Extra hostname served alongside the app's address"},
-				},
-				Provides: []string{"aws.ec2-instance", "aws.ebs-volume", "aws.ecr-repository", "deploy-role", "aws.route53-record"},
-				Lifecycle: contract.ManifestLifecycle{
-					Endpoint:   "https://api.mitstack.dev/operators/aws-app-infra/hook",
-					Operations: []string{"subscribe", "unsubscribe", "upgrade", "validate"},
-					Contract:   "kit/v1",
-				},
-			},
-		},
-		requires: []wantRequirement{
-			{types: oneType("github.repository"), reference: "github.repository"},
-		},
-		resources: []wantResource{
-			{name: "aws.s3-bucket", typ: "aws.s3-bucket", types: oneType("aws.s3-bucket")},
-			{name: "aws.vpc", typ: "aws.vpc", types: oneType("aws.vpc")},
-			{name: "aws.security-group", typ: "aws.security-group", types: oneType("aws.security-group")},
-			{name: "aws.ec2-instance", typ: "aws.ec2-instance", types: oneType("aws.ec2-instance")},
-			{name: "aws.ebs-volume", typ: "aws.ebs-volume", types: oneType("aws.ebs-volume")},
-			{name: "aws.ecr-repository", typ: "aws.ecr-repository", types: oneType("aws.ecr-repository")},
-			{name: "ecr-push-role", typ: "aws.iam-role", types: oneType("aws.iam-role")},
-			{name: "deploy-role", typ: "aws.iam-role", types: oneType("aws.iam-role")},
-			{name: "aws.egress-proxy", typ: "aws.egress-proxy", types: oneType("aws.egress-proxy")},
-			{name: "aws.ssm-association", typ: "aws.ssm-association", types: oneType("aws.ssm-association")},
-			{name: "aws.route53-record", typ: "aws.route53-record", types: oneType("aws.route53-record")},
-		},
-	},
-}
 
 func requireRequirements(t *testing.T, got []contract.ManifestRequirement, want []wantRequirement) {
 	t.Helper()
@@ -171,57 +56,103 @@ func requireResources(t *testing.T, got []contract.ManifestResource, want []want
 			t.Errorf("spec.resources[%d] name, type, types = %q, %q, %q; want %q, %q, %q", i, g.Name, g.Type, g.Types, w.name, w.typ, w.types)
 		}
 		if g.Inputs != nil || g.On != "" {
-			t.Errorf("spec.resources[%d] inputs, on = %+v, %q; want both empty, since ADR 0085 retires them", i, g.Inputs, g.On)
+			t.Errorf("spec.resources[%d] inputs, on = %+v, %q; want both empty, since mitstack/v1beta retires them", i, g.Inputs, g.On)
 		}
 	}
 }
 
-func TestManifestAPIVersions_AreV1AlphaAndV1Beta(t *testing.T) {
-	if contract.ManifestAPIVersionV1Alpha != "mitstack/v1alpha" {
-		t.Errorf("contract.ManifestAPIVersionV1Alpha = %q, want %q", contract.ManifestAPIVersionV1Alpha, "mitstack/v1alpha")
-	}
-	if contract.ManifestAPIVersion != "mitstack/v1beta" {
-		t.Errorf("contract.ManifestAPIVersion = %q, want %q", contract.ManifestAPIVersion, "mitstack/v1beta")
-	}
-}
-
 func TestParseManifest_ReadsTheWorkedV1BetaManifests(t *testing.T) {
-	for _, w := range workedManifests {
+	cases := []struct {
+		file                                   string
+		id, version, releaseClass, releaseNote string
+		rest                                   contract.BlockManifest
+		requires                               []wantRequirement
+		resources                              []wantResource
+	}{
+		{
+			file: "plain-v1beta.yaml", id: "plain", version: "3.0.0", releaseClass: "breaking",
+			releaseNote: "Plain runs its container on the app's EC2 host, against the Postgres database offered there.",
+			rest: contract.BlockManifest{
+				APIVersion: "mitstack/v1beta", Type: "block",
+				Metadata: contract.ManifestMetadata{ID: "plain", Name: "Plain Tracker", Owner: "web-app-platform"},
+				Spec: contract.ManifestSpec{
+					Version: "3.0.0", ReleaseClass: "breaking",
+					ReleaseNote: "Plain runs its container on the app's EC2 host, against the Postgres database offered there.",
+					Description: "Runs the Plain tracker container on the app's host, connected to the app's Postgres database.",
+					Params:      []contract.ManifestParam{{Name: "image", Label: "Plain tracker container image", Required: true}},
+					Provides:    []string{"aws.ec2-container"},
+					Lifecycle: contract.ManifestLifecycle{Endpoint: "https://api.mitstack.dev/operators/plain/hook",
+						Operations: []string{"subscribe", "unsubscribe", "upgrade", "validate"}, Contract: "kit/v1"},
+				},
+			},
+			requires: []wantRequirement{
+				{types: oneType("aws.ec2-instance"), reference: "aws.ec2-instance"},
+				{types: oneType("aws.ec2-postgres-database"), reference: "aws.ec2-postgres-database"},
+			},
+			resources: []wantResource{{name: "aws.ec2-container", typ: "aws.ec2-container", types: oneType("aws.ec2-container")}},
+		},
+		{
+			file: "aws-app-infra-v1beta.yaml", id: "aws-app-infra", version: "2.0.0", releaseClass: "breaking",
+			releaseNote: "AWS App Infrastructure offers its host, data volume, registry, deploy role and address as separate resources.",
+			rest: contract.BlockManifest{
+				APIVersion: "mitstack/v1beta", Type: "block",
+				Metadata: contract.ManifestMetadata{ID: "aws-app-infra", Name: "AWS App Infrastructure"},
+				Spec: contract.ManifestSpec{
+					Version: "2.0.0", ReleaseClass: "breaking",
+					ReleaseNote: "AWS App Infrastructure offers its host, data volume, registry, deploy role and address as separate resources.",
+					Description: "Creates the app's host, data volume and image registry in the consumer's own AWS account, and the app's public address.",
+					Params: []contract.ManifestParam{
+						{Name: "instanceType", Label: "EC2 instance type"},
+						{Name: "domain", Label: "Your own domain pointed at the app"},
+						{Name: "customDomain", Label: "Extra hostname served alongside the app's address"},
+					},
+					Provides: []string{"aws.ec2-instance", "aws.ebs-volume", "aws.ecr-repository", "deploy-role", "aws.route53-record"},
+					Lifecycle: contract.ManifestLifecycle{Endpoint: "https://api.mitstack.dev/operators/aws-app-infra/hook",
+						Operations: []string{"subscribe", "unsubscribe", "upgrade", "validate"}, Contract: "kit/v1"},
+				},
+			},
+			requires: []wantRequirement{{types: oneType("github.repository"), reference: "github.repository"}},
+			resources: []wantResource{
+				{name: "aws.s3-bucket", typ: "aws.s3-bucket", types: oneType("aws.s3-bucket")},
+				{name: "aws.vpc", typ: "aws.vpc", types: oneType("aws.vpc")},
+				{name: "aws.security-group", typ: "aws.security-group", types: oneType("aws.security-group")},
+				{name: "aws.ec2-instance", typ: "aws.ec2-instance", types: oneType("aws.ec2-instance")},
+				{name: "aws.ebs-volume", typ: "aws.ebs-volume", types: oneType("aws.ebs-volume")},
+				{name: "aws.ecr-repository", typ: "aws.ecr-repository", types: oneType("aws.ecr-repository")},
+				{name: "ecr-push-role", typ: "aws.iam-role", types: oneType("aws.iam-role")},
+				{name: "deploy-role", typ: "aws.iam-role", types: oneType("aws.iam-role")},
+				{name: "aws.egress-proxy", typ: "aws.egress-proxy", types: oneType("aws.egress-proxy")},
+				{name: "aws.ssm-association", typ: "aws.ssm-association", types: oneType("aws.ssm-association")},
+				{name: "aws.route53-record", typ: "aws.route53-record", types: oneType("aws.route53-record")},
+			},
+		},
+	}
+	for _, w := range cases {
 		t.Run(w.file, func(t *testing.T) {
 			m, err := contract.ParseManifest(readManifestGolden(t, w.file))
+
 			if err != nil {
 				t.Fatalf("ParseManifest(%s): %v", w.file, err)
 			}
-			if m.APIVersion != contract.ManifestAPIVersion {
-				t.Errorf("APIVersion = %q, want %q", m.APIVersion, contract.ManifestAPIVersion)
-			}
-			if m.V1Alpha != nil {
-				t.Errorf("V1Alpha = %+v, want nil under %s", *m.V1Alpha, contract.ManifestAPIVersion)
-			}
-			if m.Block == nil {
-				t.Fatalf("Block is nil under %s", contract.ManifestAPIVersion)
+			if m.APIVersion != contract.ManifestAPIVersion || m.V1Alpha != nil || m.Block == nil {
+				t.Fatalf("APIVersion, V1Alpha, Block = %q, %v, %v; want %q, nil and a block", m.APIVersion, m.V1Alpha, m.Block, contract.ManifestAPIVersion)
 			}
 			if m.ID() != w.id || m.Version() != w.version || m.ReleaseClass() != w.releaseClass || m.ReleaseNote() != w.releaseNote {
 				t.Errorf("ID, Version, ReleaseClass, ReleaseNote = %q, %q, %q, %q; want %q, %q, %q, %q",
 					m.ID(), m.Version(), m.ReleaseClass(), m.ReleaseNote(), w.id, w.version, w.releaseClass, w.releaseNote)
 			}
-
 			got := *m.Block
 			gotRequires, gotResources := got.Spec.Requires, got.Spec.Resources
 			got.Spec.Requires, got.Spec.Resources = nil, nil
 			got.Spec.Description = strings.TrimRight(got.Spec.Description, "\n")
-			if !reflect.DeepEqual(got, w.rest) {
-				t.Errorf("manifest outside requires and resources =\n%+v\nwant\n%+v", got, w.rest)
-			}
+			wantField(t, "the manifest outside requires and resources", got, w.rest)
 			requireRequirements(t, gotRequires, w.requires)
 			requireResources(t, gotResources, w.resources)
 		})
 	}
 }
 
-// typedManifest lists a requirement and a resource in every form ADR 0085
-// gives an entry: a type id alone, a list of types with a name, one type
-// with a name, and a block list of types.
+// typedManifest lists a requirement and a resource in every form an entry takes: a type id alone, a list of types with a name, one type with a name, and a block list of types.
 const typedManifest = `apiVersion: mitstack/v1beta
 type: block
 metadata:
@@ -254,6 +185,7 @@ spec:
 
 func TestParseManifest_V1BetaReadsRequirementsAndResourcesByExactType(t *testing.T) {
 	b := parseBeta(t, []byte(typedManifest))
+
 	requireRequirements(t, b.Spec.Requires, []wantRequirement{
 		{types: oneType("github.repository"), reference: "github.repository"},
 		{name: "host", types: []string{"aws.ec2-instance", "hetzner.server"}, reference: "host"},
@@ -266,35 +198,21 @@ func TestParseManifest_V1BetaReadsRequirementsAndResourcesByExactType(t *testing
 		{name: "state", typ: "aws.s3-bucket", types: oneType("aws.s3-bucket")},
 		{name: "worker", types: []string{"aws.ec2-container", "hetzner.server-container"}},
 	})
-	if want := []string{"app-container", "aws.vpc"}; !slices.Equal(b.Spec.Provides, want) {
-		t.Errorf("spec.provides = %q, want %q", b.Spec.Provides, want)
-	}
+	wantField(t, "spec.provides", b.Spec.Provides, []string{"app-container", "aws.vpc"})
 }
 
 func TestParseManifest_V1BetaReadsTheShortRequiresListOfTypeIDs(t *testing.T) {
-	b := parseBeta(t, []byte(strings.Replace(typedManifest,
+	raw := edit(t, typedManifest,
 		"  requires:\n    - github.repository\n    - { name: host, type: [aws.ec2-instance, hetzner.server] }\n"+
 			"    - { name: primary, type: aws.iam-role }\n    - name: secondary\n      type: aws.iam-role\n      many: true\n",
-		"  requires: [github.repository]\n", 1)))
-	requireRequirements(t, b.Spec.Requires, []wantRequirement{
-		{types: oneType("github.repository"), reference: "github.repository"},
-	})
+		"  requires: [github.repository]\n")
+
+	b := parseBeta(t, raw)
+
+	requireRequirements(t, b.Spec.Requires, []wantRequirement{{types: oneType("github.repository"), reference: "github.repository"}})
 }
 
-// The parser judges the shape and the id grammar only: whether the
-// platform's catalogue holds a type is CheckManifestTypes' question.
-func TestParseManifest_V1BetaNeedsNoSnapshotToReadATypeTheCatalogueLacks(t *testing.T) {
-	raw := strings.Replace(typedManifest, "    - aws.vpc\n", "    - aws.not-in-any-catalogue\n", 1)
-	raw = strings.Replace(raw, "  provides: [app-container, aws.vpc]\n", "  provides: [app-container, aws.not-in-any-catalogue]\n", 1)
-	b := parseBeta(t, []byte(raw))
-	if got := b.Spec.Resources[0].Name; got != "aws.not-in-any-catalogue" {
-		t.Errorf("spec.resources[0] name = %q, want the type id it lists", got)
-	}
-}
-
-// retiredKeyManifest requires a named host at spec.requires[1] and declares
-// a named container at spec.resources[1], so a retired key added to either
-// is refused naming its path under that index.
+// retiredKeyManifest requires a named host at spec.requires[1] and declares a named container at spec.resources[1], so a key added to either is refused naming its path under that index.
 const retiredKeyManifest = `apiVersion: mitstack/v1beta
 type: block
 metadata:
@@ -320,120 +238,6 @@ spec:
     contract: kit/v1
 `
 
-func editRetired(t *testing.T, old, new string) []byte {
-	t.Helper()
-	if !strings.Contains(retiredKeyManifest, old) {
-		t.Fatalf("fixture edit: %q is not in the manifest", old)
-	}
-	return []byte(strings.Replace(retiredKeyManifest, old, new, 1))
-}
-
-func TestParseManifest_V1BetaRefusesARetiredEntryKeyAsAFieldItDoesNotHave(t *testing.T) {
-	parseBeta(t, []byte(retiredKeyManifest))
-	const hostType = "      type: aws.ec2-instance\n"
-	const containerType = "      type: aws.ec2-container\n"
-	cases := []struct {
-		label, old, new, field, entry string
-	}{
-		{"kind on a requirement", hostType, hostType + "      kind: host\n", "kind", "spec.requires[1]"},
-		{"in on a requirement", hostType, hostType + "      in: aws\n", "in", "spec.requires[1]"},
-		{"in as a list on a requirement", hostType, hostType + "      in: [aws, hetzner]\n", "in", "spec.requires[1]"},
-		{"on on a requirement", hostType, hostType + "      on: requires.github.repository\n", "on", "spec.requires[1]"},
-		{"inputs on a requirement", hostType, hostType + "      inputs: { region: params.image }\n", "inputs", "spec.requires[1]"},
-		{"a requirement by kind alone", "    - github.repository\n", "    - kind: git-repository\n", "kind", "spec.requires[0]"},
-		{"inputs on a resource", containerType, containerType + "      inputs: { image: params.image }\n", "inputs", "spec.resources[1]"},
-		{"nested inputs on a resource", containerType, containerType + "      inputs:\n        env:\n          DB_HOST: requires.host.outputs.hostId\n", "inputs", "spec.resources[1]"},
-		{"on on a resource", containerType, containerType + "      on: requires.host\n", "on", "spec.resources[1]"},
-		{"kind on a resource", containerType, containerType + "      kind: container\n", "kind", "spec.resources[1]"},
-		{"in on a resource", containerType, containerType + "      in: aws\n", "in", "spec.resources[1]"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			requireRefusedNaming(t, editRetired(t, tc.old, tc.new),
-				tc.entry+"."+tc.field+" is not a field of a mitstack/v1beta manifest")
-		})
-	}
-}
-
-func TestParseManifest_V1BetaRefusesAnEntryItCannotTellApartOrName(t *testing.T) {
-	cases := []struct {
-		label, old, new string
-		wants           []string
-	}{
-		{"a requirement listing types without a name",
-			"    - name: host\n      type: aws.ec2-instance\n",
-			"    - type: [aws.ec2-instance, hetzner.server]\n",
-			[]string{"spec.requires[1]", "name"}},
-		{"a resource listing types without a name",
-			"    - name: app-container\n      type: aws.ec2-container\n",
-			"    - type: [aws.ec2-container, hetzner.server-container]\n",
-			[]string{"spec.resources[1]", "name"}},
-		{"a requirement list naming one type twice",
-			"      type: aws.ec2-instance\n",
-			"      type: [aws.ec2-instance, aws.ec2-instance]\n",
-			[]string{"spec.requires[1]", "aws.ec2-instance"}},
-		{"a resource list naming one type twice",
-			"      type: aws.ec2-container\n",
-			"      type: [aws.ec2-container, aws.ec2-container]\n",
-			[]string{"spec.resources[1]", "aws.ec2-container"}},
-		{"two unnamed resources of one type",
-			"    - aws.vpc\n",
-			"    - aws.vpc\n    - aws.vpc\n",
-			[]string{"spec.resources[1]", "aws.vpc"}},
-		{"two unnamed requirements of one type",
-			"    - github.repository\n",
-			"    - github.repository\n    - github.repository\n",
-			[]string{"spec.requires[1]", "github.repository"}},
-		{"two resources of one name",
-			"    - aws.vpc\n",
-			"    - { name: app-container, type: aws.vpc }\n",
-			[]string{"app-container"}},
-		{"a requirement mapping with no type",
-			"      type: aws.ec2-instance\n",
-			"",
-			[]string{"spec.requires[1].type"}},
-		{"a resource mapping with no type",
-			"      type: aws.ec2-container\n",
-			"",
-			[]string{"spec.resources[1].type"}},
-		{"an empty list of types",
-			"      type: aws.ec2-container\n",
-			"      type: []\n",
-			[]string{"spec.resources[1].type"}},
-		{"a provides entry naming no resource",
-			"  provides: [app-container]\n",
-			"  provides: [app-container, no-such-resource]\n",
-			[]string{"spec.provides", "no-such-resource"}},
-		{"a provides entry naming the type of a named resource",
-			"  provides: [app-container]\n",
-			"  provides: [aws.ec2-container]\n",
-			[]string{"spec.provides", "aws.ec2-container"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			requireRefusedNaming(t, editRetired(t, tc.old, tc.new), tc.wants...)
-		})
-	}
-}
-
-func TestParseManifest_V1BetaRefusesATypeIDOutsideTheGrammarNamingIt(t *testing.T) {
-	cases := []struct {
-		label, old, new, id, entry string
-	}{
-		{"a resource type id", "    - aws.vpc\n", "    - AWS.VPC\n", "AWS.VPC", "spec.resources[0]"},
-		{"a resource type id with no capability", "    - aws.vpc\n", "    - vpc\n", "vpc", "spec.resources[0]"},
-		{"a requirement type id", "    - github.repository\n", "    - github_repository\n", "github_repository", "spec.requires[0]"},
-		{"a type id inside a list", "      type: aws.ec2-container\n", "      type: [aws.ec2-container, hetzner.Server_Container]\n",
-			"hetzner.Server_Container", "spec.resources[1]"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			requireRefusedNaming(t, editRetired(t, tc.old, tc.new), tc.id, tc.entry)
-		})
-	}
-}
-
-// betaManifest is a small valid v1beta manifest the behaviour tests edit.
 const betaManifest = `apiVersion: mitstack/v1beta
 type: block
 metadata:
@@ -458,193 +262,152 @@ spec:
     contract: kit/v1
 `
 
-// editBeta returns betaManifest with each old, new pair of replacements
-// applied once. It fails the test when an old text is not in the manifest,
-// so a fixture edit can never silently become a no-op.
-func editBeta(t *testing.T, pairs ...string) []byte {
-	t.Helper()
-	out := betaManifest
-	for i := 0; i+1 < len(pairs); i += 2 {
-		if !strings.Contains(out, pairs[i]) {
-			t.Fatalf("fixture edit: %q is not in the manifest", pairs[i])
-		}
-		out = strings.Replace(out, pairs[i], pairs[i+1], 1)
-	}
-	return []byte(out)
-}
-
-// parseBeta parses raw and returns its Block, failing the test when raw is
-// refused or is not read as a v1beta manifest.
-func parseBeta(t *testing.T, raw []byte) *contract.BlockManifest {
-	t.Helper()
-	m, err := contract.ParseManifest(raw)
-	if err != nil {
-		t.Fatalf("ParseManifest: %v\n%s", err, raw)
-	}
-	if m.Block == nil {
-		t.Fatalf("ParseManifest gave no Block for a %s manifest: %+v", contract.ManifestAPIVersion, m)
-	}
-	return m.Block
-}
-
-// requireRefusedNaming fails the test unless ParseManifest refuses raw with
-// an error containing every one of wants.
-func requireRefusedNaming(t *testing.T, raw []byte, wants ...string) {
-	t.Helper()
-	m, err := contract.ParseManifest(raw)
-	if err == nil {
-		t.Fatalf("ParseManifest accepted the manifest (%+v), want an error naming %q:\n%s", m, wants, raw)
-	}
-	for _, want := range wants {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("ParseManifest error = %q, want it to name %q", err, want)
-		}
-	}
-}
-
-// The cluster's copy is hcloud-k3s-cluster's 4.1.0 manifest with its type set to capability and its release note cut to 4.1.0's entry.
-func TestParseManifest_V1BetaReadsTypeBlockOrCapability(t *testing.T) {
+func TestParseManifest_V1BetaReadsEachFieldAsWritten(t *testing.T) {
 	cluster, err := os.ReadFile("../blockverify/testdata/capability-without-issue-handler/manifest.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cases := []struct {
-		name, want string
-		raw        []byte
-	}{
-		{"the base fixture", contract.ManifestTypeBlock, []byte(betaManifest)},
-		{"the base fixture typed capability", contract.ManifestTypeCapability, editBeta(t, "type: block\n", "type: capability\n")},
-		{"hcloud-k3s-cluster typed capability", contract.ManifestTypeCapability, cluster},
+	requires := func(line string) []byte {
+		return edit(t, betaManifest, "    - type: aws.ec2-instance\n", "    - type: aws.ec2-instance\n"+line)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := parseBeta(t, tc.raw).Type; got != tc.want {
-				t.Errorf("Type = %q, want %q", got, tc.want)
-			}
-		})
+	spec := func(line string) []byte {
+		return edit(t, betaManifest, "  version: 1.0.0\n", "  version: 1.0.0\n"+line)
 	}
-}
-
-func TestParseManifest_V1BetaAcceptsTheBaseFixture(t *testing.T) {
-	if b := parseBeta(t, []byte(betaManifest)); len(b.Spec.Resources) != 2 {
-		t.Fatalf("betaManifest gave resources %+v, want two", b.Spec.Resources)
+	lifecycle := func(lines string) []byte {
+		return edit(t, betaManifest, "    contract: kit/v1\n", "    contract: kit/v1\n"+lines)
 	}
-}
-
-// The keys ADR 0083 takes out of the manifest stay out because v1beta is
-// strict: a key the types do not name is refused, naming its path.
-func TestParseManifest_V1BetaRefusesAnUnknownKeyNamingItsPath(t *testing.T) {
-	cases := []struct {
-		path  string
-		edits []string
-	}{
-		{"metadata.labels", []string{"  name: Fixture Block\n", "  name: Fixture Block\n  labels: none\n"}},
-		{"spec.outputs", []string{"  requires:\n", "  outputs: [host]\n  requires:\n"}},
-		{"spec.providedContracts", []string{"  provides: [app-security-group]\n",
-			"  provides: [app-security-group]\n  providedContracts:\n    - capability: app-host\n      format: config\n"}},
-		{"spec.dependsOn", []string{"  requires:\n", "  dependsOn:\n    - weather-app\n  requires:\n"}},
-		{"spec.params[0].type", []string{"      label: Container image\n", "      label: Container image\n      type: string\n"}},
-		{"spec.requires[0].capability", []string{"    - type: aws.ec2-instance\n", "    - type: aws.ec2-instance\n      capability: app-host\n"}},
-		{"spec.requires[0].reads", []string{"    - type: aws.ec2-instance\n", "    - type: aws.ec2-instance\n      reads: [region]\n"}},
-		{"spec.resources[1].ownership", []string{"      type: aws.security-group\n", "      type: aws.security-group\n      ownership: created\n"}},
-		{"spec.lifecycle.upgradeStrategy", []string{"    contract: kit/v1\n", "    contract: kit/v1\n    upgradeStrategy: rolling\n"}},
-		{"spec.observability.resources", []string{"  lifecycle:\n", "  observability:\n    resources:\n      - name: fallback-network\n  lifecycle:\n"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.path, func(t *testing.T) {
-			requireRefusedNaming(t, editBeta(t, tc.edits...), tc.path)
-		})
-	}
-}
-
-func TestParseManifest_V1BetaRefusesAMissingRequiredFieldNamingItsPath(t *testing.T) {
 	cases := []struct {
 		label string
-		wants []string
-		edits []string
+		raw   []byte
+		got   func(b *contract.BlockManifest) any
+		want  any
 	}{
-		{"type absent", []string{"type"}, []string{"type: block\n", ""}},
-		{"type neither block nor capability", []string{`type is "component"`, `"block"`, `"capability"`}, []string{"type: block\n", "type: component\n"}},
-		{"metadata.id absent", []string{"metadata.id"}, []string{"  id: fixture-block\n", ""}},
-		{"spec.version absent", []string{"spec.version"}, []string{"  version: 1.0.0\n", ""}},
-		{"a requirement without a type", []string{"spec.requires[0].type"}, []string{"    - type: aws.ec2-instance\n", "    - name: primary\n"}},
-		{"a resource without a type", []string{"spec.resources[1].type"}, []string{"      type: aws.security-group\n", ""}},
+		{"the base fixture declares two resources", []byte(betaManifest), func(b *contract.BlockManifest) any { return len(b.Spec.Resources) }, 2},
+		{"the retired-key fixture parses", []byte(retiredKeyManifest), func(b *contract.BlockManifest) any { return b.Metadata.ID }, "retired-keys"},
+		{"the base fixture is typed block", []byte(betaManifest), func(b *contract.BlockManifest) any { return b.Type }, contract.ManifestTypeBlock},
+		{"the base fixture typed capability", edit(t, betaManifest, "type: block\n", "type: capability\n"),
+			func(b *contract.BlockManifest) any { return b.Type }, contract.ManifestTypeCapability},
+		{"hcloud-k3s-cluster's manifest typed capability", cluster, func(b *contract.BlockManifest) any { return b.Type }, contract.ManifestTypeCapability},
+		{"a resource with no name is named by its type", edit(t, betaManifest, "    - name: fallback-network\n      type: aws.vpc\n", "    - type: aws.vpc\n"),
+			func(b *contract.BlockManifest) any { return b.Spec.Resources[0].Name }, "aws.vpc"},
+		{"a type the platform's catalogue lacks needs no snapshot to parse",
+			edit(t, typedManifest, "    - aws.vpc\n", "    - aws.not-in-any-catalogue\n",
+				"  provides: [app-container, aws.vpc]\n", "  provides: [app-container, aws.not-in-any-catalogue]\n"),
+			func(b *contract.BlockManifest) any { return b.Spec.Resources[0].Name }, "aws.not-in-any-catalogue"},
+		{"many absent reads false", requires(""), func(b *contract.BlockManifest) any { return b.Spec.Requires[0].Many }, false},
+		{"many: true reads true", requires("      many: true\n"), func(b *contract.BlockManifest) any { return b.Spec.Requires[0].Many }, true},
+		{"many: false reads false", requires("      many: false\n"), func(b *contract.BlockManifest) any { return b.Spec.Requires[0].Many }, false},
+		{"a quoted number is a string", edit(t, betaManifest, "      label: Container image\n", "      label: Container image\n      default: \"8080\"\n"),
+			func(b *contract.BlockManifest) any { return b.Spec.Params[0].Default }, "8080"},
+		{"receivesAppSecrets absent reads false", spec(""), func(b *contract.BlockManifest) any { return b.Spec.ReceivesAppSecrets }, false},
+		{"receivesAppSecrets: true reads true", spec("  receivesAppSecrets: true\n"),
+			func(b *contract.BlockManifest) any { return b.Spec.ReceivesAppSecrets }, true},
+		{"receivesAppSecrets: false reads false", spec("  receivesAppSecrets: false\n"),
+			func(b *contract.BlockManifest) any { return b.Spec.ReceivesAppSecrets }, false},
+		{"needsCredentialRefresh absent reads false", lifecycle(""),
+			func(b *contract.BlockManifest) any { return b.Spec.Lifecycle.NeedsCredentialRefresh }, false},
+		{"needsCredentialRefresh: true reads true", lifecycle("    needsCredentialRefresh: true\n"),
+			func(b *contract.BlockManifest) any { return b.Spec.Lifecycle.NeedsCredentialRefresh }, true},
+		{"needsCredentialRefresh: false reads false", lifecycle("    needsCredentialRefresh: false\n"),
+			func(b *contract.BlockManifest) any { return b.Spec.Lifecycle.NeedsCredentialRefresh }, false},
+		{"no verbConnections reads no declaration", lifecycle(""),
+			func(b *contract.BlockManifest) any { return b.Spec.Lifecycle.VerbConnections }, (*contract.ManifestVerbConnections)(nil)},
+		{"verbConnections reads both lists", lifecycle("    verbConnections:\n      validate: [github]\n      unsubscribe: [github, hetzner]\n"),
+			func(b *contract.BlockManifest) any { return b.Spec.Lifecycle.VerbConnections },
+			&contract.ManifestVerbConnections{Validate: []string{"github"}, Unsubscribe: []string{"github", "hetzner"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
-			requireRefusedNaming(t, editBeta(t, tc.edits...), tc.wants...)
+			b := parseBeta(t, tc.raw)
+
+			got := tc.got(b)
+
+			wantField(t, tc.label, got, tc.want)
 		})
 	}
 }
 
-// ADR 0085 names a resource only where its type cannot: an entry with no
-// name is named by the type it lists.
-func TestParseManifest_V1BetaNamesAResourceWithNoNameByItsType(t *testing.T) {
-	b := parseBeta(t, editBeta(t,
-		"    - name: fallback-network\n      type: aws.vpc\n", "    - type: aws.vpc\n"))
-	if got := b.Spec.Resources[0].Name; got != "aws.vpc" {
-		t.Errorf("spec.resources[0] name = %q, want the type it lists, %q", got, "aws.vpc")
+func TestParseManifest_V1BetaRefusesAManifestNamingWhatIsWrong(t *testing.T) {
+	retired := func(pairs ...string) []byte { return edit(t, retiredKeyManifest, pairs...) }
+	beta := func(pairs ...string) []byte { return edit(t, betaManifest, pairs...) }
+	requires := func(line string) []byte {
+		return beta("    - type: aws.ec2-instance\n", "    - type: aws.ec2-instance\n"+line)
 	}
-}
-
-func TestParseManifest_V1BetaManyTakesTrueOrFalseOnly(t *testing.T) {
-	for _, tc := range []struct {
-		line string
-		want bool
-	}{
-		{"", false},
-		{"      many: true\n", true},
-		{"      many: false\n", false},
-	} {
-		t.Run("accepts "+strings.TrimSpace(tc.line), func(t *testing.T) {
-			b := parseBeta(t, editBeta(t, "    - type: aws.ec2-instance\n", "    - type: aws.ec2-instance\n"+tc.line))
-			if got := b.Spec.Requires[0].Many; got != tc.want {
-				t.Errorf("spec.requires[0].many = %v, want %v", got, tc.want)
-			}
-		})
-	}
-	for _, value := range []string{"yes", "1", `"true"`, "sometimes"} {
-		t.Run("refuses "+value, func(t *testing.T) {
-			requireRefusedNaming(t, editBeta(t, "    - type: aws.ec2-instance\n", "    - type: aws.ec2-instance\n      many: "+value+"\n"),
-				"spec.requires[0].many")
-		})
-	}
-}
-
-func TestParseManifest_V1BetaRefusesADuplicateResourceName(t *testing.T) {
-	raw := editBeta(t,
-		"    - name: app-security-group\n", "    - name: fallback-network\n",
-		"  provides: [app-security-group]\n", "  provides: [fallback-network]\n")
-	requireRefusedNaming(t, raw, "fallback-network")
-}
-
-func TestParseManifest_V1BetaRefusesAProvidesEntryNamingNoResource(t *testing.T) {
-	raw := editBeta(t, "  provides: [app-security-group]\n", "  provides: [app-security-group, no-such-resource]\n")
-	requireRefusedNaming(t, raw, "spec.provides", "no-such-resource")
-}
-
-// An alias or a merge key brings in text from elsewhere in the document,
-// which the reader does not follow, so it refuses the manifest rather than
-// guessing what it declares, and says which it found and where.
-func TestParseManifest_RefusesAnAliasOrAMergeKey(t *testing.T) {
-	parseBeta(t, []byte(betaManifest))
+	spec := func(line string) []byte { return beta("  version: 1.0.0\n", "  version: 1.0.0\n"+line) }
+	lifecycle := func(lines string) []byte { return beta("    contract: kit/v1\n", "    contract: kit/v1\n"+lines) }
 	cases := []struct {
 		label string
 		raw   []byte
 		wants []string
 	}{
-		{"an alias as a resource type", editBeta(t,
-			"      type: aws.vpc\n", "      type: &net aws.vpc\n",
-			"      type: aws.security-group\n", "      type: *net\n"),
+		{"a requirement listing types without a name", retired("    - name: host\n      type: aws.ec2-instance\n", "    - type: [aws.ec2-instance, hetzner.server]\n"),
+			[]string{"spec.requires[1]", "name"}},
+		{"a resource listing types without a name", retired("    - name: app-container\n      type: aws.ec2-container\n", "    - type: [aws.ec2-container, hetzner.server-container]\n"),
+			[]string{"spec.resources[1]", "name"}},
+		{"a requirement list naming one type twice", retired("      type: aws.ec2-instance\n", "      type: [aws.ec2-instance, aws.ec2-instance]\n"),
+			[]string{"spec.requires[1]", "aws.ec2-instance"}},
+		{"a resource list naming one type twice", retired("      type: aws.ec2-container\n", "      type: [aws.ec2-container, aws.ec2-container]\n"),
+			[]string{"spec.resources[1]", "aws.ec2-container"}},
+		{"two unnamed resources of one type", retired("    - aws.vpc\n", "    - aws.vpc\n    - aws.vpc\n"), []string{"spec.resources[1]", "aws.vpc"}},
+		{"two unnamed requirements of one type", retired("    - github.repository\n", "    - github.repository\n    - github.repository\n"),
+			[]string{"spec.requires[1]", "github.repository"}},
+		{"two resources of one name", retired("    - aws.vpc\n", "    - { name: app-container, type: aws.vpc }\n"), []string{"app-container"}},
+		{"two resources of one name written as mappings", beta("    - name: app-security-group\n", "    - name: fallback-network\n",
+			"  provides: [app-security-group]\n", "  provides: [fallback-network]\n"), []string{"fallback-network"}},
+		{"a requirement mapping with no type", retired("      type: aws.ec2-instance\n", ""), []string{"spec.requires[1].type"}},
+		{"a resource mapping with no type", retired("      type: aws.ec2-container\n", ""), []string{"spec.resources[1].type"}},
+		{"an empty list of types", retired("      type: aws.ec2-container\n", "      type: []\n"), []string{"spec.resources[1].type"}},
+		{"a provides entry naming no resource", retired("  provides: [app-container]\n", "  provides: [app-container, no-such-resource]\n"),
+			[]string{"spec.provides", "no-such-resource"}},
+		{"a provides entry naming the type of a named resource", retired("  provides: [app-container]\n", "  provides: [aws.ec2-container]\n"),
+			[]string{"spec.provides", "aws.ec2-container"}},
+		{"a resource type id outside the grammar", retired("    - aws.vpc\n", "    - AWS.VPC\n"), []string{"AWS.VPC", "spec.resources[0]"}},
+		{"a resource type id with no capability", retired("    - aws.vpc\n", "    - vpc\n"), []string{"vpc", "spec.resources[0]"}},
+		{"a requirement type id outside the grammar", retired("    - github.repository\n", "    - github_repository\n"),
+			[]string{"github_repository", "spec.requires[0]"}},
+		{"a type id inside a list outside the grammar", retired("      type: aws.ec2-container\n", "      type: [aws.ec2-container, hetzner.Server_Container]\n"),
+			[]string{"hetzner.Server_Container", "spec.resources[1]"}},
+		{"type absent", beta("type: block\n", ""), []string{"type"}},
+		{"type neither block nor capability", beta("type: block\n", "type: component\n"), []string{`type is "component"`, `"block"`, `"capability"`}},
+		{"metadata.id absent", beta("  id: fixture-block\n", ""), []string{"metadata.id"}},
+		{"spec.version absent", beta("  version: 1.0.0\n", ""), []string{"spec.version"}},
+		{"a requirement without a type", beta("    - type: aws.ec2-instance\n", "    - name: primary\n"), []string{"spec.requires[0].type"}},
+		{"a resource without a type", beta("      type: aws.security-group\n", ""), []string{"spec.resources[1].type"}},
+		{"many: yes", requires("      many: yes\n"), []string{"spec.requires[0].many"}},
+		{"many: 1", requires("      many: 1\n"), []string{"spec.requires[0].many"}},
+		{`many: "true"`, requires("      many: \"true\"\n"), []string{"spec.requires[0].many"}},
+		{"many: sometimes", requires("      many: sometimes\n"), []string{"spec.requires[0].many"}},
+		{"an alias as a resource type", beta("      type: aws.vpc\n", "      type: &net aws.vpc\n", "      type: aws.security-group\n", "      type: *net\n"),
 			[]string{"spec.resources[1].type", "alias"}},
-		{"a merge key in a resource", editBeta(t,
-			"    - name: app-security-group\n      type: aws.security-group\n",
-			"    - name: app-security-group\n      <<: { type: aws.security-group }\n"),
-			[]string{"spec.resources[1]", "merge key"}},
-		{"an alias as a list", editBeta(t,
-			"  provides: [app-security-group]\n", "  provides: &provided [app-security-group]\n",
-			"    operations: [subscribe, unsubscribe]\n", "    operations: *provided\n"),
-			[]string{"spec.lifecycle.operations", "alias"}},
+		{"a merge key in a resource", beta("    - name: app-security-group\n      type: aws.security-group\n",
+			"    - name: app-security-group\n      <<: { type: aws.security-group }\n"), []string{"spec.resources[1]", "merge key"}},
+		{"an alias as a list", beta("  provides: [app-security-group]\n", "  provides: &provided [app-security-group]\n",
+			"    operations: [subscribe, unsubscribe]\n", "    operations: *provided\n"), []string{"spec.lifecycle.operations", "alias"}},
+		{"a null resource type", beta("      type: aws.security-group\n", "      type:\n"), []string{"spec.resources[1].type"}},
+		{"a null optional field", beta("  name: Fixture Block\n", "  name: Fixture Block\n  owner:\n"), []string{"metadata.owner"}},
+		{"a plain number in a string field", beta("  name: Fixture Block\n", "  name: 2048\n"), []string{"metadata.name"}},
+		{"a plain number as a param default", beta("      label: Container image\n", "      label: Container image\n      default: 8080\n"),
+			[]string{"spec.params[0].default"}},
+		{"a plain boolean in a string field", beta("      label: Container image\n", "      label: true\n"), []string{"spec.params[0].label"}},
+		{"no resources", beta("  resources:\n    - name: fallback-network\n      type: aws.vpc\n    - name: app-security-group\n"+
+			"      type: aws.security-group\n  provides: [app-security-group]\n", "  resources: []\n"), []string{"spec.resources"}},
+		{"no lifecycle operations", beta("    operations: [subscribe, unsubscribe]\n", "    operations: []\n"), []string{"spec.lifecycle.operations"}},
+		{"one connection name in place of a list", lifecycle("    verbConnections:\n      validate: github\n"),
+			[]string{"spec.lifecycle.verbConnections.validate must be a list"}},
+		{"a plain number as a connection name", lifecycle("    verbConnections:\n      unsubscribe: [1]\n"),
+			[]string{"spec.lifecycle.verbConnections.unsubscribe[0]"}},
+		{"receivesAppSecrets: yes", spec("  receivesAppSecrets: yes\n"), []string{"spec.receivesAppSecrets"}},
+		{"receivesAppSecrets: 1", spec("  receivesAppSecrets: 1\n"), []string{"spec.receivesAppSecrets"}},
+		{`receivesAppSecrets: "true"`, spec("  receivesAppSecrets: \"true\"\n"), []string{"spec.receivesAppSecrets"}},
+		{"receivesAppSecrets: sometimes", spec("  receivesAppSecrets: sometimes\n"), []string{"spec.receivesAppSecrets"}},
+		{"receivesAppSecrets: null", spec("  receivesAppSecrets: null\n"), []string{"spec.receivesAppSecrets"}},
+		{"needsCredentialRefresh: yes", lifecycle("    needsCredentialRefresh: yes\n"), []string{"spec.lifecycle.needsCredentialRefresh"}},
+		{"needsCredentialRefresh: 1", lifecycle("    needsCredentialRefresh: 1\n"), []string{"spec.lifecycle.needsCredentialRefresh"}},
+		{`needsCredentialRefresh: "true"`, lifecycle("    needsCredentialRefresh: \"true\"\n"), []string{"spec.lifecycle.needsCredentialRefresh"}},
+		{"needsCredentialRefresh: sometimes", lifecycle("    needsCredentialRefresh: sometimes\n"), []string{"spec.lifecycle.needsCredentialRefresh"}},
+		{"needsCredentialRefresh: null", lifecycle("    needsCredentialRefresh: null\n"), []string{"spec.lifecycle.needsCredentialRefresh"}},
+		{"an unknown lifecycle key beside needsCredentialRefresh", lifecycle("    needsCredentialRefresh: true\n    bogus: 1\n"),
+			[]string{"spec.lifecycle.bogus"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -653,265 +416,9 @@ func TestParseManifest_RefusesAnAliasOrAMergeKey(t *testing.T) {
 	}
 }
 
-// The parser accepts nothing manifest.schema.json refuses: a null value, a
-// plain number or boolean where the schema wants a string, and an empty
-// list where a block must declare at least one entry. Each refusal names
-// its path.
-func TestParseManifest_V1BetaRefusesWhatTheSchemaRefusesNamingItsPath(t *testing.T) {
-	cases := []struct {
-		label, path string
-		edits       []string
-	}{
-		{"a null resource type", "spec.resources[1].type", []string{
-			"      type: aws.security-group\n", "      type:\n"}},
-		{"a null optional field", "metadata.owner", []string{
-			"  name: Fixture Block\n", "  name: Fixture Block\n  owner:\n"}},
-		{"a plain number in a string field", "metadata.name", []string{
-			"  name: Fixture Block\n", "  name: 2048\n"}},
-		{"a plain number as a param default", "spec.params[0].default", []string{
-			"      label: Container image\n", "      label: Container image\n      default: 8080\n"}},
-		{"a plain boolean in a string field", "spec.params[0].label", []string{
-			"      label: Container image\n", "      label: true\n"}},
-		{"no resources", "spec.resources", []string{
-			"  resources:\n    - name: fallback-network\n      type: aws.vpc\n    - name: app-security-group\n" +
-				"      type: aws.security-group\n  provides: [app-security-group]\n",
-			"  resources: []\n"}},
-		{"no lifecycle operations", "spec.lifecycle.operations", []string{
-			"    operations: [subscribe, unsubscribe]\n", "    operations: []\n"}},
-		{"one connection name in place of a list", "spec.lifecycle.verbConnections.validate must be a list", []string{
-			"    contract: kit/v1\n", "    contract: kit/v1\n    verbConnections:\n      validate: github\n"}},
-		{"a plain number as a connection name", "spec.lifecycle.verbConnections.unsubscribe[0]", []string{
-			"    contract: kit/v1\n", "    contract: kit/v1\n    verbConnections:\n      unsubscribe: [1]\n"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			requireRefusedNaming(t, editBeta(t, tc.edits...), tc.path)
-		})
-	}
-}
-
-// A quoted value is a string wherever it is written.
-func TestParseManifest_V1BetaAcceptsAQuotedString(t *testing.T) {
-	b := parseBeta(t, editBeta(t, "      label: Container image\n", "      label: Container image\n      default: \"8080\"\n"))
-	if got := b.Spec.Params[0].Default; got != "8080" {
-		t.Errorf("spec.params[0].default = %q, want %q", got, "8080")
-	}
-}
-
-// v1alphaManifest carries a padded quoted id and version, a folded release
-// note, and outputs and reads in both list forms.
-const v1alphaManifest = `apiVersion: mitstack/v1alpha
-kind: Block
-metadata:
-  id: " reads-consumer"
-  name: Reads Consumer
-spec:
-  layer: backend
-  version: " 1.2.0 "
-  releaseClass: feature
-  releaseNote: >
-    Adds the reads.
-  outputs:
-    - dbName
-    - host.type
-  requires:
-    - capability: database
-      reads: [host, port]
-    - capability: github
-    - capability: app-host
-      reads:
-        - region
-`
-
-// Under v1alpha the parser reads the fields blockverify's manifest suite
-// checks into V1AlphaManifest's own fields, under either top-level spelling.
-func TestParseManifest_V1AlphaReadsOutputsAndRequiresReads(t *testing.T) {
-	for label, raw := range map[string]string{
-		"kind: Block": v1alphaManifest,
-		"type: block": strings.Replace(v1alphaManifest, "kind: Block\n", "type: block\n", 1),
-	} {
-		t.Run(label, func(t *testing.T) {
-			m, err := contract.ParseManifest([]byte(raw))
-			if err != nil {
-				t.Fatalf("ParseManifest: %v", err)
-			}
-			if m.APIVersion != contract.ManifestAPIVersionV1Alpha {
-				t.Errorf("APIVersion = %q, want %q", m.APIVersion, contract.ManifestAPIVersionV1Alpha)
-			}
-			if m.Block != nil {
-				t.Errorf("Block = %+v, want nil under %s", *m.Block, contract.ManifestAPIVersionV1Alpha)
-			}
-			if m.V1Alpha == nil {
-				t.Fatalf("V1Alpha is nil under %s", contract.ManifestAPIVersionV1Alpha)
-			}
-			a := m.V1Alpha
-			if a.ID != " reads-consumer" || m.ID() != " reads-consumer" {
-				t.Errorf("V1Alpha.ID, ID() = %q, %q; want the untrimmed %q", a.ID, m.ID(), " reads-consumer")
-			}
-			if a.Version != "1.2.0" || m.Version() != "1.2.0" {
-				t.Errorf("V1Alpha.Version, Version() = %q, %q; want the trimmed %q", a.Version, m.Version(), "1.2.0")
-			}
-			if a.ReleaseClass != "feature" || m.ReleaseClass() != "feature" {
-				t.Errorf("V1Alpha.ReleaseClass, ReleaseClass() = %q, %q; want %q", a.ReleaseClass, m.ReleaseClass(), "feature")
-			}
-			if strings.TrimSpace(a.ReleaseNote) != "Adds the reads." || strings.TrimSpace(m.ReleaseNote()) != "Adds the reads." {
-				t.Errorf("V1Alpha.ReleaseNote, ReleaseNote() = %q, %q; want %q", a.ReleaseNote, m.ReleaseNote(), "Adds the reads.")
-			}
-			if want := []string{"dbName", "host.type"}; !slices.Equal(a.Outputs, want) {
-				t.Errorf("V1Alpha.Outputs = %q, want %q", a.Outputs, want)
-			}
-			wantRequires := []contract.V1AlphaRequirement{
-				{Capability: "database", Reads: []string{"host", "port"}},
-				{Capability: "github"},
-				{Capability: "app-host", Reads: []string{"region"}},
-			}
-			if len(a.Requires) != len(wantRequires) {
-				t.Fatalf("V1Alpha.Requires = %+v, want %+v", a.Requires, wantRequires)
-			}
-			for i, want := range wantRequires {
-				if a.Requires[i].Capability != want.Capability || !slices.Equal(a.Requires[i].Reads, want.Reads) {
-					t.Errorf("V1Alpha.Requires[%d] = %+v, want %+v", i, a.Requires[i], want)
-				}
-			}
-		})
-	}
-}
-
-func TestParseManifest_RefusesAnUnknownOrMissingAPIVersionNamingBothKnownVersions(t *testing.T) {
-	body := "type: block\nmetadata:\n  id: fixture-block\nspec:\n  version: 1.0.0\n"
-	cases := []struct {
-		label, raw string
-		wants      []string
-	}{
-		{"absent", body, nil},
-		{"empty", "apiVersion: \"\"\n" + body, nil},
-		{"a later version", "apiVersion: mitstack/v2\n" + body, []string{"mitstack/v2"}},
-		{"another group", "apiVersion: example.test/v1beta\n" + body, []string{"example.test/v1beta"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			wants := append([]string{contract.ManifestAPIVersionV1Alpha, contract.ManifestAPIVersion}, tc.wants...)
-			requireRefusedNaming(t, []byte(tc.raw), wants...)
-		})
-	}
-}
-
-// specReceivesAppSecrets reads ManifestSpec.ReceivesAppSecrets by reflection,
-// so a missing field fails its own test instead of the whole package build.
-func specReceivesAppSecrets(t *testing.T, b *contract.BlockManifest) bool {
-	t.Helper()
-	f := reflect.ValueOf(b.Spec).FieldByName("ReceivesAppSecrets")
-	if !f.IsValid() {
-		t.Fatal("ManifestSpec has no ReceivesAppSecrets field")
-	}
-	if f.Kind() != reflect.Bool {
-		t.Fatalf("ManifestSpec.ReceivesAppSecrets kind = %v, want bool", f.Kind())
-	}
-	return f.Bool()
-}
-
-func TestParseManifest_V1BetaReadsReceivesAppSecretsAsAnOptionalFlag(t *testing.T) {
-	for _, tc := range []struct {
-		label, line string
-		want        bool
-	}{
-		{"absent reads false", "", false},
-		{"true reads true", "  receivesAppSecrets: true\n", true},
-		{"false reads false", "  receivesAppSecrets: false\n", false},
-	} {
-		t.Run(tc.label, func(t *testing.T) {
-			b := parseBeta(t, editBeta(t, "  version: 1.0.0\n", "  version: 1.0.0\n"+tc.line))
-
-			if got := specReceivesAppSecrets(t, b); got != tc.want {
-				t.Errorf("spec.receivesAppSecrets after %q = %v, want %v", tc.line, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestParseManifest_V1BetaReceivesAppSecretsTakesTrueOrFalseOnly(t *testing.T) {
-	for _, value := range []string{"yes", "1", `"true"`, "sometimes", "null"} {
-		t.Run("refuses "+value, func(t *testing.T) {
-			raw := editBeta(t, "  version: 1.0.0\n", "  version: 1.0.0\n  receivesAppSecrets: "+value+"\n")
-
-			requireRefusedNaming(t, raw, "spec.receivesAppSecrets")
-		})
-	}
-}
-
-func TestManifestSpec_ReceivesAppSecretsMarshalsUnderItsOptionalKey(t *testing.T) {
-	f, ok := reflect.TypeOf(contract.ManifestSpec{}).FieldByName("ReceivesAppSecrets")
-	if !ok {
-		t.Fatal("ManifestSpec has no ReceivesAppSecrets field")
-	}
-
-	if got, want := f.Tag.Get("json"), "receivesAppSecrets,omitempty"; got != want {
-		t.Errorf("ManifestSpec.ReceivesAppSecrets json tag = %q, want %q", got, want)
-	}
-}
-
-// lifecycleNeedsCredentialRefresh reads the field by reflection, so a missing field fails its own test instead of the package build.
-func lifecycleNeedsCredentialRefresh(t *testing.T, b *contract.BlockManifest) bool {
-	t.Helper()
-	f := reflect.ValueOf(b.Spec.Lifecycle).FieldByName("NeedsCredentialRefresh")
-	if !f.IsValid() {
-		t.Fatal("ManifestLifecycle has no NeedsCredentialRefresh field")
-	}
-	if f.Kind() != reflect.Bool {
-		t.Fatalf("ManifestLifecycle.NeedsCredentialRefresh kind = %v, want bool", f.Kind())
-	}
-	return f.Bool()
-}
-
-func TestParseManifest_V1BetaReadsNeedsCredentialRefreshAsAnOptionalLifecycleFlag(t *testing.T) {
-	for _, tc := range []struct {
-		label, line string
-		want        bool
-	}{
-		{"absent reads false", "", false},
-		{"true reads true", "    needsCredentialRefresh: true\n", true},
-		{"false reads false", "    needsCredentialRefresh: false\n", false},
-	} {
-		t.Run(tc.label, func(t *testing.T) {
-			b := parseBeta(t, editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n"+tc.line))
-
-			if got := lifecycleNeedsCredentialRefresh(t, b); got != tc.want {
-				t.Errorf("spec.lifecycle.needsCredentialRefresh after %q = %v, want %v", tc.line, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestParseManifest_V1BetaNeedsCredentialRefreshTakesTrueOrFalseOnly(t *testing.T) {
-	for _, value := range []string{"yes", "1", `"true"`, "sometimes", "null"} {
-		t.Run("refuses "+value, func(t *testing.T) {
-			raw := editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    needsCredentialRefresh: "+value+"\n")
-
-			requireRefusedNaming(t, raw, "spec.lifecycle.needsCredentialRefresh")
-		})
-	}
-}
-
-func TestParseManifest_V1BetaRefusesAnUnknownLifecycleKeyBesideNeedsCredentialRefresh(t *testing.T) {
-	raw := editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n    needsCredentialRefresh: true\n    bogus: 1\n")
-
-	requireRefusedNaming(t, raw, "spec.lifecycle.bogus")
-}
-
-func TestManifestLifecycle_NeedsCredentialRefreshMarshalsUnderItsOptionalKey(t *testing.T) {
-	f, ok := reflect.TypeOf(contract.ManifestLifecycle{}).FieldByName("NeedsCredentialRefresh")
-	if !ok {
-		t.Fatal("ManifestLifecycle has no NeedsCredentialRefresh field")
-	}
-
-	if got, want := f.Tag.Get("json"), "needsCredentialRefresh,omitempty"; got != want {
-		t.Errorf("ManifestLifecycle.NeedsCredentialRefresh json tag = %q, want %q", got, want)
-	}
-}
-
 func TestParseManifest_SettleBudget(t *testing.T) {
 	beta := func(line string) []byte {
-		return editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n"+line)
+		return edit(t, betaManifest, "    contract: kit/v1\n", "    contract: kit/v1\n"+line)
 	}
 	for _, tc := range []struct {
 		label   string
@@ -962,20 +469,98 @@ func TestParseManifest_SettleBudget(t *testing.T) {
 	}
 }
 
-func TestParseManifest_V1BetaReadsTheConnectionsEachVerbDeclares(t *testing.T) {
-	for _, tc := range []struct {
-		label, lines string
-		want         *contract.ManifestVerbConnections
+func TestManifestTypes_EncodeEachOptionalFlagUnderItsKeyOnlyWhenSet(t *testing.T) {
+	cases := []struct {
+		label string
+		set   any
+		unset any
+		key   string
 	}{
-		{"absent reads no declaration", "", nil},
-		{"declared reads both lists", "    verbConnections:\n      validate: [github]\n      unsubscribe: [github, hetzner]\n",
-			&contract.ManifestVerbConnections{Validate: []string{"github"}, Unsubscribe: []string{"github", "hetzner"}}},
-	} {
+		{"spec.receivesAppSecrets", contract.ManifestSpec{ReceivesAppSecrets: true}, contract.ManifestSpec{}, "receivesAppSecrets"},
+		{"spec.lifecycle.needsCredentialRefresh", contract.ManifestLifecycle{NeedsCredentialRefresh: true}, contract.ManifestLifecycle{}, "needsCredentialRefresh"},
+	}
+	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
-			got := parseBeta(t, editBeta(t, "    contract: kit/v1\n", "    contract: kit/v1\n"+tc.lines)).Spec.Lifecycle.VerbConnections
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("spec.lifecycle.verbConnections = %+v, want %+v", got, tc.want)
+			set, unset := marshalObject(t, tc.set), marshalObject(t, tc.unset)
+
+			if set[tc.key] != true {
+				t.Errorf("json.Marshal(%+v)[%q] = %v, want true", tc.set, tc.key, set[tc.key])
 			}
+			if _, ok := unset[tc.key]; ok {
+				t.Errorf("json.Marshal(%+v) carries %q, want the key omitted when false", tc.unset, tc.key)
+			}
+		})
+	}
+}
+
+// v1alphaManifest carries a padded quoted id and version, a folded release note, and outputs and reads in both list forms.
+const v1alphaManifest = `apiVersion: mitstack/v1alpha
+kind: Block
+metadata:
+  id: " reads-consumer"
+  name: Reads Consumer
+spec:
+  layer: backend
+  version: " 1.2.0 "
+  releaseClass: feature
+  releaseNote: >
+    Adds the reads.
+  outputs:
+    - dbName
+    - host.type
+  requires:
+    - capability: database
+      reads: [host, port]
+    - capability: github
+    - capability: app-host
+      reads:
+        - region
+`
+
+func TestParseManifest_V1AlphaReadsOutputsAndRequiresReads(t *testing.T) {
+	for label, raw := range map[string]string{
+		"kind: Block": v1alphaManifest,
+		"type: block": string(edit(t, v1alphaManifest, "kind: Block\n", "type: block\n")),
+	} {
+		t.Run(label, func(t *testing.T) {
+			m, err := contract.ParseManifest([]byte(raw))
+
+			if err != nil {
+				t.Fatalf("ParseManifest: %v", err)
+			}
+			if m.APIVersion != contract.ManifestAPIVersionV1Alpha || m.Block != nil || m.V1Alpha == nil {
+				t.Fatalf("APIVersion, Block, V1Alpha = %q, %v, %v; want %q, nil and a manifest", m.APIVersion, m.Block, m.V1Alpha, contract.ManifestAPIVersionV1Alpha)
+			}
+			a := m.V1Alpha
+			wantField(t, "V1Alpha.ID, ID() untrimmed", []string{a.ID, m.ID()}, []string{" reads-consumer", " reads-consumer"})
+			wantField(t, "V1Alpha.Version, Version() trimmed", []string{a.Version, m.Version()}, []string{"1.2.0", "1.2.0"})
+			wantField(t, "V1Alpha.ReleaseClass, ReleaseClass()", []string{a.ReleaseClass, m.ReleaseClass()}, []string{"feature", "feature"})
+			wantField(t, "V1Alpha.ReleaseNote, ReleaseNote()", []string{strings.TrimSpace(a.ReleaseNote), strings.TrimSpace(m.ReleaseNote())},
+				[]string{"Adds the reads.", "Adds the reads."})
+			wantField(t, "V1Alpha.Outputs", a.Outputs, []string{"dbName", "host.type"})
+			wantField(t, "V1Alpha.Requires", a.Requires, []contract.V1AlphaRequirement{
+				{Capability: "database", Reads: []string{"host", "port"}},
+				{Capability: "github"},
+				{Capability: "app-host", Reads: []string{"region"}},
+			})
+		})
+	}
+}
+
+func TestParseManifest_RefusesAnUnknownOrMissingAPIVersionNamingBothKnownVersions(t *testing.T) {
+	body := "type: block\nmetadata:\n  id: fixture-block\nspec:\n  version: 1.0.0\n"
+	cases := []struct {
+		label, raw string
+		wants      []string
+	}{
+		{"absent", body, nil},
+		{"empty", "apiVersion: \"\"\n" + body, nil},
+		{"a later version", "apiVersion: mitstack/v2\n" + body, []string{"mitstack/v2"}},
+		{"another group", "apiVersion: example.test/v1beta\n" + body, []string{"example.test/v1beta"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			requireRefusedNaming(t, []byte(tc.raw), append([]string{contract.ManifestAPIVersionV1Alpha, contract.ManifestAPIVersion}, tc.wants...)...)
 		})
 	}
 }

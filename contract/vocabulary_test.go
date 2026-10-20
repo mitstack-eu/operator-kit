@@ -1,10 +1,6 @@
 package contract_test
 
-// vocabulary_test.go pins that the word the retired ordered-list manifest
-// shape was named for appears nowhere in the contract, blockverify and cmd
-// trees or in the README: in no file path, identifier, comment, string or
-// golden. This file spells the word only in pieces, so it never matches
-// itself.
+// The word the retired ordered-list manifest shape was named for appears in no path or line of the contract, blockverify and cmd trees or the README, and this file spells it only in pieces so it never matches itself.
 
 import (
 	"fmt"
@@ -16,13 +12,9 @@ import (
 	"testing"
 )
 
-// retiredWord matches the word in any case anywhere in a path or a line, so
-// it also catches its plural, its past tense and any identifier or file name
-// built on it.
+// retiredWord matches anywhere in a path or line, so it also catches a plural, a past tense or a name built on the word.
 var retiredWord = regexp.MustCompile("(?i)" + "s" + "tep")
 
-// vocabularyRoots are the trees and the file the guard reads, relative to
-// this package's directory.
 var vocabularyRoots = []string{".", "../blockverify", "../cmd", "../README.md"}
 
 func TestKit_NamesNoPartOfTheRetiredOrderedListShape(t *testing.T) {

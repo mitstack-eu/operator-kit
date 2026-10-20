@@ -2,153 +2,100 @@ package contract_test
 
 import (
 	"io/fs"
-	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-func TestLifecycleHooksField_IsSpecLifecycleHooks(t *testing.T) {
-	if contract.LifecycleHooksField != "spec.lifecycle.hooks" {
-		t.Fatalf("contract.LifecycleHooksField = %q, want %q", contract.LifecycleHooksField, "spec.lifecycle.hooks")
+func TestManifestGoldenAccessors_ReturnTheEmbeddedGoldens(t *testing.T) {
+	cases := []struct {
+		file string
+		got  func() []byte
+	}{
+		{"lifecycle-hooks.yaml", contract.HooksManifestGolden},
+		{"lifecycle-hooks-type-block.yaml", contract.TypeBlockHooksManifestGolden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.file, func(t *testing.T) {
+			raw, err := fs.ReadFile(contract.ManifestGoldens, contract.ManifestGoldensDir+"/"+tc.file)
+
+			if err != nil {
+				t.Fatalf("reading %s from contract.ManifestGoldens: %v", tc.file, err)
+			}
+			if len(raw) == 0 || string(raw) != string(tc.got()) {
+				t.Errorf("the accessor for %s returns %q, want the embedded file %q", tc.file, tc.got(), raw)
+			}
+		})
 	}
 }
 
-func TestLifecycleHookPoints_AreTheFourInOrder(t *testing.T) {
-	want := []string{"beforeEnsure", "afterEnsure", "beforeDelete", "afterDelete"}
-	if got := contract.LifecycleHookPoints(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("contract.LifecycleHookPoints() = %v, want %v", got, want)
+func TestHookNameLists_AreFixedAndReturnACopy(t *testing.T) {
+	cases := []struct {
+		label string
+		list  func() []string
+		want  []string
+	}{
+		{"LifecycleHookPoints, the four in order", contract.LifecycleHookPoints, []string{"beforeEnsure", "afterEnsure", "beforeDelete", "afterDelete"}},
+		{"HooksManifestGoldenDeclares", contract.HooksManifestGoldenDeclares, []string{"beforeEnsure", "afterDelete"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label+"/holds its names", func(t *testing.T) {
+			got := tc.list()
+
+			wantField(t, tc.label, got, tc.want)
+		})
+		t.Run(tc.label+"/returns a copy", func(t *testing.T) {
+			first := tc.list()
+			if len(first) == 0 {
+				t.Fatal("the list is empty")
+			}
+
+			first[0] = "mutated"
+
+			if got := tc.list(); got[0] != tc.want[0] {
+				t.Errorf("mutating the returned slice changed the next call: got[0] = %q, want %q", got[0], tc.want[0])
+			}
+		})
 	}
 }
 
-func TestLifecycleHookPoints_ReturnsACopy(t *testing.T) {
-	first := contract.LifecycleHookPoints()
-	if len(first) == 0 {
-		t.Fatal("contract.LifecycleHookPoints() is empty")
+func hooksOfGolden(t *testing.T, raw []byte) *contract.V1AlphaManifest {
+	t.Helper()
+	a := parseAlpha(t, string(raw))
+	if a.Spec.Lifecycle == nil {
+		t.Fatalf("the golden declares no spec.lifecycle:\n%s", raw)
 	}
-	first[0] = "mutated"
-	if got := contract.LifecycleHookPoints(); got[0] != "beforeEnsure" {
-		t.Fatalf("mutating the returned slice changed the next call: got[0] = %q, want %q", got[0], "beforeEnsure")
-	}
+	return a
 }
 
-func TestManifestGoldensDir_IsManifestGoldens(t *testing.T) {
-	if contract.ManifestGoldensDir != "manifest-goldens" {
-		t.Fatalf("contract.ManifestGoldensDir = %q, want %q", contract.ManifestGoldensDir, "manifest-goldens")
-	}
-}
-
-func TestManifestGoldens_EmbedsTheLifecycleHooksGolden(t *testing.T) {
-	raw, err := fs.ReadFile(contract.ManifestGoldens, contract.ManifestGoldensDir+"/lifecycle-hooks.yaml")
-	if err != nil {
-		t.Fatalf("reading lifecycle-hooks.yaml from contract.ManifestGoldens: %v", err)
-	}
-	if string(raw) != string(contract.HooksManifestGolden()) {
-		t.Error("contract.HooksManifestGolden() differs from the embedded manifest-goldens/lifecycle-hooks.yaml")
-	}
-}
-
-// TestHooksManifestGolden_NestsHooksUnderLifecycle pins that the golden
-// carries hooks: as a child of spec.lifecycle, the one path the field
-// constant names.
-func TestHooksManifestGolden_NestsHooksUnderLifecycle(t *testing.T) {
-	raw := contract.HooksManifestGolden()
-	if len(raw) == 0 {
-		t.Fatal("contract.HooksManifestGolden() is empty")
-	}
-	lines := strings.Split(string(raw), "\n")
-	indent := func(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
-
-	specAt, lifecycleAt, hooksAt := -1, -1, -1
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case specAt < 0 && trimmed == "spec:" && indent(line) == 0:
-			specAt = i
-		case specAt >= 0 && lifecycleAt < 0 && trimmed == "lifecycle:" && indent(line) > 0:
-			lifecycleAt = i
-		case lifecycleAt >= 0 && hooksAt < 0 && trimmed == "hooks:" && indent(line) > indent(lines[lifecycleAt]):
-			hooksAt = i
+func TestHooksManifestGoldens_DeclareTheAccessorsHooks(t *testing.T) {
+	t.Run("every name the accessor declares is a hook point", func(t *testing.T) {
+		known := map[string]bool{}
+		for _, p := range contract.LifecycleHookPoints() {
+			known[p] = true
 		}
-	}
-	if specAt < 0 || lifecycleAt < 0 || hooksAt < 0 {
-		t.Fatalf("golden does not nest hooks: under spec.lifecycle (spec at %d, lifecycle at %d, hooks at %d):\n%s",
-			specAt, lifecycleAt, hooksAt, raw)
-	}
-}
 
-func TestHooksManifestGoldenDeclares_IsBeforeEnsureAndAfterDelete(t *testing.T) {
-	want := []string{"beforeEnsure", "afterDelete"}
-	if got := contract.HooksManifestGoldenDeclares(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("contract.HooksManifestGoldenDeclares() = %v, want %v", got, want)
-	}
-}
-
-func TestHooksManifestGoldenDeclares_ReturnsACopy(t *testing.T) {
-	first := contract.HooksManifestGoldenDeclares()
-	if len(first) == 0 {
-		t.Fatal("contract.HooksManifestGoldenDeclares() is empty")
-	}
-	first[0] = "mutated"
-	if got := contract.HooksManifestGoldenDeclares(); got[0] != "beforeEnsure" {
-		t.Fatalf("mutating the returned slice changed the next call: got[0] = %q, want %q", got[0], "beforeEnsure")
-	}
-}
-
-// TestHooksManifestGoldenDeclares_EveryNameIsAHookPoint pins that the
-// golden declares only names from the closed hook-point set.
-func TestHooksManifestGoldenDeclares_EveryNameIsAHookPoint(t *testing.T) {
-	known := map[string]bool{}
-	for _, p := range contract.LifecycleHookPoints() {
-		known[p] = true
-	}
-	for _, name := range contract.HooksManifestGoldenDeclares() {
-		if !known[name] {
-			t.Errorf("golden declares %q, which is not in contract.LifecycleHookPoints() %v", name, contract.LifecycleHookPoints())
+		for _, name := range contract.HooksManifestGoldenDeclares() {
+			if !known[name] {
+				t.Errorf("HooksManifestGoldenDeclares() names %q, which is not in contract.LifecycleHookPoints() %v", name, contract.LifecycleHookPoints())
+			}
 		}
+	})
+	for file, raw := range map[string][]byte{"the hooks golden": contract.HooksManifestGolden(), "its type: block twin": contract.TypeBlockHooksManifestGolden()} {
+		t.Run(file, func(t *testing.T) {
+			got := hooksOfGolden(t, raw).Spec.Lifecycle.Hooks
+
+			wantField(t, file+"'s spec.lifecycle.hooks", got, contract.HooksManifestGoldenDeclares())
+		})
 	}
 }
 
-// TestHooksManifestGoldenDeclares_MatchesTheGoldenText pins that the "- name"
-// items under the golden's hooks: key are exactly the accessor's names, in
-// order, so the accessor neither omits an item the file carries nor names
-// one it lacks.
-func TestHooksManifestGoldenDeclares_MatchesTheGoldenText(t *testing.T) {
-	raw := string(contract.HooksManifestGolden())
-	lines := strings.Split(raw, "\n")
-	indent := func(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
+// The twin carries everything the kind-named golden does, but its kind: and layer:, and adds the type: block, format: and store: spellings.
+func TestTypeBlockHooksManifestGolden_IsTheHooksGoldenInTheNewNames(t *testing.T) {
+	hooks, twin := hooksOfGolden(t, contract.HooksManifestGolden()), hooksOfGolden(t, contract.TypeBlockHooksManifestGolden())
 
-	hooksAt := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "hooks:" {
-			hooksAt = i
-			break
-		}
-	}
-	if hooksAt < 0 {
-		t.Fatalf("golden carries no \"hooks:\" block-sequence key:\n%s", raw)
-	}
+	hooks.Spec.Layer = ""
+	twin.Spec.Provides, twin.Spec.ProvidedContracts, twin.Spec.Continuity = nil, nil, nil
 
-	var items []string
-	for _, line := range lines[hooksAt+1:] {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if indent(line) <= indent(lines[hooksAt]) || !strings.HasPrefix(trimmed, "- ") {
-			break
-		}
-		items = append(items, strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")))
-	}
-
-	if want := contract.HooksManifestGoldenDeclares(); !reflect.DeepEqual(items, want) {
-		t.Fatalf("golden hooks: items = %v, contract.HooksManifestGoldenDeclares() = %v:\n%s", items, want, raw)
-	}
-}
-
-func TestAppNameNamingField_IsSpecNamingAppName(t *testing.T) {
-	if contract.AppNameNamingField != "spec.naming.appName" {
-		t.Fatalf("contract.AppNameNamingField = %q, want %q", contract.AppNameNamingField, "spec.naming.appName")
-	}
+	wantField(t, "the twin without its additions", *twin, *hooks)
 }

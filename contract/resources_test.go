@@ -1,175 +1,236 @@
 package contract_test
 
-// resources_test.go pins how the resource registry the kit owns behaves: the
-// output names a block may declare in spec.outputs and read under
-// spec.requires[].reads. It checks properties every entry must hold, never the
-// registry's content, so adding an entry never means editing this file.
+// The resource registry holds the output names a block may declare and read; a check over every entry pins a property, never the registry's content.
 
 import (
 	"reflect"
+	"regexp"
 	"testing"
 
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-// nineKinds is the closed kind vocabulary, as the labels the console shows.
-var nineKinds = map[string]bool{
-	"App": true, "Host & network": true, "Data": true, "Build & deploy": true, "Access": true,
-	"Model": true, "Coding agent": true, "Work": true, "Source": true,
+func TestResources_EveryEntryHoldsTheRegistrysInvariants(t *testing.T) {
+	nineKinds := map[string]bool{
+		"App": true, "Host & network": true, "Data": true, "Build & deploy": true, "Access": true,
+		"Model": true, "Coding agent": true, "Work": true, "Source": true,
+	}
+	cases := []struct {
+		invariant string
+		check     func(t *testing.T, rs []contract.ResourceEntry)
+	}{
+		{"each entry is complete", func(t *testing.T, rs []contract.ResourceEntry) {
+			for _, r := range rs {
+				if !nineKinds[r.Kind] || r.Meaning == "" || r.Shape == "" || (!r.Secret && r.Example == "") {
+					t.Errorf("%q: kind %q (one of the nine labels?), meaning %q, shape %q, example %q (needed unless secret)",
+						r.Name, r.Kind, r.Meaning, r.Shape, r.Example)
+				}
+			}
+		}},
+		{"aliases are never nil", func(t *testing.T, rs []contract.ResourceEntry) {
+			for _, r := range rs {
+				if r.Aliases == nil {
+					t.Errorf("%q: Aliases is nil, want an empty list when the entry has none", r.Name)
+				}
+			}
+		}},
+		{"entries sort by name, each name once", func(t *testing.T, rs []contract.ResourceEntry) {
+			for i := 1; i < len(rs); i++ {
+				if rs[i-1].Name >= rs[i].Name {
+					t.Errorf("entry %d (%q) must sort strictly before entry %d (%q)", i-1, rs[i-1].Name, i, rs[i].Name)
+				}
+			}
+		}},
+		{"no alias equals an entry's name", func(t *testing.T, rs []contract.ResourceEntry) {
+			names := map[string]bool{}
+			for _, r := range rs {
+				names[r.Name] = true
+			}
+			for _, r := range rs {
+				for _, a := range r.Aliases {
+					if names[a] {
+						t.Errorf("%q: alias %q is also an entry's name", r.Name, a)
+					}
+				}
+			}
+		}},
+		{"a secret entry carries no example, which would show the secret", func(t *testing.T, rs []contract.ResourceEntry) {
+			for _, r := range rs {
+				if r.Secret && r.Example != "" {
+					t.Errorf("secret entry %q carries example %q, want none", r.Name, r.Example)
+				}
+			}
+		}},
+		{"LookupResource finds every entry by its name and each alias", func(t *testing.T, rs []contract.ResourceEntry) {
+			for _, r := range rs {
+				for _, name := range append([]string{r.Name}, r.Aliases...) {
+					if got, ok := contract.LookupResource(name); !ok || !reflect.DeepEqual(got, r) {
+						t.Errorf("LookupResource(%q) = %+v, %v; want the entry %+v", name, got, ok, r)
+					}
+				}
+			}
+		}},
+		{"a registered name or alias is its own nearest", func(t *testing.T, rs []contract.ResourceEntry) {
+			for _, r := range rs {
+				for _, name := range append([]string{r.Name}, r.Aliases...) {
+					if got := contract.NearestResource(name); got != name {
+						t.Errorf("NearestResource(%q) = %q, want %q itself", name, got, name)
+					}
+				}
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.invariant, func(t *testing.T) {
+			rs := registry(t)
+
+			tc.check(t, rs)
+		})
+	}
 }
 
-// registry returns contract.Resources(), failing the test when it is empty so
-// a check over every entry cannot pass by having none to check.
-func registry(t *testing.T) []contract.ResourceEntry {
-	t.Helper()
-	rs := contract.Resources()
-	if len(rs) == 0 {
-		t.Fatal("contract.Resources() is empty")
-	}
-	return rs
+type lookupCase struct {
+	name, behaviour string
+	check           func(t *testing.T, r contract.ResourceEntry)
 }
 
-func TestResources_EveryEntryIsComplete(t *testing.T) {
-	for _, r := range registry(t) {
-		if !nineKinds[r.Kind] {
-			t.Errorf("%q: kind %q is not one of the nine labels", r.Name, r.Kind)
-		}
-		if r.Meaning == "" {
-			t.Errorf("%q has no meaning", r.Name)
-		}
-		if r.Shape == "" {
-			t.Errorf("%q has no shape", r.Name)
-		}
-		if !r.Secret && r.Example == "" {
-			t.Errorf("%q is not secret and has no example", r.Name)
-		}
-	}
-}
-
-func TestResources_AliasesAreNeverNil(t *testing.T) {
-	for _, r := range registry(t) {
-		if r.Aliases == nil {
-			t.Errorf("%q: Aliases is nil, want an empty list when the entry has none", r.Name)
-		}
-	}
-}
-
-func TestResources_AreSortedByNameWithEachNameOnce(t *testing.T) {
-	rs := registry(t)
-	for i := 1; i < len(rs); i++ {
-		if rs[i-1].Name >= rs[i].Name {
-			t.Errorf("entry %d (%q) must sort strictly before entry %d (%q)", i-1, rs[i-1].Name, i, rs[i].Name)
-		}
-	}
-}
-
-func TestResources_NoAliasEqualsAnEntryName(t *testing.T) {
-	names := map[string]bool{}
-	for _, r := range registry(t) {
-		names[r.Name] = true
-	}
-	for _, r := range registry(t) {
-		for _, a := range r.Aliases {
-			if names[a] {
-				t.Errorf("%q: alias %q is also an entry's name", r.Name, a)
+func TestLookupResource_ResolvesEachNameToItsEntry(t *testing.T) {
+	plain := func(name, kind string) func(t *testing.T, r contract.ResourceEntry) {
+		return func(t *testing.T, r contract.ResourceEntry) {
+			if r.Name != name || (kind != "" && r.Kind != kind) || r.Secret || len(r.Aliases) != 0 {
+				t.Errorf("entry %+v, want %q itself, kind %q, not secret, with no aliases", r, name, kind)
 			}
 		}
 	}
-}
-
-func TestResources_SecretEntriesCarryNoExample(t *testing.T) {
-	for _, r := range registry(t) {
-		if r.Secret && r.Example != "" {
-			t.Errorf("secret entry %q carries example %q, want none, since the example would show the secret", r.Name, r.Example)
-		}
-	}
-}
-
-func TestLookupResource_RegionResolvesToTheCloudRegionEntry(t *testing.T) {
-	r, ok := contract.LookupResource("region")
-	if !ok {
-		t.Fatal(`LookupResource("region") found nothing`)
-	}
-	if r.Name != "cloud.region" {
-		t.Errorf(`LookupResource("region").Name = %q, want "cloud.region"`, r.Name)
-	}
-}
-
-func TestLookupResource_InstanceTypeResolvesToTheHostTypeEntry(t *testing.T) {
-	r, ok := contract.LookupResource("instanceType")
-	if !ok {
-		t.Fatal(`LookupResource("instanceType") found nothing`)
-	}
-	if r.Name != "host.type" {
-		t.Errorf(`LookupResource("instanceType").Name = %q, want "host.type"`, r.Name)
-	}
-}
-
-func TestLookupResource_FindsEveryEntryByItsNameAndEachAlias(t *testing.T) {
-	rs := contract.Resources()
-	if len(rs) == 0 {
-		t.Fatal("contract.Resources() is empty")
-	}
-	for _, r := range rs {
-		byName, ok := contract.LookupResource(r.Name)
-		if !ok || !reflect.DeepEqual(byName, r) {
-			t.Errorf("LookupResource(%q) = %+v, %v; want the entry %+v", r.Name, byName, ok, r)
-		}
-		for _, a := range r.Aliases {
-			byAlias, ok := contract.LookupResource(a)
-			if !ok || !reflect.DeepEqual(byAlias, r) {
-				t.Errorf("LookupResource(%q) = %+v, %v; want the entry %+v", a, byAlias, ok, r)
+	shaped := func(name string, shape *regexp.Regexp) func(t *testing.T, r contract.ResourceEntry) {
+		return func(t *testing.T, r contract.ResourceEntry) {
+			if !shape.MatchString(r.Example) {
+				t.Errorf("%q: example %q does not match the published shape %s", name, r.Example, shape)
 			}
 		}
 	}
+	entry := func(want contract.ResourceEntry) func(t *testing.T, r contract.ResourceEntry) {
+		return func(t *testing.T, r contract.ResourceEntry) { wantField(t, "the entry", r, want) }
+	}
+	https := regexp.MustCompile(`^https://`)
+	cases := []lookupCase{
+		{"region", "resolves to cloud.region", func(t *testing.T, r contract.ResourceEntry) { wantField(t, "Name", r.Name, "cloud.region") }},
+		{"instanceType", "resolves to host.type", func(t *testing.T, r contract.ResourceEntry) { wantField(t, "Name", r.Name, "host.type") }},
+		{"cloud.region", "is unchanged for the kube-cluster block", entry(contract.ResourceEntry{Name: "cloud.region", Kind: "Host & network",
+			Meaning: "The cloud region the app runs in.", Shape: "cloud region code", Example: "eu-central-1", Aliases: []string{"region"}})},
+		{"host.type", "is unchanged for the kube-cluster block", entry(contract.ResourceEntry{Name: "host.type", Kind: "Host & network",
+			Meaning: "The machine type the app runs on.", Shape: "cloud instance type", Example: "t3.small", Aliases: []string{"instanceType"}})},
+		{"namespace", "is a plain canonical entry", plain("namespace", "Host & network")},
+		{"serviceAccount", "is a plain canonical entry", plain("serviceAccount", "Access")},
+	}
+	for _, out := range []struct {
+		name  string
+		shape *regexp.Regexp
+	}{
+		{"privateEndpoint", https}, {"issuerUrl", https}, {"issuerBucket", regexp.MustCompile(`^mitstack-oidc-[a-z2-7]{26}$`)},
+		{"clusterRepoUrl", https}, {"serverId", regexp.MustCompile(`^[0-9]+$`)}, {"enrolmentTokenSha256", regexp.MustCompile(`^[a-z2-7]{52}$`)},
+	} {
+		cases = append(cases,
+			lookupCase{out.name, "is a plain entry the kube-cluster block registers", plain(out.name, "")},
+			lookupCase{out.name, "has an example of the published shape", shaped(out.name, out.shape)})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+" "+tc.behaviour, func(t *testing.T) {
+			r, ok := contract.LookupResource(tc.name)
+
+			if !ok {
+				t.Fatalf("LookupResource(%q) found nothing", tc.name)
+			}
+			tc.check(t, r)
+		})
+	}
 }
 
-func TestLookupResource_UnknownOrMiscasedNameIsNotFound(t *testing.T) {
-	for _, name := range []string{"", "noSuchOutput", "Region", "cloud.Region", "Host"} {
-		if r, ok := contract.LookupResource(name); ok {
-			t.Errorf("LookupResource(%q) found %q, want not found (the match is case-sensitive)", name, r.Name)
+// location and serverType are published as cloud.region and host.type, and a match is case-sensitive.
+func TestLookupResource_FindsNoUnknownOrMiscasedName(t *testing.T) {
+	for _, name := range []string{"", "noSuchOutput", "Region", "cloud.Region", "Host", "location", "serverType"} {
+		t.Run(name, func(t *testing.T) {
+			r, ok := contract.LookupResource(name)
+
+			if ok {
+				t.Errorf("LookupResource(%q) found %q, want not found", name, r.Name)
+			}
+		})
+	}
+}
+
+func TestResources_HandACallerCopiesItCanMutate(t *testing.T) {
+	t.Run("Resources", func(t *testing.T) {
+		snapshot := []contract.ResourceEntry{}
+		for _, r := range registry(t) {
+			r.Aliases = append([]string{}, r.Aliases...)
+			snapshot = append(snapshot, r)
 		}
-	}
-}
+		got := registry(t)
 
-func TestResources_ReturnsCopiesACallerCanMutate(t *testing.T) {
-	before := contract.Resources()
-	snapshot := make([]contract.ResourceEntry, len(before))
-	for i, r := range before {
-		r.Aliases = append([]string{}, r.Aliases...)
-		snapshot[i] = r
-	}
-
-	got := contract.Resources()
-	if len(got) == 0 {
-		t.Fatal("contract.Resources() is empty")
-	}
-	for i := range got {
-		for j := range got[i].Aliases {
-			got[i].Aliases[j] = "mutated"
+		for i := range got {
+			for j := range got[i].Aliases {
+				got[i].Aliases[j] = "mutated"
+			}
+			got[i].Name = "mutated"
 		}
-		got[i].Name = "mutated"
-	}
 
-	if after := contract.Resources(); !reflect.DeepEqual(after, snapshot) {
-		t.Error("mutating what Resources returned changed a later call's result")
+		if after := contract.Resources(); !reflect.DeepEqual(after, snapshot) {
+			t.Error("mutating what Resources returned changed a later call's result")
+		}
+	})
+	t.Run("LookupResource", func(t *testing.T) {
+		first, ok := contract.LookupResource("cloud.region")
+		if !ok || len(first.Aliases) == 0 {
+			t.Fatalf("cloud.region needs an alias for this test to mutate, got %+v, %v", first, ok)
+		}
+		want := first
+		want.Aliases = append([]string{}, first.Aliases...)
+
+		first.Aliases[0] = "mutated"
+
+		if again, _ := contract.LookupResource("cloud.region"); !reflect.DeepEqual(again, want) {
+			t.Errorf("mutating a looked-up entry changed the registry: a later lookup returned %+v, want %+v", again, want)
+		}
+	})
+}
+
+// hostnme and runsOnP each tie between two names, and regon is one edit from the alias region.
+func TestNearestResource_ReturnsTheClosestNameOrAliasAlphabeticallyFirstOnATie(t *testing.T) {
+	cases := []struct {
+		label, name, want, loser string
+	}{
+		{"tie broken alphabetically", "hostnme", "host", "hostId"},
+		{"tie broken alphabetically at distance one", "runsOnP", "runsOn", "runsOnPr"},
+		{"nearest is an alias", "regon", "region", "repo"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			_, absent := contract.LookupResource(tc.name)
+			_, wantOK := contract.LookupResource(tc.want)
+			_, loserOK := contract.LookupResource(tc.loser)
+			if absent || !wantOK || !loserOK {
+				t.Fatalf("the fixture needs %q absent and %q and %q registered, so a drifted name reports the drift", tc.name, tc.want, tc.loser)
+			}
+
+			got := contract.NearestResource(tc.name)
+
+			if got != tc.want {
+				t.Errorf("NearestResource(%q) = %q, want %q (not %q)", tc.name, got, tc.want, tc.loser)
+			}
+		})
 	}
 }
 
-func TestLookupResource_ReturnsACopyACallerCanMutate(t *testing.T) {
-	first, ok := contract.LookupResource("cloud.region")
-	if !ok {
-		t.Fatal(`LookupResource("cloud.region") found nothing`)
-	}
-	if len(first.Aliases) == 0 {
-		t.Fatalf("cloud.region needs an alias for this test to mutate, got %+v", first)
-	}
-	want := first
-	want.Aliases = append([]string{}, first.Aliases...)
+// A caller quotes the suggestion to a block author as a name that validates.
+func TestNearestResource_AlwaysReturnsANameTheRegistryResolves(t *testing.T) {
+	for _, name := range []string{"", "x", "noSuchOutput", "Region", "HOSTNAME", "cloud.regoin"} {
+		t.Run(name, func(t *testing.T) {
+			got := contract.NearestResource(name)
 
-	first.Aliases[0] = "mutated"
-
-	if again, _ := contract.LookupResource("cloud.region"); !reflect.DeepEqual(again, want) {
-		t.Errorf("mutating a looked-up entry changed the registry: a later lookup returned %+v, want %+v", again, want)
+			if _, ok := contract.LookupResource(got); !ok {
+				t.Errorf("NearestResource(%q) = %q, which the registry does not resolve", name, got)
+			}
+		})
 	}
 }

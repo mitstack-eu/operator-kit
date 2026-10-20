@@ -1,9 +1,9 @@
-// Package contract_test pins the schemas and golden sets this repository owns.
 package contract_test
 
 import (
 	"encoding/json"
 	"io/fs"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -11,351 +11,170 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
-// --- schemas ---------------------------------------------------------------
-
-func TestEnvelopeSchema_NonEmptyValidJSON(t *testing.T) {
-	if len(contract.EnvelopeSchema) == 0 {
-		t.Fatal("contract.EnvelopeSchema is empty")
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(contract.EnvelopeSchema, &doc); err != nil {
-		t.Fatalf("contract.EnvelopeSchema is not valid JSON: %v", err)
-	}
+type goldenSet struct {
+	name                   string
+	fsys                   fs.FS
+	dir                    string
+	valid, invalid         func() (map[string][]byte, error)
+	wantValid, wantInvalid []string
 }
 
-func TestEnvelopeSchema_DeclaresDraft2020_12(t *testing.T) {
-	var doc map[string]any
-	if err := json.Unmarshal(contract.EnvelopeSchema, &doc); err != nil {
-		t.Fatalf("contract.EnvelopeSchema is not valid JSON: %v", err)
-	}
-	got, _ := doc["$schema"].(string)
-	want := "https://json-schema.org/draft/2020-12/schema"
-	if got != want {
-		t.Errorf("EnvelopeSchema $schema = %q, want %q", got, want)
-	}
+var goldenSets = []goldenSet{
+	{"request goldens", contract.Goldens, contract.GoldensDir, contract.ValidGoldens, contract.InvalidGoldens,
+		[]string{"subscribe", "unsubscribe", "upgrade", "validate"},
+		[]string{"invalid-missing-nonce", "invalid-unknown-verb"}},
+	{"response goldens", contract.ResponseGoldens, contract.ResponseGoldensDir, contract.ValidResponseGoldens, contract.InvalidResponseGoldens,
+		[]string{"absent", "error", "last-error", "null-outputs", "outputs", "pending", "secret-outputs", "still-present"},
+		[]string{"invalid-absent-not-bool", "invalid-outputs-not-object", "invalid-outputs-not-strings", "invalid-pending-not-bool",
+			"invalid-resource-secret-outputs-entry-not-object", "invalid-resource-secret-outputs-not-object",
+			"invalid-resource-secret-outputs-value-not-string", "invalid-secret-outputs-not-strings"}},
 }
 
-func TestEnvelopeSchema_DeclaresNonEmptyVersion(t *testing.T) {
-	var doc map[string]any
-	if err := json.Unmarshal(contract.EnvelopeSchema, &doc); err != nil {
-		t.Fatalf("contract.EnvelopeSchema is not valid JSON: %v", err)
-	}
-	v, ok := doc["version"].(string)
-	if !ok || v == "" {
-		t.Errorf("EnvelopeSchema top-level version = %q (present=%v), want a non-empty string", v, ok)
-	}
+type goldenSplit struct {
+	files          []fs.DirEntry
+	valid, invalid map[string][]byte
 }
 
-func TestResponseSchema_NonEmptyValidJSON(t *testing.T) {
-	if len(contract.ResponseSchema) == 0 {
-		t.Fatal("contract.ResponseSchema is empty")
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(contract.ResponseSchema, &doc); err != nil {
-		t.Fatalf("contract.ResponseSchema is not valid JSON: %v", err)
-	}
-}
-
-func TestResponseSchema_DeclaresDraft2020_12(t *testing.T) {
-	var doc map[string]any
-	if err := json.Unmarshal(contract.ResponseSchema, &doc); err != nil {
-		t.Fatalf("contract.ResponseSchema is not valid JSON: %v", err)
-	}
-	got, _ := doc["$schema"].(string)
-	want := "https://json-schema.org/draft/2020-12/schema"
-	if got != want {
-		t.Errorf("ResponseSchema $schema = %q, want %q", got, want)
-	}
-}
-
-func TestResponseSchema_DeclaresNonEmptyVersion(t *testing.T) {
-	var doc map[string]any
-	if err := json.Unmarshal(contract.ResponseSchema, &doc); err != nil {
-		t.Fatalf("contract.ResponseSchema is not valid JSON: %v", err)
-	}
-	v, ok := doc["version"].(string)
-	if !ok || v == "" {
-		t.Errorf("ResponseSchema top-level version = %q (present=%v), want a non-empty string", v, ok)
-	}
-}
-
-// --- request goldens ---------------------------------------------------
-
-// wantGoldenNames are the exact file names (without .json) the platform's
-// api/internal/lifecycle/contract/goldens/ carries today. The contract
-// package is this repository's copy of that same set, so the names must
-// match exactly — no more, no fewer.
-var wantGoldenNames = []string{
-	"subscribe", "unsubscribe", "upgrade", "validate",
-	"invalid-missing-nonce", "invalid-unknown-verb",
-}
-
-func TestGoldensDir_ListsExpectedFileNames(t *testing.T) {
-	entries, err := fs.ReadDir(contract.Goldens, contract.GoldensDir)
+func splitOf(t *testing.T, set goldenSet) goldenSplit {
+	t.Helper()
+	files, err := fs.ReadDir(set.fsys, set.dir)
 	if err != nil {
-		t.Fatalf("fs.ReadDir(contract.Goldens, contract.GoldensDir): %v", err)
+		t.Fatalf("fs.ReadDir(%s): %v", set.dir, err)
 	}
-	if len(entries) == 0 {
-		t.Fatal("contract.Goldens has no entries under contract.GoldensDir — a vacuous contract")
+	valid, err := set.valid()
+	if err != nil {
+		t.Fatalf("the valid %s: %v", set.name, err)
 	}
-	var got []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		got = append(got, strings.TrimSuffix(e.Name(), ".json"))
+	invalid, err := set.invalid()
+	if err != nil {
+		t.Fatalf("the invalid %s: %v", set.name, err)
 	}
-	sort.Strings(got)
-	want := append([]string(nil), wantGoldenNames...)
-	sort.Strings(want)
-	if len(got) != len(want) {
-		t.Fatalf("contract.GoldensDir has %d file(s) %v, want exactly %v", len(got), got, want)
+	return goldenSplit{files, valid, invalid}
+}
+
+func TestGoldenSets_HoldExactlyTheirPinnedGoldensSplitByPrefix(t *testing.T) {
+	cases := []struct {
+		behaviour string
+		check     func(t *testing.T, set goldenSet, s goldenSplit)
+	}{
+		{"the directory holds exactly the pinned names", func(t *testing.T, set goldenSet, s goldenSplit) {
+			var got []string
+			for _, e := range s.files {
+				if !e.IsDir() {
+					got = append(got, strings.TrimSuffix(e.Name(), ".json"))
+				}
+			}
+			want := append(append([]string(nil), set.wantValid...), set.wantInvalid...)
+			sort.Strings(got)
+			sort.Strings(want)
+			if !slices.Equal(got, want) {
+				t.Errorf("%s holds %v, want exactly %v", set.dir, got, want)
+			}
+		}},
+		{"every file is valid JSON", func(t *testing.T, set goldenSet, s goldenSplit) {
+			for _, e := range s.files {
+				if e.IsDir() {
+					continue
+				}
+				raw, err := fs.ReadFile(set.fsys, set.dir+"/"+e.Name())
+				if err != nil {
+					t.Fatalf("reading %s: %v", e.Name(), err)
+				}
+				var v any
+				if err := json.Unmarshal(raw, &v); err != nil {
+					t.Errorf("golden %s is not valid JSON: %v", e.Name(), err)
+				}
+			}
+		}},
+		{"the valid half is every unprefixed golden", func(t *testing.T, set goldenSet, s goldenSplit) {
+			if got := sortedKeys(s.valid); !slices.Equal(got, set.wantValid) {
+				t.Errorf("valid %s = %v, want exactly %v", set.name, got, set.wantValid)
+			}
+			for name := range s.valid {
+				if strings.HasPrefix(name, contract.InvalidPrefix) {
+					t.Errorf("valid %s holds %q, which carries the %q prefix", set.name, name, contract.InvalidPrefix)
+				}
+			}
+		}},
+		{"the invalid half is every prefixed golden", func(t *testing.T, set goldenSet, s goldenSplit) {
+			if got := sortedKeys(s.invalid); !slices.Equal(got, set.wantInvalid) {
+				t.Errorf("invalid %s = %v, want exactly %v", set.name, got, set.wantInvalid)
+			}
+			for name := range s.invalid {
+				if !strings.HasPrefix(name, contract.InvalidPrefix) {
+					t.Errorf("invalid %s holds %q, which lacks the %q prefix", set.name, name, contract.InvalidPrefix)
+				}
+			}
+		}},
+		{"the two halves partition the directory", func(t *testing.T, set goldenSet, s goldenSplit) {
+			if len(s.valid)+len(s.invalid) != len(s.files) {
+				t.Errorf("valid (%d) + invalid (%d) = %d, want %d, the directory's file count",
+					len(s.valid), len(s.invalid), len(s.valid)+len(s.invalid), len(s.files))
+			}
+			for name := range s.valid {
+				if _, dup := s.invalid[name]; dup {
+					t.Errorf("%q is in both halves of the %s", name, set.name)
+				}
+			}
+		}},
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("contract.GoldensDir file set = %v, want %v", got, want)
-			break
+	for _, set := range goldenSets {
+		for _, tc := range cases {
+			t.Run(set.name+"/"+tc.behaviour, func(t *testing.T) {
+				s := splitOf(t, set)
+
+				tc.check(t, set, s)
+			})
 		}
 	}
 }
 
-func TestGoldens_EveryFileIsValidJSON(t *testing.T) {
-	entries, err := fs.ReadDir(contract.Goldens, contract.GoldensDir)
-	if err != nil {
-		t.Fatalf("fs.ReadDir: %v", err)
+func TestWireSchemas_AreDraft2020_12DocumentsWithAVersion(t *testing.T) {
+	schemas := map[string][]byte{"envelope.schema.json": contract.EnvelopeSchema, "response.schema.json": contract.ResponseSchema}
+	cases := []struct {
+		behaviour string
+		check     func(t *testing.T, name string, doc map[string]any)
+	}{
+		{"declares draft 2020-12", func(t *testing.T, name string, doc map[string]any) {
+			if got, want := doc["$schema"], "https://json-schema.org/draft/2020-12/schema"; got != want {
+				t.Errorf("%s $schema = %v, want %q", name, got, want)
+			}
+		}},
+		{"declares a non-empty version", func(t *testing.T, name string, doc map[string]any) {
+			if v, ok := doc["version"].(string); !ok || v == "" {
+				t.Errorf("%s version = %v, want a non-empty string", name, doc["version"])
+			}
+		}},
 	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		raw, err := fs.ReadFile(contract.Goldens, contract.GoldensDir+"/"+e.Name())
-		if err != nil {
-			t.Fatalf("reading %s: %v", e.Name(), err)
-		}
-		var v any
-		if err := json.Unmarshal(raw, &v); err != nil {
-			t.Errorf("golden %s is not valid JSON: %v", e.Name(), err)
+	for name, raw := range schemas {
+		for _, tc := range cases {
+			t.Run(name+"/"+tc.behaviour, func(t *testing.T) {
+				if len(raw) == 0 {
+					t.Fatalf("%s is empty", name)
+				}
+
+				doc := jsonObject(t, raw)
+
+				tc.check(t, name, doc)
+			})
 		}
 	}
 }
 
-func TestInvalidPrefix_IsInvalidDash(t *testing.T) {
-	if contract.InvalidPrefix != "invalid-" {
-		t.Errorf("contract.InvalidPrefix = %q, want %q", contract.InvalidPrefix, "invalid-")
+func TestContract_NamesItsConstantsAsThePlatformDoes(t *testing.T) {
+	cases := []struct{ name, got, want string }{
+		{"InvalidPrefix", contract.InvalidPrefix, "invalid-"},
+		{"ManifestAPIVersionV1Alpha", contract.ManifestAPIVersionV1Alpha, "mitstack/v1alpha"},
+		{"ManifestAPIVersion", contract.ManifestAPIVersion, "mitstack/v1beta"},
+		{"LifecycleHooksField", contract.LifecycleHooksField, "spec.lifecycle.hooks"},
+		{"AppNameNamingField", contract.AppNameNamingField, "spec.naming.appName"},
+		{"ManifestGoldensDir", contract.ManifestGoldensDir, "manifest-goldens"},
 	}
-}
-
-func TestValidGoldens_ExcludesInvalidPrefixedAndIsNonEmpty(t *testing.T) {
-	got, err := contract.ValidGoldens()
-	if err != nil {
-		t.Fatalf("ValidGoldens(): %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Errorf("contract.%s = %q, want %q", tc.name, tc.got, tc.want)
+			}
+		})
 	}
-	if len(got) == 0 {
-		t.Fatal("ValidGoldens() returned nothing — the acceptance half of the contract would be vacuous")
-	}
-	for name := range got {
-		if strings.HasPrefix(name, contract.InvalidPrefix) {
-			t.Errorf("ValidGoldens() returned %q, which carries the %q prefix", name, contract.InvalidPrefix)
-		}
-	}
-	want := []string{"subscribe", "unsubscribe", "upgrade", "validate"}
-	if len(got) != len(want) {
-		t.Fatalf("ValidGoldens() returned %d golden(s) %v, want exactly %v", len(got), keysOf(got), want)
-	}
-	for _, name := range want {
-		if _, ok := got[name]; !ok {
-			t.Errorf("ValidGoldens() is missing %q", name)
-		}
-	}
-}
-
-func TestInvalidGoldens_OnlyInvalidPrefixedAndIsNonEmpty(t *testing.T) {
-	got, err := contract.InvalidGoldens()
-	if err != nil {
-		t.Fatalf("InvalidGoldens(): %v", err)
-	}
-	if len(got) == 0 {
-		t.Fatal("InvalidGoldens() returned nothing — the rejection half of the contract would be vacuous")
-	}
-	for name := range got {
-		if !strings.HasPrefix(name, contract.InvalidPrefix) {
-			t.Errorf("InvalidGoldens() returned %q, which does not carry the %q prefix", name, contract.InvalidPrefix)
-		}
-	}
-	want := []string{"invalid-missing-nonce", "invalid-unknown-verb"}
-	if len(got) != len(want) {
-		t.Fatalf("InvalidGoldens() returned %d golden(s) %v, want exactly %v", len(got), keysOf(got), want)
-	}
-}
-
-func TestValidAndInvalidGoldens_PartitionTheDirectoryExactly(t *testing.T) {
-	valid, err := contract.ValidGoldens()
-	if err != nil {
-		t.Fatalf("ValidGoldens(): %v", err)
-	}
-	invalid, err := contract.InvalidGoldens()
-	if err != nil {
-		t.Fatalf("InvalidGoldens(): %v", err)
-	}
-	entries, err := fs.ReadDir(contract.Goldens, contract.GoldensDir)
-	if err != nil {
-		t.Fatalf("fs.ReadDir: %v", err)
-	}
-	if len(valid)+len(invalid) != len(entries) {
-		t.Fatalf("ValidGoldens (%d) + InvalidGoldens (%d) = %d, want %d (the directory's file count)",
-			len(valid), len(invalid), len(valid)+len(invalid), len(entries))
-	}
-	for name := range valid {
-		if _, dup := invalid[name]; dup {
-			t.Errorf("%q appears in both ValidGoldens and InvalidGoldens", name)
-		}
-	}
-}
-
-// --- response goldens ----------------------------------------------------
-
-var wantResponseGoldenNames = []string{
-	"absent", "error", "last-error", "null-outputs", "outputs", "pending",
-	"secret-outputs", "still-present",
-	"invalid-absent-not-bool", "invalid-outputs-not-object",
-	"invalid-outputs-not-strings", "invalid-pending-not-bool",
-	"invalid-secret-outputs-not-strings",
-	"invalid-resource-secret-outputs-not-object",
-	"invalid-resource-secret-outputs-entry-not-object",
-	"invalid-resource-secret-outputs-value-not-string",
-}
-
-func TestResponseGoldensDir_ListsExpectedFileNames(t *testing.T) {
-	entries, err := fs.ReadDir(contract.ResponseGoldens, contract.ResponseGoldensDir)
-	if err != nil {
-		t.Fatalf("fs.ReadDir(contract.ResponseGoldens, contract.ResponseGoldensDir): %v", err)
-	}
-	if len(entries) == 0 {
-		t.Fatal("contract.ResponseGoldens has no entries under contract.ResponseGoldensDir — a vacuous contract")
-	}
-	var got []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		got = append(got, strings.TrimSuffix(e.Name(), ".json"))
-	}
-	sort.Strings(got)
-	want := append([]string(nil), wantResponseGoldenNames...)
-	sort.Strings(want)
-	if len(got) != len(want) {
-		t.Fatalf("contract.ResponseGoldensDir has %d file(s) %v, want exactly %v", len(got), got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("contract.ResponseGoldensDir file set = %v, want %v", got, want)
-			break
-		}
-	}
-}
-
-func TestResponseGoldens_EveryFileIsValidJSON(t *testing.T) {
-	entries, err := fs.ReadDir(contract.ResponseGoldens, contract.ResponseGoldensDir)
-	if err != nil {
-		t.Fatalf("fs.ReadDir: %v", err)
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		raw, err := fs.ReadFile(contract.ResponseGoldens, contract.ResponseGoldensDir+"/"+e.Name())
-		if err != nil {
-			t.Fatalf("reading %s: %v", e.Name(), err)
-		}
-		var v any
-		if err := json.Unmarshal(raw, &v); err != nil {
-			t.Errorf("response golden %s is not valid JSON: %v", e.Name(), err)
-		}
-	}
-}
-
-func TestValidResponseGoldens_ExcludesInvalidPrefixedAndIsNonEmpty(t *testing.T) {
-	got, err := contract.ValidResponseGoldens()
-	if err != nil {
-		t.Fatalf("ValidResponseGoldens(): %v", err)
-	}
-	if len(got) == 0 {
-		t.Fatal("ValidResponseGoldens() returned nothing — the acceptance half of the contract would be vacuous")
-	}
-	for name := range got {
-		if strings.HasPrefix(name, contract.InvalidPrefix) {
-			t.Errorf("ValidResponseGoldens() returned %q, which carries the %q prefix", name, contract.InvalidPrefix)
-		}
-	}
-	want := []string{
-		"absent", "error", "last-error", "null-outputs", "outputs", "pending",
-		"secret-outputs", "still-present",
-	}
-	if len(got) != len(want) {
-		t.Fatalf("ValidResponseGoldens() returned %d golden(s) %v, want exactly %v", len(got), keysOf(got), want)
-	}
-	for _, name := range want {
-		if _, ok := got[name]; !ok {
-			t.Errorf("ValidResponseGoldens() is missing %q", name)
-		}
-	}
-}
-
-func TestInvalidResponseGoldens_OnlyInvalidPrefixedAndIsNonEmpty(t *testing.T) {
-	got, err := contract.InvalidResponseGoldens()
-	if err != nil {
-		t.Fatalf("InvalidResponseGoldens(): %v", err)
-	}
-	if len(got) == 0 {
-		t.Fatal("InvalidResponseGoldens() returned nothing — the rejection half of the contract would be vacuous")
-	}
-	for name := range got {
-		if !strings.HasPrefix(name, contract.InvalidPrefix) {
-			t.Errorf("InvalidResponseGoldens() returned %q, which does not carry the %q prefix", name, contract.InvalidPrefix)
-		}
-	}
-	want := []string{
-		"invalid-absent-not-bool", "invalid-outputs-not-object",
-		"invalid-outputs-not-strings", "invalid-pending-not-bool",
-		"invalid-secret-outputs-not-strings",
-		"invalid-resource-secret-outputs-not-object",
-		"invalid-resource-secret-outputs-entry-not-object",
-		"invalid-resource-secret-outputs-value-not-string",
-	}
-	if len(got) != len(want) {
-		t.Fatalf("InvalidResponseGoldens() returned %d golden(s) %v, want exactly %v", len(got), keysOf(got), want)
-	}
-}
-
-func TestValidAndInvalidResponseGoldens_PartitionTheDirectoryExactly(t *testing.T) {
-	valid, err := contract.ValidResponseGoldens()
-	if err != nil {
-		t.Fatalf("ValidResponseGoldens(): %v", err)
-	}
-	invalid, err := contract.InvalidResponseGoldens()
-	if err != nil {
-		t.Fatalf("InvalidResponseGoldens(): %v", err)
-	}
-	entries, err := fs.ReadDir(contract.ResponseGoldens, contract.ResponseGoldensDir)
-	if err != nil {
-		t.Fatalf("fs.ReadDir: %v", err)
-	}
-	if len(valid)+len(invalid) != len(entries) {
-		t.Fatalf("ValidResponseGoldens (%d) + InvalidResponseGoldens (%d) = %d, want %d (the directory's file count)",
-			len(valid), len(invalid), len(valid)+len(invalid), len(entries))
-	}
-	for name := range valid {
-		if _, dup := invalid[name]; dup {
-			t.Errorf("%q appears in both ValidResponseGoldens and InvalidResponseGoldens", name)
-		}
-	}
-}
-
-func keysOf(m map[string][]byte) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
