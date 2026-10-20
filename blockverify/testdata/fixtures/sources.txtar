@@ -1,0 +1,621 @@
+Source files a test case adds to or swaps into a fixture block, each named for what it does.
+-- github-creds.go --
+package main
+
+type githubCreds struct {
+	Secrets   map[string]map[string]string
+	Instances map[string]map[string]string
+}
+-- github-host-unguarded.go --
+package main
+
+const githubAPI = "https://api.github.com"
+-- github-instance-unguarded.go --
+package main
+
+func githubEndpoint(c githubCreds) string { return c.Instances["github"]["endpoint"] }
+-- github-owner-only.go --
+package main
+
+func repoOwner(c githubCreds) string { return c.Secrets["github"]["owner"] }
+-- github-raw-apibase-concatenated.go --
+package main
+
+import "github.com/mitstack-eu/operator-kit/v2/ghapi"
+
+func repoURL(c githubCreds, apiBase string) string {
+	_, _ = ghapi.Base(c.Secrets["github"]["endpoint"])
+	return apiBase + "/repos"
+}
+-- github-raw-apibase-in-a-comment.go --
+package main
+
+import "github.com/mitstack-eu/operator-kit/v2/ghapi"
+
+func repoURL(c githubCreds) error {
+	// Never build a URL as apiBase + "/repos": the request would choose the host.
+	_, err := ghapi.Base(c.Secrets["github"]["endpoint"])
+	return err
+}
+-- github-through-ghapi-base-from-env.go --
+package main
+
+import "github.com/mitstack-eu/operator-kit/v2/ghapi"
+
+func githubBase(c githubCreds) error {
+	_, err := ghapi.BaseFromEnv(c.Secrets["github"]["endpoint"])
+	return err
+}
+-- github-through-ghapi-base.go --
+package main
+
+import "github.com/mitstack-eu/operator-kit/v2/ghapi"
+
+func githubBase(c githubCreds) error {
+	_, err := ghapi.Base(c.Secrets["github"]["endpoint"])
+	return err
+}
+-- github-token-in-a-test.go --
+package main
+
+import "testing"
+
+func TestGitHubTokenIsRead(t *testing.T) {
+	_ = githubCreds{}.Secrets["github"]["token"]
+}
+-- github-token-unguarded.go --
+package main
+
+func githubToken(c githubCreds) string { return c.Secrets["github"]["token"] }
+-- handler-imported-only-in-a-test.go --
+package main
+
+import (
+	"testing"
+
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+)
+
+func TestHandlerIsReachable(t *testing.T) {
+	_ = handler.New
+}
+-- kind-spelling-manifest.yaml --
+apiVersion: mitstack/v1alpha
+kind: Block
+metadata:
+  id: blockverify-fixture
+  name: blockverify fixture block
+  owner: blockverify-tests
+spec:
+  layer: backend
+  version: 1.0.0
+  description: >
+    The blockverify fixture block, written with kind in all three places.
+  provides:
+    - blockverify-fixture-capability
+  providedContracts:
+    - capability: blockverify-fixture-capability
+      kind: config
+  continuity:
+    - name: fixture-state
+      kind: volume
+      stateful: false
+  requires:
+    - capability: database
+      reads: [host, port, dbName]
+  outputs:
+    - url
+    - region
+-- kit-fake-outside-a-mandatory-test.go --
+package main
+
+import (
+	"testing"
+
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+)
+
+func TestTheKitFakeBuilds(t *testing.T) {
+	_ = &kittest.FakeResource{}
+}
+-- leak-test-over-an-aliased-kit-fake.go --
+package main
+
+import (
+	"testing"
+
+	kt "github.com/mitstack-eu/operator-kit/v2/kittest"
+)
+
+func TestNoSecretLeakThroughTheFake(t *testing.T) {
+	_ = &kt.FakeResource{}
+}
+-- leak-test-over-the-kit-fake.go --
+package main
+
+import (
+	"testing"
+
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+)
+
+func TestNoSecretLeakThroughTheFake(t *testing.T) {
+	_ = &kittest.FakeResource{}
+}
+-- main-without-handler.go --
+package main
+
+func main() {}
+-- no-contract-manifest.yaml --
+apiVersion: mitstack/v1alpha
+kind: Block
+metadata:
+  id: blockverify-fixture
+  name: blockverify fixture block
+  owner: blockverify-tests
+spec:
+  layer: backend
+  version: 1.0.0
+  description: >
+    A legacy fixture block. This prose mentions
+    contract: kit/v1
+    only as text inside a folded scalar.
+  provides:
+    - blockverify-fixture-capability
+  requires: []
+  lifecycle:
+    endpoint: https://api.mitstack.dev/operators/blockverify-fixture/hook
+    operations: [subscribe, unsubscribe]
+    verbBudgets:
+      contract: kit/v1
+  params:
+    - name: mode
+-- redeclares-emit-progress.go --
+package main
+
+import "context"
+
+func EmitProgress(ctx context.Context, detail string) error { return nil }
+-- resources-block-manifest.yaml --
+apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: blockverify-block-fixture
+  name: blockverify block fixture
+  owner: blockverify-tests
+spec:
+  version: 1.0.0
+  description: A fixture block that creates an instance and its data volume.
+  resources:
+    - aws.ec2-instance
+    - aws.ebs-volume
+  provides: [aws.ec2-instance]
+  lifecycle:
+    endpoint: https://api.mitstack.dev/operators/blockverify-block-fixture/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
+-- resources-block_test.go --
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sync"
+	"testing"
+
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v2/observe"
+)
+
+type misbehave struct {
+	extraTagged     bool
+	leaveOnDelete   string
+	hideReplacement bool
+	staleObserve    string
+	failOnHostType  string
+	dropOutput      string
+}
+
+type provider struct {
+	mu    sync.Mutex
+	items map[string]observe.Tagged
+	tags  map[string]string
+}
+
+func (p *provider) put(id, typ, sub string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.items[id] = observe.Tagged{Type: typ, ID: id}
+	p.tags[id] = sub
+}
+
+func (p *provider) remove(id string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.items, id)
+	delete(p.tags, id)
+}
+
+func (p *provider) holds(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.items[id]
+	return ok
+}
+
+func (p *provider) ListTagged(_ context.Context, sub string) ([]observe.Tagged, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []observe.Tagged
+	for id, item := range p.items {
+		if p.tags[id] == sub {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (p *provider) Lose(_ context.Context, r contract.CreatedResource) error {
+	p.remove(r.Identity["id"])
+	return nil
+}
+
+type block struct {
+	p         *provider
+	m         misbehave
+	container bool
+	mu        sync.Mutex
+	seq       int
+	size      string
+	created   map[string]contract.CreatedResource
+}
+
+func (b *block) wanted(d contract.Desired) map[string]string {
+	if !b.container {
+		return map[string]string{"aws.ec2-instance": "aws.ec2-instance", "aws.ebs-volume": "aws.ebs-volume"}
+	}
+	if d.RequirementTypes["host"] == "hetzner.server" {
+		return map[string]string{"app-container": "hetzner.server-container"}
+	}
+	return map[string]string{"app-container": "aws.ec2-container"}
+}
+
+func (b *block) EnsureResources(ctx context.Context, d contract.Desired) ([]contract.CreatedResource, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.container && d.Bindings["host"]["hostId"] == "" {
+		return nil, fmt.Errorf("no hostId bound for requires.host")
+	}
+	if b.created == nil {
+		b.created = map[string]contract.CreatedResource{}
+	}
+	var out []contract.CreatedResource
+	for name, typ := range b.wanted(d) {
+		prior, had := b.created[name]
+		keep := had && b.p.holds(prior.Identity["id"])
+		if name == "aws.ebs-volume" && had && b.size != d.Params["volumeSize"] {
+			b.p.remove(prior.Identity["id"])
+			keep = false
+		}
+		r := prior
+		if !keep {
+			b.seq++
+			r = contract.CreatedResource{Name: name, Type: typ, Identity: map[string]string{"id": fmt.Sprintf("%s-%d", typ, b.seq)}}
+			b.p.put(r.Identity["id"], typ, d.SubscriptionID)
+		}
+		b.created[name] = r
+		out = append(out, r)
+	}
+	b.size = d.Params["volumeSize"]
+	if b.m.extraTagged {
+		b.p.put("state-bucket", "aws.s3-bucket", d.SubscriptionID)
+	}
+	return out, nil
+}
+
+func (b *block) Ensure(ctx context.Context, d contract.Desired) error {
+	_, err := b.EnsureResources(ctx, d)
+	return err
+}
+
+func (b *block) PlanReplacements(ctx context.Context, d contract.Desired) ([]string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, had := b.created["aws.ebs-volume"]; had && !b.m.hideReplacement && b.size != d.Params["volumeSize"] {
+		return []string{"aws.ebs-volume"}, nil
+	}
+	return nil, nil
+}
+
+func (b *block) Observe(ctx context.Context, d contract.Desired) (contract.Observation, error) {
+	return contract.Observation{State: contract.Unknown}, nil
+}
+
+func (b *block) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for name, r := range b.created {
+		if name == b.m.leaveOnDelete || (b.m.failOnHostType != "" && d.RequirementTypes["host"] == b.m.failOnHostType) {
+			continue
+		}
+		b.p.remove(r.Identity["id"])
+		delete(b.created, name)
+	}
+	b.p.remove("state-bucket")
+	return nil, nil
+}
+
+type providerObserver struct {
+	p    *provider
+	drop string
+}
+
+func (o providerObserver) ObserveResource(_ context.Context, r contract.ResourceRef) (contract.Observation, error) {
+	switch id := r.Identity["id"]; {
+	case id == "":
+		return contract.Observation{State: contract.Unknown}, nil
+	case o.p.holds(id):
+		var outputs map[string]string
+		if r.Type == "aws.ec2-instance" {
+			outputs = map[string]string{"hostId": id, "execKind": "ssm", "execTarget": id}
+			delete(outputs, o.drop)
+		}
+		return contract.Observation{State: contract.Present, Outputs: outputs}, nil
+	}
+	return contract.Observation{State: contract.Absent}, nil
+}
+
+type rememberingObserver struct {
+	b    *block
+	name string
+}
+
+func (o rememberingObserver) ObserveResource(_ context.Context, r contract.ResourceRef) (contract.Observation, error) {
+	o.b.mu.Lock()
+	defer o.b.mu.Unlock()
+	if _, ok := o.b.created[o.name]; ok {
+		return contract.Observation{State: contract.Present}, nil
+	}
+	return contract.Observation{State: contract.Absent}, nil
+}
+
+func assertBlock(t *testing.T, m misbehave, container bool) {
+	manifest, err := os.ReadFile("manifest.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("type-snapshot.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := contract.ParseTypeSnapshot(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &provider{items: map[string]observe.Tagged{}, tags: map[string]string{}}
+	b := &block{p: p, m: m, container: container}
+	in := kittest.Block{
+		Manifest: manifest,
+		Types:    snap,
+		Handler:  b,
+		Provider: p,
+		Desired: contract.Desired{
+			Identity: contract.Identity{SubscriptionID: "sub-fixture", BlockID: "blockverify-block-fixture", OrgID: "org-fixture"},
+			Params:   map[string]string{"volumeSize": "10"},
+		},
+	}
+	if container {
+		in.Observers = map[string]handler.Observer{"app-container": providerObserver{p: p}}
+		in.Requirements = map[string]map[string]map[string]string{"host": {
+			"aws.ec2-instance": {"hostId": "i-0host", "execKind": "ssm", "execTarget": "i-0host"},
+			"hetzner.server":   {"hostId": "4711", "execKind": "ssh", "execTarget": "198.51.100.9"},
+		}}
+	} else {
+		in.Observers = map[string]handler.Observer{"aws.ec2-instance": providerObserver{p: p, drop: m.dropOutput}, "aws.ebs-volume": providerObserver{p: p}}
+		if m.staleObserve != "" {
+			in.Observers[m.staleObserve] = rememberingObserver{b: b, name: m.staleObserve}
+		}
+		upgrade := in.Desired
+		upgrade.Params = map[string]string{"volumeSize": "20"}
+		in.Upgrade = &upgrade
+	}
+	kittest.AssertBlock(t, in)
+}
+-- resources-list-manifest.yaml --
+apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: blockverify-list-fixture
+  name: blockverify list fixture
+  owner: blockverify-tests
+spec:
+  version: 1.0.0
+  description: A fixture block that runs a container on either cloud's host.
+  requires:
+    - { name: host, type: [aws.ec2-instance, hetzner.server] }
+  resources:
+    - { name: app-container, type: [aws.ec2-container, hetzner.server-container] }
+  provides: [app-container]
+  lifecycle:
+    endpoint: https://api.mitstack.dev/operators/blockverify-list-fixture/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
+-- resources-two-resources-manifest.yaml --
+apiVersion: mitstack/v1beta
+type: block
+metadata:
+  id: blockverify-resources-fixture
+  name: blockverify resources fixture
+  owner: blockverify-tests
+spec:
+  version: 1.0.0
+  description: A fixture block that declares two resources.
+  resources:
+    - name: network
+      type: aws.vpc
+    - name: instance
+      type: aws.ec2-instance
+  provides: [instance]
+  lifecycle:
+    endpoint: https://api.mitstack.dev/operators/blockverify-resources-fixture/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
+-- survived-unverified.go --
+package main
+
+import "context"
+
+func (h *Handler) survived(_ context.Context, id string) bool {
+	return h.Store.Exists(id)
+}
+-- teardown-deletes-test-empty.go --
+package main
+
+import "testing"
+
+func TestUnsubscribeDeletesWhatSubscribeCreated(t *testing.T) {}
+-- teardown-test-over-the-kit-fake.go --
+package main
+
+import (
+	"testing"
+
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
+)
+
+func TestUnsubscribeDeletesThroughTheFake(t *testing.T) {
+	_ = &kittest.FakeResource{}
+}
+-- teardown-verify-test-fails.go --
+package main
+
+import "testing"
+
+func TestUnsubscribeVerifiesNothing(t *testing.T) {
+	t.Fatal("the verification test fails")
+}
+-- type-block-spelling-manifest.yaml --
+apiVersion: mitstack/v1alpha
+type: block
+metadata:
+  id: blockverify-fixture
+  name: blockverify fixture block
+  owner: blockverify-tests
+spec:
+  version: 1.0.0
+  description: >
+    The blockverify fixture block, written with type, format and store.
+  provides:
+    - blockverify-fixture-capability
+  providedContracts:
+    - capability: blockverify-fixture-capability
+      format: config
+  continuity:
+    - name: fixture-state
+      store: volume
+      stateful: false
+  requires:
+    - capability: database
+      reads: [host, port, dbName]
+  outputs:
+    - url
+    - region
+-- urlguard-allowlist.go --
+package main
+
+import "net/url"
+
+func allowedGitHubHosts() []string { return []string{"api.github.com"} }
+
+func trustedGitHubBase(c githubCreds) (string, error) {
+	u, err := url.Parse(c.Secrets["github"]["endpoint"])
+	if err != nil {
+		return "", err
+	}
+	for _, allowed := range allowedGitHubHosts() {
+		if u.Host == allowed {
+			return "https://" + allowed, nil
+		}
+	}
+	return "https://api.github.com", nil
+}
+-- urlguard-no-allowlist.go --
+package main
+
+func trustedGitHubBase(c githubCreds) (string, error) {
+	_ = c.Secrets["github"]["endpoint"]
+	return "https://api.github.com", nil
+}
+-- urlguard-request-host.go --
+package main
+
+import "net/url"
+
+func allowedGitHubHosts() []string { return []string{"api.github.com"} }
+
+func trustedGitHubBase(c githubCreds) (string, error) {
+	u, err := url.Parse(c.Secrets["github"]["endpoint"])
+	if err != nil {
+		return "", err
+	}
+	return "https://" + u.Host, nil
+}
+-- verify-after-a-closed-comma-ok.go --
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/mitstack-eu/operator-kit/v2/teardown"
+)
+
+type existenceChecker interface{ Exists(string) bool }
+
+func (h *Handler) survived(ctx context.Context, id string) bool {
+	var store any = h.Store
+	if _, ok := store.(existenceChecker); ok {
+		log.Printf("store answers existence checks")
+	}
+	return teardown.Verify(ctx, teardown.Options{}, teardown.Check{
+		Kind:    "fixture resource",
+		Present: func(context.Context) (bool, error) { return h.Store.Exists(id), nil },
+	})
+}
+-- verify-gated-by-comma-ok.go --
+package main
+
+import (
+	"context"
+
+	"github.com/mitstack-eu/operator-kit/v2/teardown"
+)
+
+type existenceChecker interface{ Exists(string) bool }
+
+func (h *Handler) survived(ctx context.Context, id string) bool {
+	var store any = h.Store
+	if checker, ok := store.(existenceChecker); ok {
+		return teardown.Verify(ctx, teardown.Options{}, teardown.Check{
+			Kind:    "fixture resource",
+			Present: func(context.Context) (bool, error) { return checker.Exists(id), nil },
+		})
+	}
+	return false
+}
+-- verify-only-in-a-test.go --
+package main
+
+import (
+	"context"
+	"testing"
+
+	"github.com/mitstack-eu/operator-kit/v2/teardown"
+)
+
+func TestVerifyIsReachable(t *testing.T) {
+	_ = teardown.Verify(context.Background(), teardown.Options{})
+}

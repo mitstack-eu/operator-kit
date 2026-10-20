@@ -639,203 +639,43 @@ func TestNoFileUnderBlockverifyOrHandlerNamesTheOldReader(t *testing.T) {
 	}
 }
 
-type guardCase struct {
-	label       string
-	blockverify string
-	handler     string
-	violations  int
-}
-
-const guardPreamble = `import (
-	"bytes"
-	"crypto/sha256"
-	"os"
-	"path/filepath"
-	"strings"
-
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/handler"
-)
-
-var _ = bytes.Contains
-var _ = sha256.Sum256
-var _ = strings.Split
-var _ = filepath.Join
-var _ = os.ReadFile
-var _ = contract.ParseManifest
-var _ = handler.Read
-
-const manifestFile = "manifest.yaml"
-`
-
-const guardHandlerPreamble = `import (
-	"bytes"
-	"strings"
-
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-)
-
-var _ = bytes.Contains
-var _ = strings.Split
-var _ = contract.ParseManifest
-
-type Config struct{ Manifest []byte }
-
-func Read(b []byte) int { return len(b) }
-`
-
-var guardCases = []guardCase{
-	{
-		label: "a []byte manifest parameter cut into lines",
-		handler: `func ManifestNames(manifest []byte) int {
-	return len(strings.Split(string(manifest), "\n"))
-}`,
-		violations: 1,
-	},
-	{
-		label: "a []byte manifest parameter handed to the parser",
-		handler: `func ManifestNames(manifest []byte) error {
-	if len(manifest) == 0 || manifest == nil {
-		return nil
-	}
-	_, err := contract.ParseManifest(manifest)
-	return err
-}`,
-	},
-	{
-		label: "a manifest file read and searched",
-		blockverify: `func declared(target string) bool {
-	raw, err := os.ReadFile(filepath.Join(target, manifestFile))
-	if err != nil {
-		return false
-	}
-	return bytes.Contains(raw, []byte("contract:"))
-}`,
-		violations: 1,
-	},
-	{
-		label: "a manifest file read, parsed and digested",
-		blockverify: `func declared(target string) ([32]byte, error) {
-	path := filepath.Join(target, "manifest.yaml")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return [32]byte{}, err
-	}
-	if _, err := contract.ParseManifest(raw); err != nil {
-		return [32]byte{}, err
-	}
-	return sha256.Sum256(raw), nil
-}`,
-	},
-	{
-		label: "a manifest file read and scanned by a helper",
-		blockverify: `func declared(target string) int {
-	path := filepath.Join(target, manifestFile)
-	raw, _ := os.ReadFile(path)
-	return scan(string(raw))
-}
-
-func scan(content string) int {
-	n := 0
-	for _, line := range strings.Split(content, "\n") {
-		n += len(line)
-	}
-	return n
-}`,
-		violations: 1,
-	},
-	{
-		label: "a Config.Manifest searched",
-		handler: `func New(cfg Config) error {
-	if len(cfg.Manifest) == 0 {
-		return nil
-	}
-	if bytes.HasPrefix(cfg.Manifest, []byte("apiVersion")) {
-		return nil
-	}
-	return nil
-}`,
-		violations: 1,
-	},
-	{
-		label: "a manifest handed to a reader in the other package",
-		blockverify: `func declared(target string) int {
-	raw, _ := os.ReadFile(filepath.Join(target, manifestFile))
-	return handler.Read(raw) + handler.Count(raw)
-}`,
-		handler:    `func Count(b []byte) int { return bytes.Count(b, []byte("\n")) }`,
-		violations: 1,
-	},
-	{
-		label: "a base manifest path passed down and its file trimmed",
-		blockverify: `func suite(target, baseManifest string) string { return compare(baseManifest) }
-
-func compare(base string) string {
-	raw, _ := os.ReadFile(base)
-	return strings.TrimSpace(string(raw))
-}`,
-		violations: 1,
-	},
-	{
-		label: "a helper that returns the manifest bytes to a reader",
-		blockverify: `func readBytes(target string) []byte {
-	raw, _ := os.ReadFile(filepath.Join(target, manifestFile))
-	return raw
-}
-
-func declared(target string) int {
-	b := readBytes(target)
-	return len(strings.Fields(string(b)))
-}`,
-		violations: 1,
-	},
-	{
-		label: "a manifest stored in a field",
-		handler: `type holder struct{ raw []byte }
-
-func New(cfg Config) *holder {
-	h := &holder{}
-	h.raw = cfg.Manifest
-	return h
-}`,
-		violations: 1,
-	},
-	{
-		label: "a manifest path written as a constant concatenation",
-		blockverify: `func declared(target string) bool {
-	raw, _ := os.ReadFile(filepath.Join(target, "mani"+"fest.yaml"))
-	return bytes.Contains(raw, []byte("contract:"))
-}`,
-		violations: 1,
-	},
-	{
-		label: "a manifest path held in a constant built by concatenation",
-		blockverify: `const fileName = "mani" + "fest.yaml"
-
-func declared(target string) bool {
-	raw, _ := os.ReadFile(filepath.Join(target, fileName))
-	return bytes.Contains(raw, []byte("contract:"))
-}`,
-		violations: 1,
-	},
-}
-
 func TestManifestReadGuard_CatchesEveryHandReaderAndPassesAParserRead(t *testing.T) {
-	for _, tc := range guardCases {
+	_, snippets := readTxtar(t, filepath.Join(fixturesDir, "guard-cases.txtar"))
+	cases := []struct {
+		label, slug string
+		violations  int
+	}{
+		{"a []byte manifest parameter cut into lines", "parameter-cut-into-lines", 1},
+		{"a []byte manifest parameter handed to the parser", "parameter-handed-to-the-parser", 0},
+		{"a manifest file read and searched", "file-read-and-searched", 1},
+		{"a manifest file read, parsed and digested", "file-read-parsed-and-digested", 0},
+		{"a manifest file read and scanned by a helper", "file-scanned-by-a-helper", 1},
+		{"a Config.Manifest searched", "config-manifest-searched", 1},
+		{"a manifest handed to a reader in the other package", "handed-to-the-other-package", 1},
+		{"a base manifest path passed down and its file trimmed", "base-path-passed-down-and-trimmed", 1},
+		{"a helper that returns the manifest bytes to a reader", "helper-returns-the-bytes", 1},
+		{"a manifest stored in a field", "stored-in-a-field", 1},
+		{"a manifest path written as a constant concatenation", "path-as-a-constant-concatenation", 1},
+		{"a manifest path held in a constant built by concatenation", "path-in-a-concatenated-constant", 1},
+	}
+	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
 			fset := token.NewFileSet()
-			parse := func(name, pkg, preamble, body string) *ast.File {
-				f, err := parser.ParseFile(fset, name, "package "+pkg+"\n\n"+preamble+"\n"+body+"\n", 0)
+			parse := func(pkg, file string) *ast.File {
+				src := "package " + pkg + "\n\n" + snippets[file+"-preamble.go"] + "\n" + snippets[tc.slug+"/"+file+".go"]
+				f, err := parser.ParseFile(fset, file+".go", src, 0)
 				if err != nil {
-					t.Fatalf("parsing the %s case: %v", name, err)
+					t.Fatalf("parsing the %s case: %v", file, err)
 				}
 				return f
 			}
 			pkgs := []*guardPackage{
-				{path: kitBlockverify, files: []*ast.File{parse("blockverify.go", "main", guardPreamble, tc.blockverify)}},
-				{path: kitHandlerPath, files: []*ast.File{parse("handler.go", "handler", guardHandlerPreamble, tc.handler)}},
+				{path: kitBlockverify, files: []*ast.File{parse("main", "blockverify")}},
+				{path: kitHandlerPath, files: []*ast.File{parse("handler", "handler")}},
 			}
+
 			sources, violations := guardManifestReads(fset, pkgs)
+
 			if len(violations) != tc.violations {
 				t.Errorf("the guard reported %d uses off the parser, want %d:\n%s", len(violations), tc.violations, strings.Join(violations, "\n"))
 			}
@@ -843,5 +683,74 @@ func TestManifestReadGuard_CatchesEveryHandReaderAndPassesAParserRead(t *testing
 				t.Error("the guard found no manifest source in the case")
 			}
 		})
+	}
+}
+
+// readerImports are the packages a text reader is built from.
+var readerImports = map[string]bool{
+	"bufio": true, "bytes": true, "regexp": true, "strconv": true,
+	"text/scanner": true, "unicode": true, "unicode/utf8": true,
+}
+
+var readerStringsFuncs = map[string]bool{
+	"Count": true, "Cut": true, "CutPrefix": true, "CutSuffix": true,
+	"Fields": true, "FieldsFunc": true, "FieldsFuncSeq": true, "FieldsSeq": true,
+	"Index": true, "IndexAny": true, "IndexByte": true, "IndexFunc": true, "IndexRune": true,
+	"LastIndex": true, "LastIndexAny": true, "LastIndexByte": true, "LastIndexFunc": true,
+	"Lines": true, "NewReader": true,
+	"Split": true, "SplitAfter": true, "SplitAfterN": true, "SplitAfterSeq": true, "SplitN": true, "SplitSeq": true,
+	"TrimFunc": true, "TrimLeft": true, "TrimLeftFunc": true, "TrimRight": true, "TrimRightFunc": true,
+}
+
+// A YAML reader compares characters, cuts lines and keeps a cursor, so manifest.go is held to none of that.
+func TestManifestGo_HoldsNoYAMLReaderOfItsOwn(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "manifest.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parsing manifest.go: %v", err)
+	}
+
+	var problems []string
+	at := func(n ast.Node) string { return fset.Position(n.Pos()).String() }
+	for _, imp := range f.Imports {
+		path, _ := strconv.Unquote(imp.Path.Value)
+		if readerImports[path] {
+			problems = append(problems, at(imp)+": imports "+path)
+		}
+	}
+	callsParser := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncDecl:
+			if n.Recv != nil {
+				problems = append(problems, at(n)+": declares the method "+n.Name.Name)
+			}
+		case *ast.Ident:
+			if strings.Contains(strings.ToLower(n.Name), "yaml") {
+				problems = append(problems, at(n)+": names "+n.Name)
+			}
+		case *ast.BasicLit:
+			if n.Kind == token.CHAR {
+				problems = append(problems, at(n)+": compares against the character "+n.Value)
+			}
+		case *ast.SelectorExpr:
+			pkg, ok := n.X.(*ast.Ident)
+			if !ok {
+				break
+			}
+			if pkg.Name == "strings" && readerStringsFuncs[n.Sel.Name] {
+				problems = append(problems, at(n)+": calls strings."+n.Sel.Name)
+			}
+			if pkg.Name == "contract" && n.Sel.Name == "ParseManifest" {
+				callsParser = true
+			}
+		}
+		return true
+	})
+	if !callsParser {
+		problems = append(problems, "manifest.go never calls contract.ParseManifest")
+	}
+	for _, p := range problems {
+		t.Error(p)
 	}
 }

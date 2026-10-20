@@ -1,0 +1,39 @@
+A kit/v1 block whose main.go imports the kit handler, with no kitshim.go and no TestContract_ function; go.mod is written by the harness.
+-- Dockerfile --
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY . .
+RUN go build -o /out/fixture .
+
+FROM alpine:3.20
+COPY --from=build /out/fixture /usr/local/bin/fixture
+ENTRYPOINT ["/usr/local/bin/fixture"]
+-- main.go --
+package main
+
+import "github.com/mitstack-eu/operator-kit/v2/handler"
+
+var _ = handler.New
+
+func main() {}
+-- manifest.yaml --
+apiVersion: mitstack/v1alpha
+kind: Block
+metadata:
+  id: blockverify-kitv1-fixture
+  name: blockverify kit/v1 fixture block
+  owner: blockverify-tests
+spec:
+  layer: backend
+  version: 1.0.0
+  description: >
+    A minimal fixture block on the kit/v1 lifecycle contract, used only to
+    prove blockverify judges it by the kit/v1 rule.
+  provides:
+    - blockverify-kitv1-capability
+  requires: []
+  lifecycle:
+    # kit/v1: the operator serves its verbs through the kit's handler.
+    contract: kit/v1
+    endpoint: https://api.mitstack.dev/operators/blockverify-kitv1-fixture/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]

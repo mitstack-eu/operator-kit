@@ -1,0 +1,137 @@
+Each case is a blockverify and a handler package the manifest-read guard judges, after the preamble of its package.
+-- blockverify-preamble.go --
+import (
+	"bytes"
+	"crypto/sha256"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v2/handler"
+)
+
+var _ = bytes.Contains
+var _ = sha256.Sum256
+var _ = strings.Split
+var _ = filepath.Join
+var _ = os.ReadFile
+var _ = contract.ParseManifest
+var _ = handler.Read
+
+const manifestFile = "manifest.yaml"
+-- handler-preamble.go --
+import (
+	"bytes"
+	"strings"
+
+	"github.com/mitstack-eu/operator-kit/v2/contract"
+)
+
+var _ = bytes.Contains
+var _ = strings.Split
+var _ = contract.ParseManifest
+
+type Config struct{ Manifest []byte }
+
+func Read(b []byte) int { return len(b) }
+-- parameter-cut-into-lines/handler.go --
+func ManifestNames(manifest []byte) int {
+	return len(strings.Split(string(manifest), "\n"))
+}
+-- parameter-handed-to-the-parser/handler.go --
+func ManifestNames(manifest []byte) error {
+	if len(manifest) == 0 || manifest == nil {
+		return nil
+	}
+	_, err := contract.ParseManifest(manifest)
+	return err
+}
+-- file-read-and-searched/blockverify.go --
+func declared(target string) bool {
+	raw, err := os.ReadFile(filepath.Join(target, manifestFile))
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(raw, []byte("contract:"))
+}
+-- file-read-parsed-and-digested/blockverify.go --
+func declared(target string) ([32]byte, error) {
+	path := filepath.Join(target, "manifest.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	if _, err := contract.ParseManifest(raw); err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(raw), nil
+}
+-- file-scanned-by-a-helper/blockverify.go --
+func declared(target string) int {
+	path := filepath.Join(target, manifestFile)
+	raw, _ := os.ReadFile(path)
+	return scan(string(raw))
+}
+
+func scan(content string) int {
+	n := 0
+	for _, line := range strings.Split(content, "\n") {
+		n += len(line)
+	}
+	return n
+}
+-- config-manifest-searched/handler.go --
+func New(cfg Config) error {
+	if len(cfg.Manifest) == 0 {
+		return nil
+	}
+	if bytes.HasPrefix(cfg.Manifest, []byte("apiVersion")) {
+		return nil
+	}
+	return nil
+}
+-- handed-to-the-other-package/blockverify.go --
+func declared(target string) int {
+	raw, _ := os.ReadFile(filepath.Join(target, manifestFile))
+	return handler.Read(raw) + handler.Count(raw)
+}
+-- handed-to-the-other-package/handler.go --
+func Count(b []byte) int { return bytes.Count(b, []byte("\n")) }
+-- base-path-passed-down-and-trimmed/blockverify.go --
+func suite(target, baseManifest string) string { return compare(baseManifest) }
+
+func compare(base string) string {
+	raw, _ := os.ReadFile(base)
+	return strings.TrimSpace(string(raw))
+}
+-- helper-returns-the-bytes/blockverify.go --
+func readBytes(target string) []byte {
+	raw, _ := os.ReadFile(filepath.Join(target, manifestFile))
+	return raw
+}
+
+func declared(target string) int {
+	b := readBytes(target)
+	return len(strings.Fields(string(b)))
+}
+-- stored-in-a-field/handler.go --
+type holder struct{ raw []byte }
+
+func New(cfg Config) *holder {
+	h := &holder{}
+	h.raw = cfg.Manifest
+	return h
+}
+-- path-as-a-constant-concatenation/blockverify.go --
+func declared(target string) bool {
+	raw, _ := os.ReadFile(filepath.Join(target, "mani"+"fest.yaml"))
+	return bytes.Contains(raw, []byte("contract:"))
+}
+-- path-in-a-concatenated-constant/blockverify.go --
+const fileName = "mani" + "fest.yaml"
+
+func declared(target string) bool {
+	raw, _ := os.ReadFile(filepath.Join(target, fileName))
+	return bytes.Contains(raw, []byte("contract:"))
+}

@@ -1,7 +1,8 @@
 package main
 
+// The manifest and naming suites and the contract rule read a manifest through contract.ParseManifest and judge what it declares.
+
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,643 +22,243 @@ spec:
   description: A block for the manifest suite.
 `
 
-func manifestDir(t *testing.T, content string) string {
+func withVersion(t *testing.T, v string) string {
+	return replaced(t, manifestHead, "version: 1.0.0", "version: "+v)
+}
+
+func withID(t *testing.T, idLine string) string {
+	return replaced(t, manifestHead, "  id: reads-consumer\n", "  id: "+idLine+"\n")
+}
+
+func plainV1Beta(t *testing.T) string {
 	t.Helper()
-	return newFixtureFrom(t, map[string]string{"manifest.yaml": content})
+	raw, err := contract.ManifestGoldens.ReadFile(contract.ManifestGoldensDir + "/plain-v1beta.yaml")
+	if err != nil {
+		t.Fatalf("reading plain-v1beta.yaml from contract.ManifestGoldens: %v", err)
+	}
+	return string(raw)
 }
 
-func baseManifestFile(t *testing.T, content string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "base-manifest.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path
+func missingBase(t *testing.T) string { return filepath.Join(t.TempDir(), "base-manifest.yaml") }
+
+func dirBase(t *testing.T) string {
+	base := missingBase(t)
+	mkdir(filepath.Base(base))(t, filepath.Dir(base))
+	return base
 }
 
-func withVersion(v string) string {
-	return strings.Replace(manifestHead, "version: 1.0.0", "version: "+v, 1)
+func passes(name, content string) suiteCase {
+	return suiteCase{name: name, dir: manifestOnly(content), status: "pass"}
 }
 
-func requireManifestPass(t *testing.T, got SuiteResult) {
-	t.Helper()
-	if got.Name != "manifest" {
-		t.Errorf("suite name = %q, want %q", got.Name, "manifest")
-	}
-	if got.Status != "pass" {
-		t.Errorf("manifest status = %q, want %q; detail: %s", got.Status, "pass", got.Detail)
-	}
+func fails(name, content string, detail ...string) suiteCase {
+	return suiteCase{name: name, dir: manifestOnly(content), status: "fail", detail: detail}
 }
 
-func requireManifestFail(t *testing.T, got SuiteResult, wants ...string) {
-	t.Helper()
-	if got.Name != "manifest" {
-		t.Errorf("suite name = %q, want %q", got.Name, "manifest")
+func TestManifestSuite(t *testing.T) {
+	head, v1beta := manifestHead, plainV1Beta(t)
+	from100 := baseManifest(withVersion(t, "1.0.0"))
+	noID := replaced(t, head, "  id: reads-consumer\n", "")
+	noMetadata := replaced(t, head, "metadata:\n  id: reads-consumer\n  name: Reads Consumer\n  owner: blockverify-tests\n", "")
+	cases := []suiteCase{
+		{name: "a directory with no manifest is skipped", dir: emptyDir, status: "skipped"},
+		passes("the golden fixture's requires: [] declares no reads and passes", legacyManifest(t)),
+		passes("a manifest with no requires passes", head),
+		passes("requirements with no reads pass", head+"  requires:\n    - capability: database\n      hint: a postgres database\n    - capability: no-registry-entry-lists-this\n"),
+		passes("reads in a flow list that their capability gives pass", head+"  requires:\n    - capability: database\n      reads: [appName, dbName]\n"),
+		passes("a read in a block list naming an alias passes", head+"  requires:\n    - capability: app-host\n      reads:\n        - region\n"),
+		passes("reads written before the capability pass", head+"  requires:\n    - reads: [host, port]\n      capability: database\n"),
+		passes("quoted read names and comments pass", head+"  requires:\n    # the database this block connects to\n    - capability: database # postgres\n      reads: [\"dbName\", 'username'] # both from the database\n"),
+		passes("a read two capabilities give passes", head+"  requires:\n    - capability: aws-topology\n      reads:\n        - appHostname\n"),
+		passes("a requirement with reads beside ones without passes", head+"  requires:\n    - capability: github\n    - capability: llm\n      reads: [llmEndpoint, model]\n    - capability: database\n"),
+		passes("a consumer reading the four kube-cluster contract fields passes", head+"  requires:\n    - capability: kube-cluster\n      reads: [privateEndpoint, issuerUrl, issuerBucket, clusterRepoUrl]\n"),
+		passes("a requirement reading region from app-host passes", head+"  requires:\n    - capability: app-host\n      reads: [region]\n"),
+		fails("a read the registry does not hold fails, naming the nearest name", head+"  requires:\n    - capability: database\n      reads: [appName, dbNme]\n",
+			`spec.requires[database].reads: "dbNme" is not in the resource registry`, `"dbName"`),
+		fails("database reading appHostname fails", head+"  requires:\n    - capability: database\n      reads: [appHostname]\n",
+			`spec.requires[database].reads: "appHostname" is not an output of capability "database"`),
+		fails("database reading an alias of a host entry fails", head+"  requires:\n    - capability: database\n      reads:\n        - instanceType\n",
+			`spec.requires[database].reads: "instanceType" is not an output of capability "database"`),
+		fails("an offending requirement after a valid one fails, naming it", head+"  requires:\n    - capability: app-host\n      reads: [appHostname]\n    - capability: llm\n      reads: [dbName]\n",
+			`spec.requires[llm].reads: "dbName" is not an output of capability "llm"`),
+		fails("an empty read name fails", head+"  requires:\n    - capability: database\n      reads: [appName, \"\"]\n",
+			`spec.requires[database].reads: a name must not be empty`),
+		passes("outputs in a block list with dotted names and an alias pass", head+"  outputs:\n    - dbName\n    - host.type\n    - region\n"),
+		passes("outputs in a flow list pass", head+"  outputs: [host, port, username]\n"),
+		passes("an empty outputs flow list passes", head+"  outputs: []\n"),
+		passes("the kube-cluster block's eight outputs pass", head+"  outputs:\n    - privateEndpoint\n    - issuerUrl\n    - issuerBucket\n    - clusterRepoUrl\n    - serverId\n    - cloud.region\n    - host.type\n    - enrolmentTokenSha256\n"),
+		{name: "an output outside the registry names the nearest name, a tie broken alphabetically in a block list", dir: manifestOnly(head + "  outputs:\n    - url\n    - hostnme\n"),
+			status: "fail", detail: []string{"spec.outputs", `"hostnme"`, `"host"`}, not: []string{`"hostId"`}},
+		{name: "an output outside the registry names the nearest name, a tie broken alphabetically in a flow list", dir: manifestOnly(head + "  outputs: [runsOnP]\n"),
+			status: "fail", detail: []string{"spec.outputs", `"runsOnP"`, `"runsOn"`}, not: []string{`"runsOnPr"`}},
+		{name: "an output outside the registry whose nearest name is an alias names the alias", dir: manifestOnly(head + "  outputs:\n    - regon\n"),
+			status: "fail", detail: []string{"spec.outputs", `"regon"`, `"region"`}, not: []string{`"repo"`}},
+		{name: "an unchanged version passes without a release class or note", dir: manifestOnly(withVersion(t, "1.0.0")), base: from100, status: "pass"},
+		{name: "a changed version with a class and a plain note passes", base: from100, status: "pass",
+			dir: manifestOnly(withVersion(t, "1.1.0") + "  releaseClass: feature\n  releaseNote: Adds the reads declaration.\n")},
+		{name: "a changed version with a class and a folded note passes", base: from100, status: "pass",
+			dir: manifestOnly(withVersion(t, "1.1.0") + "  releaseClass: correctness-fix\n  releaseNote: >\n    Fixes the retry that dropped the second\n    attempt's outputs.\n  requires: []\n")},
+		{name: "a changed version with a literal note before its class passes", base: from100, status: "pass",
+			dir: manifestOnly(withVersion(t, "1.1.0") + "  releaseNote: |\n    Renames the output.\n  releaseClass: breaking\n")},
+		{name: "a changed version with no release class fails, naming it", base: from100, status: "fail", detail: []string{"spec.releaseClass"},
+			dir: manifestOnly(withVersion(t, "1.1.0") + "  releaseNote: Adds the reads declaration.\n")},
+		{name: "a changed version with no release note fails, naming it", base: from100, status: "fail", detail: []string{"spec.releaseNote"},
+			dir: manifestOnly(withVersion(t, "1.1.0") + "  releaseClass: feature\n")},
+		{name: "a changed version with a blank release note fails, naming it", base: from100, status: "fail", detail: []string{"spec.releaseNote"},
+			dir: manifestOnly(withVersion(t, "1.1.0") + "  releaseClass: feature\n  releaseNote: \"   \"\n")},
+		{name: "a changed version with an empty folded release note fails, naming it", base: from100, status: "fail", detail: []string{"spec.releaseNote"},
+			dir: manifestOnly(withVersion(t, "1.1.0") + "  releaseClass: feature\n  releaseNote: >\n  requires: []\n")},
+		{name: "a changed version with neither class nor note names both", dir: manifestOnly(withVersion(t, "2.0.0")), base: from100,
+			status: "fail", detail: []string{"spec.releaseClass", "spec.releaseNote"}},
+		{name: "a base manifest that does not exist marks the block new and passes", dir: manifestOnly(withVersion(t, "1.1.0")), base: missingBase, status: "pass"},
+		passes("no --base-manifest compares no version", withVersion(t, "1.1.0")),
+		{name: "an unreadable base manifest fails, naming it", dir: manifestOnly(withVersion(t, "1.1.0")), base: dirBase, status: "fail", detail: []string{"$BASE"}},
+		passes("a worked v1beta manifest passes", v1beta),
+		{name: "a worked v1beta manifest passes against an older v1alpha base", dir: manifestOnly(v1beta), base: baseManifest(withVersion(t, "2.4.0")), status: "pass"},
+		passes("a bare slug metadata.id passes", withID(t, "billing-db")),
+		passes("a double-quoted private metadata.id passes", withID(t, `"@acme/billing-db"`)),
+		passes("a single-quoted private metadata.id passes", withID(t, `'@acme/billing-db'`)),
+		passes("a private metadata.id with a comment passes", withID(t, `"@org-a/api" # the org's own api block`)),
+		passes("a forty-character bare slug passes", withID(t, "a"+strings.Repeat("b", 38)+"c")),
+		passes("metadata without an id passes with a valid spec", noID),
+		passes("no metadata at all passes with a valid spec", noMetadata),
+		fails("a bad metadata.id is reported beside a spec problem", withID(t, `"@Acme/x"`)+"  outputs: [hostnme]\n", "metadata.id", "@<org>/", `spec.outputs: "hostnme"`),
+		{name: "metadata without an id reports only the spec problem", dir: manifestOnly(noID + "  outputs: [hostnme]\n"),
+			status: "fail", detail: []string{`spec.outputs: "hostnme"`}, not: []string{"metadata.id"}},
+		{name: "no metadata at all reports only the spec problem", dir: manifestOnly(noMetadata + "  outputs: [hostnme]\n"),
+			status: "fail", detail: []string{`spec.outputs: "hostnme"`}, not: []string{"metadata.id"}},
+		fails("metadata as a flow mapping is a failure", "apiVersion: mitstack/v1alpha\nkind: Block\nmetadata: {id: \"@Acme/x\", owner: blockverify-tests}\nspec:\n  layer: backend\n  version: 1.0.0\n", "manifest.yaml", "metadata"),
+		fails("metadata.id as an alias is a failure", "apiVersion: mitstack/v1alpha\nkind: Block\nmetadata:\n  name: &bad \"@Acme/x\"\n  id: *bad\nspec:\n  layer: backend\n  version: 1.0.0\n", "manifest.yaml", "metadata"),
+		fails("metadata.id as a mapping is a failure", "apiVersion: mitstack/v1alpha\nkind: Block\nmetadata:\n  id:\n    org: Acme\nspec:\n  layer: backend\n  version: 1.0.0\n", "manifest.yaml", "metadata"),
+		passes("the type, format and store spelling passes", source(t, "type-block-spelling-manifest.yaml")),
+		passes("the kind-in-all-three spelling passes", source(t, "kind-spelling-manifest.yaml")),
+		passes("an old-form manifest with dependsOn and provided slugs passes", head+"  dependsOn:\n    - weather-app\n  provides:\n    - runner\n  requires:\n    - capability: repo\n      reads: [repo]\n    - capability: app-host\n  outputs:\n    - repo\n"),
+		{name: "a manifest with dependsOn passes and prints its warning", dir: manifestOnly(head + "  dependsOn:\n    - weather-app\n  requires:\n    - capability: repo\n      reads: [repo]\n"),
+			status: "pass", detail: []string{"spec.dependsOn"}},
+		fails("spec as a flow mapping is a failure", "apiVersion: mitstack/v1alpha\nkind: Block\nspec: {version: 1.0.0, outputs: [nope]}\n", "manifest.yaml"),
+		fails("spec.outputs as a flow mapping is a failure", head+"  outputs: {first: nope}\n", "manifest.yaml"),
+		fails("spec.outputs as an alias is a failure", head+"  tags: &outs [nope]\n  outputs: *outs\n", "manifest.yaml"),
+		fails("spec.requires as a flow mapping is a failure", head+"  requires: {capability: database, reads: [nope]}\n", "manifest.yaml"),
+		fails("spec.requires as an alias is a failure", head+"  resources: &reqs\n    - name: database\n  requires: *reqs\n", "manifest.yaml"),
+		{name: "a manifest.yaml that is a directory is a failure", dir: then(emptyDir, mkdir(manifestFile)), status: "fail", detail: []string{"manifest.yaml"}},
+		fails("a v1beta manifest carrying spec.outputs fails as the parser refuses it", v1beta+"  outputs: [host]\n", "manifest.yaml", "spec.outputs"),
+		fails("an unknown apiVersion fails, naming both known versions", replaced(t, head, "apiVersion: mitstack/v1alpha", "apiVersion: mitstack/v2"),
+			"manifest.yaml", "mitstack/v2", contract.ManifestAPIVersionV1Alpha, contract.ManifestAPIVersion),
+		fails("no apiVersion fails, naming both known versions", replaced(t, head, "apiVersion: mitstack/v1alpha\n", ""),
+			"manifest.yaml", contract.ManifestAPIVersionV1Alpha, contract.ManifestAPIVersion),
 	}
-	if got.Status != "fail" {
-		t.Errorf("manifest status = %q, want %q; detail: %s", got.Status, "fail", got.Detail)
-		return
+	for _, idLine := range []string{`"@Acme/x"`, `"@acme/"`, "acme/x", `"@acme/x/y"`, "Billing-DB", "billing-", "a" + strings.Repeat("b", 39) + "c"} {
+		cases = append(cases, fails("metadata.id "+idLine+" outside both forms fails, naming it", withID(t, idLine), "manifest.yaml", "metadata.id", "@<org>/"))
 	}
-	for _, want := range wants {
-		if !strings.Contains(got.Detail, want) {
-			t.Errorf("manifest detail = %q, want it to contain %q", got.Detail, want)
-		}
+	for _, idLine := range []string{"@acme/billing-db", "@acme/billing-db # the billing database", "`billing-db`"} {
+		cases = append(cases, fails("unquoted metadata.id "+idLine+" fails, asking for quotes", withID(t, idLine), "manifest.yaml", "metadata.id", "quote"))
 	}
-}
-
-func TestManifestSuite_NoManifestIsSkipped(t *testing.T) {
-	got := manifestSuite(t.TempDir(), "")
-	if got.Name != "manifest" {
-		t.Errorf("suite name = %q, want %q", got.Name, "manifest")
-	}
-	if got.Status != "skipped" {
-		t.Errorf("manifest status = %q, want %q with no manifest.yaml (trust-plumbing fails that); detail: %s",
-			got.Status, "skipped", got.Detail)
-	}
-	if got.Detail == "" {
-		t.Error("a skipped manifest suite must say why in detail")
-	}
-}
-
-func TestManifestSuite_ABlockThatDeclaresNoReadsPasses(t *testing.T) {
-	cases := map[string]string{
-		"the golden fixture's requires: []": manifestYAML,
-		"no requires at all":                manifestHead,
-		"requirements with no reads": manifestHead + `  requires:
-    - capability: database
-      hint: a postgres database
-    - capability: no-registry-entry-lists-this
-`,
-	}
-	for label, content := range cases {
-		t.Run(label, func(t *testing.T) {
-			requireManifestPass(t, manifestSuite(manifestDir(t, content), ""))
-		})
-	}
-}
-
-func TestManifestSuite_ReadsTheRegistryGivesTheirCapabilityPass(t *testing.T) {
-	cases := map[string]string{
-		"flow list": `  requires:
-    - capability: database
-      reads: [appName, dbName]
-`,
-		"block list naming an alias": `  requires:
-    - capability: app-host
-      reads:
-        - region
-`,
-		"reads before capability": `  requires:
-    - reads: [host, port]
-      capability: database
-`,
-		"quoted names and comments": `  requires:
-    # the database this block connects to
-    - capability: database # postgres
-      reads: ["dbName", 'username'] # both from the database
-`,
-		"a name two capabilities give": `  requires:
-    - capability: aws-topology
-      reads:
-        - appHostname
-`,
-		"one requirement with reads beside one without": `  requires:
-    - capability: github
-    - capability: llm
-      reads: [llmEndpoint, model]
-    - capability: database
-`,
-	}
-	for label, spec := range cases {
-		t.Run(label, func(t *testing.T) {
-			requireManifestPass(t, manifestSuite(manifestDir(t, manifestHead+spec), ""))
-		})
-	}
-}
-
-func TestManifestSuite_AReadTheRegistryDoesNotHoldFails(t *testing.T) {
-	dir := manifestDir(t, manifestHead+`  requires:
-    - capability: database
-      reads: [appName, dbNme]
-`)
-	requireManifestFail(t, manifestSuite(dir, ""),
-		`spec.requires[database].reads: "dbNme" is not in the resource registry`,
-		`"dbName"`)
-}
-
-func TestManifestSuite_AReadItsCapabilityDoesNotGiveFails(t *testing.T) {
-	cases := []struct {
-		label, spec, want string
-	}{
-		{
-			label: "database reads appHostname",
-			spec: `  requires:
-    - capability: database
-      reads: [appHostname]
-`,
-			want: `spec.requires[database].reads: "appHostname" is not an output of capability "database"`,
-		},
-		{
-			label: "database reads an alias of a host entry",
-			spec: `  requires:
-    - capability: database
-      reads:
-        - instanceType
-`,
-			want: `spec.requires[database].reads: "instanceType" is not an output of capability "database"`,
-		},
-		{
-			label: "the offending requirement follows a valid one",
-			spec: `  requires:
-    - capability: app-host
-      reads: [appHostname]
-    - capability: llm
-      reads: [dbName]
-`,
-			want: `spec.requires[llm].reads: "dbName" is not an output of capability "llm"`,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			requireManifestFail(t, manifestSuite(manifestDir(t, manifestHead+tc.spec), ""), tc.want)
-		})
-	}
-}
-
-func TestManifestSuite_AnEmptyReadNameFails(t *testing.T) {
-	dir := manifestDir(t, manifestHead+`  requires:
-    - capability: database
-      reads: [appName, ""]
-`)
-	requireManifestFail(t, manifestSuite(dir, ""), `spec.requires[database].reads: a name must not be empty`)
-}
-
-func TestManifestSuite_OutputsTheRegistryHoldsPass(t *testing.T) {
-	cases := map[string]string{
-		"block list with dotted names and an alias": `  outputs:
-    - dbName
-    - host.type
-    - region
-`,
-		"flow list": `  outputs: [host, port, username]
-`,
-		"empty flow list": `  outputs: []
-`,
-	}
-	for label, spec := range cases {
-		t.Run(label, func(t *testing.T) {
-			requireManifestPass(t, manifestSuite(manifestDir(t, manifestHead+spec), ""))
-		})
-	}
-}
-
-// The nearest name is the smallest edit distance over entry names and aliases, ties broken alphabetically.
-func TestManifestSuite_AnOutputOutsideTheRegistryFailsNamingTheNearestName(t *testing.T) {
-	cases := []struct {
-		label, spec, output, nearest, notNearest string
-	}{
-		{"block list, tie broken alphabetically", "  outputs:\n    - url\n    - hostnme\n", "hostnme", "host", "hostId"},
-		{"flow list, tie broken alphabetically", "  outputs: [runsOnP]\n", "runsOnP", "runsOn", "runsOnPr"},
-		{"nearest is an alias", "  outputs:\n    - regon\n", "regon", "region", "repo"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			got := manifestSuite(manifestDir(t, manifestHead+tc.spec), "")
-			requireManifestFail(t, got, "spec.outputs", `"`+tc.output+`"`, `"`+tc.nearest+`"`)
-			if strings.Contains(got.Detail, `"`+tc.notNearest+`"`) {
-				t.Errorf("manifest detail = %q names %q, want only the nearest name %q", got.Detail, tc.notNearest, tc.nearest)
-			}
-		})
-	}
-}
-
-func TestManifestSuite_UnchangedVersionPassesWithoutAReleaseClassOrNote(t *testing.T) {
-	base := baseManifestFile(t, withVersion("1.0.0"))
-	requireManifestPass(t, manifestSuite(manifestDir(t, withVersion("1.0.0")), base))
-}
-
-func TestManifestSuite_ChangedVersionWithAReleaseClassAndNotePasses(t *testing.T) {
-	cases := map[string]string{
-		"plain note": `  releaseClass: feature
-  releaseNote: Adds the reads declaration.
-`,
-		"folded note": `  releaseClass: correctness-fix
-  releaseNote: >
-    Fixes the retry that dropped the second
-    attempt's outputs.
-  requires: []
-`,
-		"literal note": `  releaseNote: |
-    Renames the output.
-  releaseClass: breaking
-`,
-	}
-	base := baseManifestFile(t, withVersion("1.0.0"))
-	for label, spec := range cases {
-		t.Run(label, func(t *testing.T) {
-			requireManifestPass(t, manifestSuite(manifestDir(t, withVersion("1.1.0")+spec), base))
-		})
-	}
-}
-
-func TestManifestSuite_ChangedVersionWithNoReleaseClassFails(t *testing.T) {
-	base := baseManifestFile(t, withVersion("1.0.0"))
-	target := withVersion("1.1.0") + "  releaseNote: Adds the reads declaration.\n"
-	requireManifestFail(t, manifestSuite(manifestDir(t, target), base), "spec.releaseClass")
-}
-
-func TestManifestSuite_ChangedVersionWithNoReleaseNoteFails(t *testing.T) {
-	cases := map[string]string{
-		"no note":           "  releaseClass: feature\n",
-		"blank note":        "  releaseClass: feature\n  releaseNote: \"   \"\n",
-		"empty folded note": "  releaseClass: feature\n  releaseNote: >\n  requires: []\n",
-	}
-	base := baseManifestFile(t, withVersion("1.0.0"))
-	for label, spec := range cases {
-		t.Run(label, func(t *testing.T) {
-			requireManifestFail(t, manifestSuite(manifestDir(t, withVersion("1.1.0")+spec), base), "spec.releaseNote")
-		})
-	}
-}
-
-func TestManifestSuite_ChangedVersionWithNeitherNamesBoth(t *testing.T) {
-	base := baseManifestFile(t, withVersion("1.0.0"))
-	requireManifestFail(t, manifestSuite(manifestDir(t, withVersion("2.0.0")), base),
-		"spec.releaseClass", "spec.releaseNote")
-}
-
-func TestManifestSuite_BaseManifestAbsentPasses(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "base-manifest.yaml")
-	requireManifestPass(t, manifestSuite(manifestDir(t, withVersion("1.1.0")), missing))
-}
-
-func TestManifestSuite_NoBaseManifestFlagComparesNoVersion(t *testing.T) {
-	requireManifestPass(t, manifestSuite(manifestDir(t, withVersion("1.1.0")), ""))
-}
-
-func TestManifestSuite_UnreadableBaseManifestFailsNamingIt(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "base-manifest.yaml")
-	if err := os.Mkdir(base, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	requireManifestFail(t, manifestSuite(manifestDir(t, withVersion("1.1.0")), base), base)
-}
-
-func withID(idLine string) string {
-	return strings.Replace(manifestHead, "  id: reads-consumer\n", "  id: "+idLine+"\n", 1)
-}
-
-func TestManifestSuite_ACommunityOrPrivateMetadataIDPasses(t *testing.T) {
-	cases := map[string]string{
-		"bare slug":                 "billing-db",
-		"double-quoted private id":  `"@acme/billing-db"`,
-		"single-quoted private id":  `'@acme/billing-db'`,
-		"private id with a comment": `"@org-a/api" # the org's own api block`,
-		"forty-character bare slug": "a" + strings.Repeat("b", 38) + "c",
-	}
-	for label, idLine := range cases {
-		t.Run(label, func(t *testing.T) {
-			requireManifestPass(t, manifestSuite(manifestDir(t, withID(idLine)), ""))
-		})
-	}
-}
-
-func TestManifestSuite_AMetadataIDOutsideBothFormsFailsNamingIt(t *testing.T) {
-	cases := map[string]string{
-		"uppercase namespace":     `"@Acme/x"`,
-		"namespace with no name":  `"@acme/"`,
-		"namespace without its @": "acme/x",
-		"two slashes":             `"@acme/x/y"`,
-		"uppercase bare id":       "Billing-DB",
-		"trailing dash":           "billing-",
-		"41-character bare id":    "a" + strings.Repeat("b", 39) + "c",
-	}
-	for label, idLine := range cases {
-		t.Run(label, func(t *testing.T) {
-			requireManifestFail(t, manifestSuite(manifestDir(t, withID(idLine)), ""),
-				"manifest.yaml", "metadata.id", "@<org>/")
-		})
-	}
-}
-
-// YAML reserves @ at the start of a plain value, so the platform's parser refuses an unquoted private id.
-func TestManifestSuite_AnUnquotedPrivateIDFailsAskingForQuotes(t *testing.T) {
-	for label, idLine := range map[string]string{
-		"unquoted private id":          "@acme/billing-db",
-		"unquoted private id, comment": "@acme/billing-db # the billing database",
-		"backtick-led id":              "`billing-db`",
+	for path, spec := range map[string]string{
+		"spec.frobnicate":             "  frobnicate: true\n",
+		"spec.futureSection":          "  futureSection:\n    outputs: not-the-outputs\n    reads: [not, the, reads]\n",
+		"spec.requires[0].frobnicate": "  requires:\n    - capability: database\n      reads: [host]\n      frobnicate: true\n",
+		"spec.lifecycle.frobnicate":   "  lifecycle:\n    contract: kit/v1\n    frobnicate: true\n",
+		"spec.requires[0].frobnicate after a requires item app-host gives": "  requires:\n    - capability: app-host\n      reads: [region]\n      frobnicate: true\n",
 	} {
-		t.Run(label, func(t *testing.T) {
-			requireManifestFail(t, manifestSuite(manifestDir(t, withID(idLine)), ""),
-				"manifest.yaml", "metadata.id", "quote")
-		})
+		field, _, _ := strings.Cut(path, " ")
+		cases = append(cases, fails("an unknown field "+path+" fails with the parser's message", head+spec, "manifest.yaml", field, refusal(t, head+spec, field)))
 	}
-}
-
-func TestManifestSuite_ABadMetadataIDIsReportedBesideASpecProblem(t *testing.T) {
-	content := withID(`"@Acme/x"`) + "  outputs: [hostnme]\n"
-	requireManifestFail(t, manifestSuite(manifestDir(t, content), ""),
-		"metadata.id", "@<org>/", `spec.outputs: "hostnme"`)
-}
-
-func TestManifestSuite_NoMetadataIDKeepsTheSpecVerdict(t *testing.T) {
-	noID := strings.Replace(manifestHead, "  id: reads-consumer\n", "", 1)
-	noMetadata := strings.Replace(manifestHead,
-		"metadata:\n  id: reads-consumer\n  name: Reads Consumer\n  owner: blockverify-tests\n", "", 1)
-	if noID == manifestHead || noMetadata == manifestHead {
-		t.Fatal("manifestHead changed shape; the metadata.id fixtures no longer remove the id")
-	}
-
 	for label, content := range map[string]string{
-		"metadata without an id": noID,
-		"no metadata at all":     noMetadata,
+		"a base under mitstack/v2":           replaced(t, withVersion(t, "1.0.0"), "apiVersion: mitstack/v1alpha", "apiVersion: mitstack/v2"),
+		"a base with an unquoted private id": withID(t, "@acme/billing-db"),
 	} {
-		t.Run(label+" passes with a valid spec", func(t *testing.T) {
-			requireManifestPass(t, manifestSuite(manifestDir(t, content), ""))
-		})
-		t.Run(label+" fails with a bad spec", func(t *testing.T) {
-			got := manifestSuite(manifestDir(t, content+"  outputs: [hostnme]\n"), "")
-			requireManifestFail(t, got, `spec.outputs: "hostnme"`)
-			if strings.Contains(got.Detail, "metadata.id") {
-				t.Errorf("manifest detail = %q names metadata.id, want no id problem when the id is absent", got.Detail)
-			}
-		})
+		_, parseErr := contract.ParseManifest([]byte(content))
+		if parseErr == nil {
+			t.Fatalf("the %s fixture parses, so it proves nothing:\n%s", label, content)
+		}
+		cases = append(cases,
+			suiteCase{name: label + " leaves its version unknown, so a released change passes", base: baseManifest(content), status: "pass",
+				dir: manifestOnly(withVersion(t, "1.0.0") + "  releaseClass: feature\n  releaseNote: Fixes the base manifest.\n")},
+			suiteCase{name: label + " leaves its version unknown, so an unreleased change names the base, its error and both fields", base: baseManifest(content),
+				dir: manifestOnly(withVersion(t, "1.0.0")), status: "fail", detail: []string{"$BASE", parseErr.Error(), "spec.releaseClass", "spec.releaseNote"}})
 	}
+
+	runSuites(t, []string{"manifest"}, cases)
 }
 
-func TestManifestSuite_AMetadataTheReaderCannotFollowIsAFailure(t *testing.T) {
-	head := "apiVersion: mitstack/v1alpha\nkind: Block\n"
-	spec := "spec:\n  layer: backend\n  version: 1.0.0\n"
-	cases := map[string]string{
-		"metadata is a flow mapping": head + "metadata: {id: \"@Acme/x\", owner: blockverify-tests}\n" + spec,
-		"metadata.id is an alias":    head + "metadata:\n  name: &bad \"@Acme/x\"\n  id: *bad\n" + spec,
-		"metadata.id is a mapping":   head + "metadata:\n  id:\n    org: Acme\n" + spec,
+// ecrPushTemplate is aws-app-infra's ECR push role name: 37 fixed characters inside IAM's limit of 64, so the app name may run to 27.
+const ecrPushTemplate = "mitstack-app-{appName}-github-actions-ecr-push"
+
+func namingSpec(maxLength string, items ...string) string {
+	s := "  naming:\n    appName:\n      maxLength: " + maxLength + "\n"
+	if len(items) > 0 {
+		s += "      derivedNames:\n" + strings.Join(items, "")
 	}
-	for label, content := range cases {
-		t.Run(label, func(t *testing.T) {
-			requireManifestFail(t, manifestSuite(manifestDir(t, content), ""), "manifest.yaml", "metadata")
-		})
-	}
+	return s
 }
 
-const typeBlockSpellingManifest = `apiVersion: mitstack/v1alpha
-type: block
-metadata:
-  id: blockverify-fixture
-  name: blockverify fixture block
-  owner: blockverify-tests
-spec:
-  version: 1.0.0
-  description: >
-    The blockverify fixture block, written with type, format and store.
-  provides:
-    - blockverify-fixture-capability
-  providedContracts:
-    - capability: blockverify-fixture-capability
-      format: config
-  continuity:
-    - name: fixture-state
-      store: volume
-      stateful: false
-  requires:
-    - capability: database
-      reads: [host, port, dbName]
-  outputs:
-    - url
-    - region
-`
+func derivedName(template, limit string) string {
+	return "        - template: \"" + template + "\"\n          limit: " + limit + "\n"
+}
 
-const kindSpellingManifest = `apiVersion: mitstack/v1alpha
-kind: Block
-metadata:
-  id: blockverify-fixture
-  name: blockverify fixture block
-  owner: blockverify-tests
-spec:
-  layer: backend
-  version: 1.0.0
-  description: >
-    The blockverify fixture block, written with kind in all three places.
-  provides:
-    - blockverify-fixture-capability
-  providedContracts:
-    - capability: blockverify-fixture-capability
-      kind: config
-  continuity:
-    - name: fixture-state
-      kind: volume
-      stateful: false
-  requires:
-    - capability: database
-      reads: [host, port, dbName]
-  outputs:
-    - url
-    - region
-`
+var awsAppInfraNamingSpec = namingSpec("27", derivedName(ecrPushTemplate, "64"))
 
-func TestManifestSuite_BothManifestSpellingsPass(t *testing.T) {
+func TestNamingSuite(t *testing.T) {
+	// The roomy template comes first, so neither the first template nor the largest limit can pass for the smallest.
+	smallestLast := []string{derivedName("{appName}-db", "63"), derivedName(ecrPushTemplate, "64")}
+	cases := []suiteCase{
+		passes("aws-app-infra's declaration passes", manifestHead+awsAppInfraNamingSpec),
+		fails("a maxLength that differs from the computed limit fails, naming the template and the limit", manifestHead+namingSpec("40", derivedName(ecrPushTemplate, "64")), ecrPushTemplate, "27"),
+		passes("a maxLength equal to the smallest room over the templates passes", manifestHead+namingSpec("27", smallestLast...)),
+		fails("a maxLength equal to a larger template's room fails, naming the smallest", manifestHead+namingSpec("60", smallestLast...), ecrPushTemplate, "27"),
+		fails("a maxLength with no derivedNames fails", manifestHead+namingSpec("27"), "derivedNames"),
+		fails("a template without the placeholder fails, naming it", manifestHead+namingSpec("27", derivedName("mitstack-app-github-actions-ecr-push", "64")),
+			"mitstack-app-github-actions-ecr-push", "{appName}"),
+		// 63 is what the one-placeholder formula gives, so only the refusal of a repeated placeholder can fail it.
+		fails("a template using the placeholder more than once fails", manifestHead+namingSpec("63", derivedName("{appName}-{appName}", "64")), "{appName}-{appName}", "more than once"),
+		fails("a template whose fixed text equals its limit fails", manifestHead+namingSpec("0", derivedName(ecrPushTemplate, "37")), ecrPushTemplate, "37"),
+		fails("a template whose fixed text exceeds its limit fails", manifestHead+namingSpec("0", derivedName(ecrPushTemplate, "30")), ecrPushTemplate, "30"),
+		{name: "a manifest with no spec.naming is skipped", dir: manifestOnly(manifestHead), status: "skipped"},
+		{name: "a directory with no manifest is skipped", dir: emptyDir, status: "skipped"},
+		fails("an unreadable declaration fails", manifestHead+namingSpec("twenty-seven", derivedName(ecrPushTemplate, "64")), "spec.naming.appName"),
+	}
 	for label, content := range map[string]string{
-		"type, format and store": typeBlockSpellingManifest,
-		"kind in all three":      kindSpellingManifest,
+		"an unknown spec field beside the declaration": manifestHead + "  frobnicate: true\n" + awsAppInfraNamingSpec,
+		"an unknown spec field and no declaration":     manifestHead + "  frobnicate: true\n",
 	} {
-		t.Run(label, func(t *testing.T) {
-			requireManifestPass(t, manifestSuite(manifestDir(t, content), ""))
-		})
+		cases = append(cases, fails(label+" fails with the parser's message", content, "manifest.yaml", refusal(t, content, "spec.frobnicate")))
 	}
+	other := manifestHead + "  naming:\n    frobnicate:\n      maxLength: 10\n"
+	cases = append(cases, fails("a key under spec.naming other than appName fails with the parser's message", other, "manifest.yaml", refusal(t, other, "spec.naming.frobnicate")))
+
+	runSuites(t, []string{"naming"}, cases)
 }
 
-var unknownSpecFields = map[string]string{
-	"spec.frobnicate":    "  frobnicate: true\n",
-	"spec.futureSection": "  futureSection:\n    outputs: not-the-outputs\n    reads: [not, the, reads]\n",
-	"spec.requires[0].frobnicate": "  requires:\n    - capability: database\n      reads: [host]\n" +
-		"      frobnicate: true\n",
-	"spec.lifecycle.frobnicate": "  lifecycle:\n    contract: kit/v1\n    frobnicate: true\n",
-}
-
-func TestManifestSuite_AnUnknownSpecFieldFailsNamingIt(t *testing.T) {
-	for path, spec := range unknownSpecFields {
-		t.Run(path, func(t *testing.T) {
-			content := manifestHead + spec
-			_, perr := contract.ParseManifest([]byte(content))
-			if perr == nil {
-				t.Fatalf("contract.ParseManifest accepts the manifest, which must be refused naming %s:\n%s", path, content)
-			}
-			requireManifestFail(t, manifestSuite(manifestDir(t, content), ""), "manifest.yaml", path, perr.Error())
-		})
-	}
-}
-
-func TestManifestSuite_PassesAnOldFormManifestWithDependsOnAndProvidedSlugs(t *testing.T) {
-	spec := `  dependsOn:
-    - weather-app
-  provides:
-    - runner
-  requires:
-    - capability: repo
-      reads: [repo]
-    - capability: app-host
-  outputs:
-    - repo
-`
-	requireManifestPass(t, manifestSuite(manifestDir(t, manifestHead+spec), ""))
-}
-
-func TestManifestSuite_PassesAManifestWithDependsOnAndPrintsItsWarning(t *testing.T) {
-	spec := `  dependsOn:
-    - weather-app
-  requires:
-    - capability: repo
-      reads: [repo]
-`
-	got := manifestSuite(manifestDir(t, manifestHead+spec), "")
-	requireManifestPass(t, got)
-	if !strings.Contains(got.Detail, "spec.dependsOn") {
-		t.Errorf("manifest detail = %q, want it to print the warning naming %q", got.Detail, "spec.dependsOn")
-	}
-}
-
-func TestManifestSuite_AManifestTheReaderCannotFollowIsAFailure(t *testing.T) {
-	cases := map[string]string{
-		"spec is a flow mapping":          "apiVersion: mitstack/v1alpha\nkind: Block\nspec: {version: 1.0.0, outputs: [nope]}\n",
-		"spec.outputs is a flow mapping":  manifestHead + "  outputs: {first: nope}\n",
-		"spec.outputs is an alias":        manifestHead + "  tags: &outs [nope]\n  outputs: *outs\n",
-		"spec.requires is a flow mapping": manifestHead + "  requires: {capability: database, reads: [nope]}\n",
-		"spec.requires is an alias":       manifestHead + "  resources: &reqs\n    - name: database\n  requires: *reqs\n",
-	}
-	for label, content := range cases {
-		t.Run(label, func(t *testing.T) {
-			requireManifestFail(t, manifestSuite(manifestDir(t, content), ""), "manifest.yaml")
-		})
-	}
-
-	t.Run("manifest.yaml is a directory", func(t *testing.T) {
-		dir := t.TempDir()
-		if err := os.Mkdir(filepath.Join(dir, "manifest.yaml"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		requireManifestFail(t, manifestSuite(dir, ""), "manifest.yaml")
-	})
-}
-
-func TestRun_BothManifestSpellingsPassBlockverify(t *testing.T) {
-	for label, content := range map[string]string{
-		"type, format and store": typeBlockSpellingManifest,
-		"kind in all three":      kindSpellingManifest,
-	} {
-		t.Run(label, func(t *testing.T) {
-			files := goldenFixtureFiles(t)
-			files["manifest.yaml"] = content
-			stdout, exit := runBlockverify(t, "--json", "--standalone", newFixtureFrom(t, files))
-			r := decodeReport(t, stdout)
-			if exit != 0 || r.Verdict != "pass" {
-				t.Errorf("exit %d, verdict %q; want 0 and pass\nstdout:\n%s", exit, r.Verdict, stdout)
-			}
-			if s := suiteByName(t, r, "manifest"); s.Status != "pass" {
-				t.Errorf("manifest status = %q, want %q; detail: %s", s.Status, "pass", s.Detail)
-			}
-		})
-	}
-}
-
-func TestRun_AnUnknownSpecFieldFailsBlockverifyNamingIt(t *testing.T) {
-	const field = "spec.frobnicate"
-	content := manifestYAML + unknownSpecFields[field]
-	_, perr := contract.ParseManifest([]byte(content))
-	if perr == nil {
-		t.Fatalf("contract.ParseManifest accepts the manifest, which must be refused naming %s:\n%s", field, content)
-	}
-	files := goldenFixtureFiles(t)
-	files["manifest.yaml"] = content
-	dir := newFixtureFrom(t, files)
-
-	stdout, exit := runBlockverify(t, "--json", "--standalone", dir)
-	r := decodeReport(t, stdout)
-	if exit != 1 || r.Verdict != "fail" {
-		t.Errorf("exit %d, verdict %q; want 1 and fail for a manifest carrying %s\nstdout:\n%s", exit, r.Verdict, field, stdout)
-	}
-	for _, name := range []string{"trust-plumbing", "contract", "manifest", "naming"} {
-		s := suiteByName(t, r, name)
-		if s.Status != "fail" {
-			t.Errorf("%s status = %q, want %q: a manifest the parser refuses fails every suite that reads it; detail: %s",
-				name, s.Status, "fail", s.Detail)
-			continue
-		}
-		for _, want := range []string{field, perr.Error()} {
-			if !strings.Contains(s.Detail, want) {
-				t.Errorf("%s detail = %q, want it to contain %q", name, s.Detail, want)
-			}
-		}
-	}
-
-	human, exit := runBlockverify(t, "--standalone", dir)
-	if exit != 1 {
-		t.Errorf("exit = %d without --json, want 1\nstdout:\n%s", exit, human)
-	}
-	if !strings.Contains(human, field) {
-		t.Errorf("the human-readable report does not name %s:\n%s", field, human)
-	}
-}
-
-func TestRun_MetadataIDIsJudgedByTheManifestSuite(t *testing.T) {
+func TestContractRule(t *testing.T) {
+	legacy := legacyManifest(t)
 	cases := []struct {
-		label, idLine, status string
-		exit                  int
+		name, content, wantRule, wantRefusal string
 	}{
-		{"private id passes", `"@acme/billing-db"`, "pass", 0},
-		{"uppercase namespace fails", `"@Acme/x"`, "fail", 1},
+		{name: "a v1alpha block mapping declares kit/v1", content: legacy + "  lifecycle:\n    contract: kit/v1\n", wantRule: kitV1Contract},
+		{name: "a v1alpha flow mapping declares kit/v1", content: legacy + "  lifecycle: {contract: kit/v1}\n", wantRule: kitV1Contract},
+		{name: "the worked v1beta block declares kit/v1", content: plainV1Beta(t), wantRule: kitV1Contract},
 	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			files := goldenFixtureFiles(t)
-			content := strings.Replace(manifestYAML, "  id: blockverify-fixture\n", "  id: "+tc.idLine+"\n", 1)
-			if content == manifestYAML {
-				t.Fatal("manifestYAML changed shape; the fixture no longer carries id: blockverify-fixture")
-			}
-			files["manifest.yaml"] = content
-			stdout, exit := runBlockverify(t, "--json", "--standalone", newFixtureFrom(t, files))
-			if exit != tc.exit {
-				t.Errorf("exit = %d, want %d\nstdout:\n%s", exit, tc.exit, stdout)
-			}
-			r := decodeReport(t, stdout)
-			if s := suiteByName(t, r, "manifest"); s.Status != tc.status {
-				t.Errorf("manifest status = %q, want %q; detail: %s", s.Status, tc.status, s.Detail)
-			} else if tc.status == "fail" && !strings.Contains(s.Detail, "metadata.id") {
-				t.Errorf("manifest detail = %q, want it to name metadata.id", s.Detail)
-			}
-		})
-	}
-}
-
-func TestRun_BaseManifestFlagNamesTheBaseAndNotTheTarget(t *testing.T) {
-	base := baseManifestFile(t, strings.Replace(manifestYAML, "version: 1.0.0", "version: 0.9.0", 1))
-	dir := newGoldenFixture(t)
-
-	for label, args := range map[string][]string{
-		"flag after the target":  {"--json", "--standalone", dir, "--base-manifest", base},
-		"flag before the target": {"--base-manifest", base, "--json", "--standalone", dir},
+	for path, content := range map[string]string{
+		"spec.frobnicate":            legacy + "  frobnicate: true\n",
+		"spec.lifecycle.frobnicate":  legacy + "  lifecycle:\n    contract: kit/v1\n    frobnicate: true\n",
+		"metadata.frobnicate":        replaced(t, legacy, "  owner: blockverify-tests\n", "  owner: blockverify-tests\n  frobnicate: true\n"),
+		contract.LifecycleHooksField: replaced(t, plainV1Beta(t), "    contract: kit/v1", "    contract: kit/v1\n    hooks: [beforeEnsure]"),
 	} {
-		t.Run(label, func(t *testing.T) {
-			stdout, exit := runBlockverify(t, args...)
-			if exit != 1 {
-				t.Errorf("exit = %d, want 1: the version moved from 0.9.0 with no release class\nstdout:\n%s", exit, stdout)
+		cases = append(cases, struct{ name, content, wantRule, wantRefusal string }{
+			name: "a manifest the parser refuses at " + path + " fails with its message", content: content, wantRefusal: refusal(t, content, path)})
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := manifestOnly(c.content)(t)
+
+			rule, detail, ok := contractRule(dir)
+
+			if c.wantRefusal == "" && (!ok || rule != c.wantRule) {
+				t.Errorf("contractRule(%s) = %q, %v (detail %q); want %q, true", dir, rule, ok, detail, c.wantRule)
 			}
-			r := decodeReport(t, stdout)
-			if tp := suiteByName(t, r, "trust-plumbing"); tp.Status != "pass" {
-				t.Errorf("trust-plumbing status = %q, want %q: the base path must not be taken for the target; detail: %s",
-					tp.Status, "pass", tp.Detail)
-			}
-			m := suiteByName(t, r, "manifest")
-			if m.Status != "fail" || !strings.Contains(m.Detail, "spec.releaseClass") {
-				t.Errorf("manifest = %q %q, want fail naming spec.releaseClass", m.Status, m.Detail)
+			if c.wantRefusal != "" && (ok || !strings.Contains(detail, "manifest.yaml") || !strings.Contains(detail, c.wantRefusal)) {
+				t.Errorf("contractRule(%s) = %q, %v, detail %q; want a failure naming manifest.yaml and carrying %q", dir, rule, ok, detail, c.wantRefusal)
 			}
 		})
-	}
-}
-
-func TestRun_BaseManifestFlagWithNoValueIsAUsageError(t *testing.T) {
-	dir := newGoldenFixture(t)
-	stdout, exit := runBlockverify(t, "--json", "--standalone", dir, "--base-manifest")
-	if exit != 2 {
-		t.Errorf("exit = %d, want 2 for --base-manifest with no path\nstdout:\n%s", exit, stdout)
 	}
 }
