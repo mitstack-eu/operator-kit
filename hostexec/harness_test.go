@@ -1,8 +1,9 @@
 package hostexec_test
 
-// Both drivers run against a PATH shim that records argv and stdin separately, so a test can prove a value arrived over stdin rather than only that it is absent from argv.
+// Both drivers run against PATH stubs that record each call's argv and stdin separately, so a test can prove a value arrived over stdin rather than only that it is absent from argv.
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,275 +14,180 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/hostexec"
 )
 
-func setPath(t *testing.T, dir string) {
-	t.Helper()
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// fakeSSM's get-command-invocation fails pollFailures times first, proving a transient poll error is retried, then serves statuses in order and holds the last.
-func fakeSSM(t *testing.T, sendCommandID string, statuses []string, pollFailures int) (dir, argvRecord, stdinRecord string) {
-	t.Helper()
-	dir = t.TempDir()
-	argvRecord = filepath.Join(dir, "argv")
-	stdinRecord = filepath.Join(dir, "stdin")
-	countFile := filepath.Join(dir, "count")
-
-	quoted := make([]string, len(statuses))
-	for i, s := range statuses {
-		quoted[i] = shQuote(s)
-	}
-
-	script := fmt.Sprintf(`#!/usr/bin/env bash
-set -u
-for a in "$@"; do printf '%%s\n' "$a" >> %[1]s; done
-printf -- '---\n' >> %[1]s
-cat >> %[2]s
-printf -- '---\n' >> %[2]s
-
-if [ "${2:-}" = "send-command" ]; then
-  printf '%%s\n' %[3]s
-  exit 0
-fi
-
-if [ "${2:-}" = "get-command-invocation" ]; then
-  n=0
-  [ -f %[4]s ] && n=$(cat %[4]s)
-  echo $((n+1)) > %[4]s
-  if [ "$n" -lt %[5]d ]; then
-    echo "fake ssm: transient poll failure" >&2
-    exit 1
-  fi
-  idx=$((n - %[5]d))
-  STATUSES=(%[6]s)
-  last=$((${#STATUSES[@]} - 1))
-  if [ "$idx" -gt "$last" ]; then idx=$last; fi
-  printf '%%s\n' "${STATUSES[$idx]}"
-  exit 0
-fi
-
-echo "fake aws: unrecognised subcommand: $*" >&2
-exit 2
-`, argvRecord, stdinRecord, shQuote(sendCommandID), countFile, pollFailures, strings.Join(quoted, " "))
-
-	bin := filepath.Join(dir, "aws")
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake aws: %v", err)
-	}
-	return dir, argvRecord, stdinRecord
-}
+const (
+	fixtureInstance = "i-0fixture"
+	fixtureRegion   = "eu-central-1"
+	fixtureComment  = "mitstack app-runner install lane-a on i-0fixture"
+	fixtureScript   = "echo hi"
+	fixtureCommands = `commands=["echo hi"]`
+)
 
 func ssmHost() hostexec.Host {
-	return hostexec.Host{Kind: hostexec.KindSSM, Target: "i-0123456789abcdef0", Region: "eu-central-1"}
-}
-
-// fakeSSH records the identity file's permission bits and path while it still exists, so a test can assert on both before Run cleans it up.
-func fakeSSH(t *testing.T, body string) (dir, argvRecord, stdinRecord, permRecord, idPathRecord string) {
-	t.Helper()
-	dir = t.TempDir()
-	argvRecord = filepath.Join(dir, "argv")
-	stdinRecord = filepath.Join(dir, "stdin")
-	permRecord = filepath.Join(dir, "perm")
-	idPathRecord = filepath.Join(dir, "idpath")
-
-	script := fmt.Sprintf(`#!/usr/bin/env bash
-set -u
-for a in "$@"; do printf '%%s\n' "$a" >> %[1]s; done
-printf -- '---\n' >> %[1]s
-cat >> %[2]s
-printf -- '---\n' >> %[2]s
-prev=""
-for a in "$@"; do
-  if [ "$prev" = "-i" ]; then
-    stat -c '%%a' "$a" > %[3]s 2>/dev/null
-    printf '%%s' "$a" > %[4]s
-  fi
-  prev="$a"
-done
-%[5]s
-`, argvRecord, stdinRecord, permRecord, idPathRecord, body)
-
-	bin := filepath.Join(dir, "ssh")
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake ssh: %v", err)
-	}
-	return dir, argvRecord, stdinRecord, permRecord, idPathRecord
+	return hostexec.Host{Kind: hostexec.KindSSM, Target: fixtureInstance, Region: fixtureRegion}
 }
 
 func sshHost(credential string) hostexec.Host {
 	return hostexec.Host{Kind: hostexec.KindSSH, Target: "deploy@10.0.0.5", Credential: credential}
 }
 
-// fakeSSMOutput inspects the --query value because fakeSSM's argv-position dispatch cannot tell a Status call from a StandardOutputContent call; the latter always serves stdout without consuming a poll slot.
-func fakeSSMOutput(t *testing.T, sendCommandID string, statuses []string, pollFailures int, stdout string) (dir, argvRecord, stdinRecord string) {
-	t.Helper()
-	dir = t.TempDir()
-	argvRecord = filepath.Join(dir, "argv")
-	stdinRecord = filepath.Join(dir, "stdin")
-	countFile := filepath.Join(dir, "count")
+type entryPoint struct {
+	name string
+	call func(ctx context.Context, h hostexec.Host, script string, opts ...hostexec.SendOption) (string, error)
+}
 
+var entryPoints = []entryPoint{
+	{"Run", func(ctx context.Context, h hostexec.Host, script string, opts ...hostexec.SendOption) (string, error) {
+		return "", hostexec.Run(ctx, h, script, opts...)
+	}},
+	{"RunOutput", hostexec.RunOutput},
+}
+
+// awsFake configures the aws stub: each Status poll fails pollFailures times, then serves statuses holding the last, or InProgress while held; hang and sendHangs sleep until killed, and leakGrandchild holds stderr open past WaitDelay.
+type awsFake struct {
+	noCommandID, held, hang, sendHangs, leakGrandchild bool
+	statuses                                           []string
+	pollFailures                                       int
+	stdout                                             string
+}
+
+type fakes struct{ dir string }
+
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// record writes each argument NUL-terminated and ends a call with an RS, so an argument holding a newline is recovered exactly.
+const record = `for a in "$@"; do printf '%%s\0' "$a" >> %[1]s-argv; done
+printf '\036\0' >> %[1]s-argv
+{ cat; printf '\036'; } >> %[1]s-stdin
+`
+
+// newFakes installs both stubs on PATH and shrinks the poll so a harness bug costs a fast failure, never a multi-minute hang.
+func newFakes(t *testing.T, aws awsFake, sshBody string) fakes {
+	t.Helper()
+	setSSMPolling(t, time.Millisecond, 2*time.Second)
+	f := fakes{dir: t.TempDir()}
+	statuses := aws.statuses
+	if len(statuses) == 0 {
+		statuses = []string{"Success"}
+	}
 	quoted := make([]string, len(statuses))
 	for i, s := range statuses {
 		quoted[i] = shQuote(s)
 	}
-
-	script := fmt.Sprintf(`#!/usr/bin/env bash
-set -u
-for a in "$@"; do printf '%%s\n' "$a" >> %[1]s; done
-printf -- '---\n' >> %[1]s
-cat >> %[2]s
-printf -- '---\n' >> %[2]s
-
-if [ "${2:-}" = "send-command" ]; then
-  printf '%%s\n' %[3]s
-  exit 0
-fi
-
-if [ "${2:-}" = "get-command-invocation" ]; then
-  query=""
-  prev=""
-  for a in "$@"; do
-    if [ "$prev" = "--query" ]; then query="$a"; fi
-    prev="$a"
-  done
-  if [ "$query" = "StandardOutputContent" ]; then
-    printf '%%s\n' %[7]s
-    exit 0
-  fi
-  n=0
-  [ -f %[4]s ] && n=$(cat %[4]s)
-  echo $((n+1)) > %[4]s
-  if [ "$n" -lt %[5]d ]; then
-    echo "fake ssm: transient poll failure" >&2
-    exit 1
-  fi
-  idx=$((n - %[5]d))
-  STATUSES=(%[6]s)
-  last=$((${#STATUSES[@]} - 1))
-  if [ "$idx" -gt "$last" ]; then idx=$last; fi
-  printf '%%s\n' "${STATUSES[$idx]}"
-  exit 0
-fi
-
+	commandID := "cmd-1"
+	if aws.noCommandID {
+		commandID = ""
+	}
+	optional := func(on bool, line string) string {
+		if on {
+			return line
+		}
+		return ""
+	}
+	d := shQuote(f.dir)
+	awsScript := "#!/usr/bin/env bash\nset -u\n" + fmt.Sprintf(record, d+"/aws") +
+		optional(aws.leakGrandchild, "( sleep 3 & )\n") + fmt.Sprintf(`case "${2:-}" in
+send-command)
+  %[1]s
+  printf '%%s\n' %[2]s; exit 0;;
+get-command-invocation)
+  : > %[3]s/poll-started
+  query=""; prev=""
+  for a in "$@"; do [ "$prev" = "--query" ] && query="$a"; prev="$a"; done
+  if [ "$query" = "StandardOutputContent" ]; then printf '%%s\n' %[4]s; exit 0; fi
+  %[5]s
+  if [ -f %[3]s/hold ]; then echo InProgress; exit 0; fi
+  n=0; [ -f %[3]s/count ] && n=$(cat %[3]s/count); echo $((n+1)) > %[3]s/count
+  if [ "$n" -lt %[6]d ]; then echo "fake ssm: transient poll failure" >&2; exit 1; fi
+  STATUSES=(%[7]s); idx=$((n - %[6]d)); last=$((${#STATUSES[@]} - 1))
+  [ "$idx" -gt "$last" ] && idx=$last
+  printf '%%s\n' "${STATUSES[$idx]}"; exit 0;;
+esac
 echo "fake aws: unrecognised subcommand: $*" >&2
 exit 2
-`, argvRecord, stdinRecord, shQuote(sendCommandID), countFile, pollFailures, strings.Join(quoted, " "), shQuote(stdout))
-
-	bin := filepath.Join(dir, "aws")
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake aws: %v", err)
+`, optional(aws.sendHangs, "sleep 5"), shQuote(commandID), d, shQuote(aws.stdout), optional(aws.hang, "exec sleep 10"), aws.pollFailures, strings.Join(quoted, " "))
+	sshScript := "#!/usr/bin/env bash\nset -u\n" + fmt.Sprintf(record, d+"/ssh") + fmt.Sprintf(`prev=""
+for a in "$@"; do
+  if [ "$prev" = "-i" ]; then stat -c '%%a' "$a" > %[1]s/perm 2>/dev/null; printf '%%s' "$a" > %[1]s/idpath; fi
+  prev="$a"
+done
+`, d) + sshBody + "\n"
+	for name, script := range map[string]string{"aws": awsScript, "ssh": sshScript} {
+		if err := os.WriteFile(filepath.Join(f.dir, name), []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake %s: %v", name, err)
+		}
 	}
-	return dir, argvRecord, stdinRecord
+	if aws.held {
+		if err := os.WriteFile(filepath.Join(f.dir, "hold"), nil, 0o644); err != nil {
+			t.Fatalf("arming the in-progress hold: %v", err)
+		}
+	}
+	t.Setenv("PATH", f.dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return f
 }
 
-func ssmQueryOrder(t *testing.T, argvRecord string) []string {
-	t.Helper()
-	raw, err := os.ReadFile(argvRecord)
-	if err != nil {
-		t.Fatalf("reading fake aws argv record: %v", err)
-	}
-	var queries []string
-	for _, inv := range strings.Split(string(raw), "---\n") {
-		lines := strings.Split(strings.TrimRight(inv, "\n"), "\n")
-		if len(lines) < 2 || lines[0] != "ssm" || lines[1] != "get-command-invocation" {
-			continue
+func (f fakes) path(name string) string { return filepath.Join(f.dir, name) }
+
+// read returns a file the stubs wrote, empty when they never wrote it.
+func (f fakes) read(name string) string {
+	raw, _ := os.ReadFile(f.path(name))
+	return string(raw)
+}
+
+// calls returns the argv of every call to tool, in order.
+func (f fakes) calls(tool string) [][]string {
+	var out [][]string
+	var cur []string
+	for _, a := range strings.Split(f.read(tool+"-argv"), "\x00") {
+		switch a {
+		case "\x1e":
+			out, cur = append(out, cur), nil
+		case "":
+		default:
+			cur = append(cur, a)
 		}
-		for i, l := range lines {
-			if l == "--query" && i+1 < len(lines) {
-				queries = append(queries, lines[i+1])
-				break
+	}
+	return out
+}
+
+func (f fakes) sendArgv(t *testing.T) []string {
+	t.Helper()
+	for _, c := range f.calls("aws") {
+		if len(c) >= 2 && c[1] == "send-command" {
+			return c
+		}
+	}
+	t.Fatal("the aws stub never recorded a send-command call")
+	return nil
+}
+
+// queries returns the --query value of every get-command-invocation call, in order.
+func (f fakes) queries() []string {
+	var out []string
+	for _, c := range f.calls("aws") {
+		for i := 0; len(c) >= 2 && c[1] == "get-command-invocation" && i+1 < len(c); i++ {
+			if c[i] == "--query" {
+				out = append(out, c[i+1])
 			}
 		}
 	}
-	return queries
+	return out
 }
 
-// fakeSSMHeld answers InProgress while holdFile exists and finalStatus once the test removes it, and creates pollStarted on every call so a test can wait until polling began.
-func fakeSSMHeld(t *testing.T, sendCommandID, finalStatus, stdout string) (dir, argvRecord, pollStarted, holdFile string) {
-	t.Helper()
-	dir = t.TempDir()
-	argvRecord = filepath.Join(dir, "argv")
-	pollStarted = filepath.Join(dir, "poll-started")
-	holdFile = filepath.Join(dir, "hold-in-progress")
-
-	script := fmt.Sprintf(`#!/usr/bin/env bash
-set -u
-for a in "$@"; do printf '%%s\n' "$a" >> %[1]s; done
-printf -- '---\n' >> %[1]s
-
-if [ "${2:-}" = "send-command" ]; then
-  printf '%%s\n' %[2]s
-  exit 0
-fi
-
-if [ "${2:-}" = "get-command-invocation" ]; then
-  : > %[3]s
-  query=""
-  prev=""
-  for a in "$@"; do
-    if [ "$prev" = "--query" ]; then query="$a"; fi
-    prev="$a"
-  done
-  if [ "$query" = "StandardOutputContent" ]; then
-    printf '%%s\n' %[6]s
-    exit 0
-  fi
-  if [ -f %[7]s ]; then
-    exec sleep %[8]d
-  fi
-  if [ -f %[4]s ]; then
-    printf '%%s\n' InProgress
-    exit 0
-  fi
-  printf '%%s\n' %[5]s
-  exit 0
-fi
-
-echo "fake aws: unrecognised subcommand: $*" >&2
-exit 2
-`, argvRecord, shQuote(sendCommandID), pollStarted, holdFile, shQuote(finalStatus), shQuote(stdout),
-		filepath.Join(dir, hangStatusMarker), int(hungStatusSleep/time.Second))
-
-	bin := filepath.Join(dir, "aws")
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake aws: %v", err)
-	}
-	if err := os.WriteFile(holdFile, nil, 0o644); err != nil {
-		t.Fatalf("arming the in-progress hold: %v", err)
-	}
-	return dir, argvRecord, pollStarted, holdFile
-}
-
-// The stub execs sleep, so killing the Status call kills the sleep itself and leaves no process holding its pipes, and an unkilled call still ends after hungStatusSleep.
-const (
-	hangStatusMarker = "hang-status-poll"
-	hungStatusSleep  = 10 * time.Second
-)
-
-func hangStatusPoll(t *testing.T, dir string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, hangStatusMarker), nil, 0o644); err != nil {
-		t.Fatalf("arming the Status call hang: %v", err)
-	}
+func wantSendArgv(tail ...string) []string {
+	return append([]string{"ssm", "send-command", "--document-name", "AWS-RunShellScript", "--instance-ids", fixtureInstance,
+		"--region", fixtureRegion, "--query", "Command.CommandId", "--output", "text"}, tail...)
 }
 
 // setSSMPolling must not run in parallel with a test that reads the poll variables.
 func setSSMPolling(t *testing.T, interval, timeout time.Duration) {
 	t.Helper()
 	origInterval, origTimeout := hostexec.SSMPollInterval, hostexec.SSMPollTimeout
-	hostexec.SSMPollInterval = interval
-	hostexec.SSMPollTimeout = timeout
-	t.Cleanup(func() {
-		hostexec.SSMPollInterval = origInterval
-		hostexec.SSMPollTimeout = origTimeout
-	})
+	hostexec.SSMPollInterval, hostexec.SSMPollTimeout = interval, timeout
+	t.Cleanup(func() { hostexec.SSMPollInterval, hostexec.SSMPollTimeout = origInterval, origTimeout })
 }
 
-// runInBackground waits on cleanup for call to return, so a failed test never leaves a call reading the variables setSSMPolling restores; call setSSMPolling and fakeSSMHeld first so that wait runs before their cleanups.
-func runInBackground(t *testing.T, holdFile string, call func() error) <-chan error {
+// runInBackground waits on cleanup for call to return, so a failed test never leaves a call reading the variables setSSMPolling restores; call newFakes and setSSMPolling first so that wait runs before their cleanups.
+func runInBackground(t *testing.T, f fakes, call func() error) <-chan error {
 	t.Helper()
 	done := make(chan error, 1)
 	finished := make(chan struct{})
@@ -290,7 +196,7 @@ func runInBackground(t *testing.T, holdFile string, call func() error) <-chan er
 		done <- call()
 	}()
 	t.Cleanup(func() {
-		_ = os.Remove(holdFile)
+		_ = os.Remove(f.path("hold"))
 		select {
 		case <-finished:
 		case <-time.After(30 * time.Second):
@@ -300,37 +206,22 @@ func runInBackground(t *testing.T, holdFile string, call func() error) <-chan er
 	return done
 }
 
-func waitForFile(t *testing.T, path string, done <-chan error) {
+// waitForPoll returns once the aws stub has answered a get-command-invocation call.
+func waitForPoll(t *testing.T, f fakes, done <-chan error) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(f.path("poll-started")); err == nil {
 			return
 		}
 		select {
 		case err := <-done:
-			t.Fatalf("the call returned (err=%v) before %s was created", err, filepath.Base(path))
+			t.Fatalf("the call returned (err=%v) before the poll began", err)
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", path)
+			t.Fatal("timed out waiting for the poll to begin")
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-}
-
-func sendCommandArgv(t *testing.T, argvRecord string) []string {
-	t.Helper()
-	raw, err := os.ReadFile(argvRecord)
-	if err != nil {
-		t.Fatalf("reading fake aws argv record: %v", err)
-	}
-	for _, inv := range strings.Split(string(raw), "---\n") {
-		lines := strings.Split(strings.TrimRight(inv, "\n"), "\n")
-		if len(lines) >= 2 && lines[0] == "ssm" && lines[1] == "send-command" {
-			return lines
-		}
-	}
-	t.Fatal("fake aws never recorded a send-command call")
-	return nil
 }

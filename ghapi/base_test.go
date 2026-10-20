@@ -3,204 +3,95 @@ package ghapi_test
 
 import (
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/mitstack-eu/operator-kit/v2/ghapi"
 )
 
-func TestBase_ResolvesLegitimateEndpointToTheAllowlistEntry(t *testing.T) {
-	b, err := ghapi.Base("https://api.github.com")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestBase(t *testing.T) {
+	type baseCase struct {
+		name, endpoint string
+		extra          []string
+		want           string
 	}
-	if b.String() != "https://api.github.com" {
-		t.Errorf("Base() = %q, want the canonical allowlist entry", b.String())
+	cases := []baseCase{
+		{"the legitimate endpoint resolves to the allowlist entry", "https://api.github.com", nil, "https://api.github.com"},
+		{"an upper-case endpoint yields the canonical entry, never the caller's casing", "https://API.GitHub.com", nil, "https://api.github.com"},
+		{"an all-caps endpoint with a slash yields the canonical entry", "https://API.GITHUB.COM/", nil, "https://api.github.com"},
+		{"a trailing slash yields the canonical entry", "https://api.github.com/", nil, "https://api.github.com"},
+		{"an operator-supplied enterprise host is accepted", "https://ghe.corp.example", []string{"ghe.corp.example"}, "https://ghe.corp.example"},
+		{"an extra host matches whatever its case and position", "https://GHE.Corp.Example", []string{"other.example", "ghe.corp.example"}, "https://ghe.corp.example"},
+		{"a host not on the allowlist is refused", "https://evil.example.com", nil, ""},
+		{"an enterprise host the operator never supplied is refused", "https://ghe.corp.example", nil, ""},
+		{"a lookalike suffix is refused", "https://api.github.com.evil.example", nil, ""},
+		{"a lookalike path is refused", "https://evil.example/api.github.com", nil, ""},
+		{"a lookalike userinfo is refused", "https://api.github.com@evil.example", nil, ""},
+		{"a lookalike prefix is refused", "https://notapi.github.com", nil, ""},
+		{"http is refused, since a real token would travel in clear", "http://api.github.com", nil, ""},
+		{"an empty endpoint is refused", "", nil, ""},
+		{"a blank endpoint is refused", "   ", nil, ""},
+		{"a non-URL is refused", "not a url", nil, ""},
+		{"a scheme with no host is refused", "https://", nil, ""},
+		{"ftp is refused", "ftp://api.github.com", nil, ""},
 	}
-}
+	for _, host := range []string{"10.0.0.5", "127.0.0.1", "169.254.169.254", "[::1]", "localhost", "metadata.google.internal", "192.168.1.1", "0.0.0.0"} {
+		cases = append(cases, baseCase{"the internal or metadata host " + host + " is refused", "https://" + host, nil, ""})
+	}
+	for _, host := range []string{"10.0.0.5", "127.0.0.1", "169.254.169.254", "[::1]", "localhost", "metadata.google.internal", "0.0.0.0", "8.8.8.8"} {
+		cases = append(cases, baseCase{"an operator extra host never reopens the internal, metadata or bare-IP host " + host, "https://" + host, []string{host}, ""})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := ghapi.Base(tc.endpoint, tc.extra...)
 
-func TestBase_ReturnsTheAllowlistEntryNeverTheCallerHost(t *testing.T) {
-	// The returned Base is built from the allowlist entry, so a varied endpoint gives byte-identical output.
-	for _, endpoint := range []string{
-		"https://api.github.com",
-		"https://API.GitHub.com",
-		"https://API.GITHUB.COM/",
-		"https://api.github.com/",
-	} {
-		b, err := ghapi.Base(endpoint)
-		if err != nil {
-			t.Fatalf("Base(%q): %v", endpoint, err)
-		}
-		if b.String() != "https://api.github.com" {
-			t.Errorf("Base(%q).String() = %q, want the canonical constant", endpoint, b.String())
-		}
-		if strings.Contains(b.String(), "API") {
-			t.Errorf("Base(%q) leaked the caller's original casing: %q", endpoint, b.String())
-		}
-	}
-}
-
-func TestBase_RefusesAHostileEndpoint(t *testing.T) {
-	if _, err := ghapi.Base("https://evil.example.com"); err == nil {
-		t.Fatal("a host not on the operator's allowlist must be refused")
-	}
-}
-
-func TestBase_RefusesALookalikeHost(t *testing.T) {
-	// A host that merely CONTAINS api.github.com as a substring or subdomain
-	// must never be treated as the real thing.
-	for _, endpoint := range []string{
-		"https://api.github.com.evil.example",
-		"https://evil.example/api.github.com",
-		"https://api.github.com@evil.example",
-		"https://notapi.github.com",
-	} {
-		if _, err := ghapi.Base(endpoint); err == nil {
-			t.Errorf("Base(%q) succeeded; a lookalike host must be refused", endpoint)
-		}
-	}
-}
-
-func TestBase_RefusesNonHTTPS(t *testing.T) {
-	if _, err := ghapi.Base("http://api.github.com"); err == nil {
-		t.Error("a non-https base must be refused — a real installation token would travel in clear")
-	}
-}
-
-func TestBase_RefusesGarbage(t *testing.T) {
-	for _, endpoint := range []string{"", "   ", "not a url", "https://", "ftp://api.github.com"} {
-		if _, err := ghapi.Base(endpoint); err == nil {
-			t.Errorf("Base(%q) succeeded; want an error", endpoint)
-		}
-	}
-}
-
-func TestBase_AcceptsAnOperatorSuppliedExtraHost(t *testing.T) {
-	// GitHub Enterprise opts in through operator config, never through a payload.
-	b, err := ghapi.Base("https://ghe.corp.example", "ghe.corp.example")
-	if err != nil {
-		t.Fatalf("an operator-allowlisted enterprise host must be accepted: %v", err)
-	}
-	if b.String() != "https://ghe.corp.example" {
-		t.Errorf("Base() = %q, want %q", b.String(), "https://ghe.corp.example")
-	}
-}
-
-func TestBase_RefusesAHostTheOperatorDidNotSupply(t *testing.T) {
-	// A payload can never assert its own enterprise host.
-	if _, err := ghapi.Base("https://ghe.corp.example"); err == nil {
-		t.Error("a host the operator never configured must be refused")
-	}
-}
-
-func TestBase_ExtraHostIsCaseInsensitiveAndOrderIndependent(t *testing.T) {
-	b, err := ghapi.Base("https://GHE.Corp.Example", "other.example", "ghe.corp.example")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if b.String() != "https://ghe.corp.example" {
-		t.Errorf("Base() = %q", b.String())
-	}
-}
-
-func TestBase_RefusesPrivateLoopbackLinkLocalAndMetadataEndpoints(t *testing.T) {
-	for _, endpoint := range []string{
-		"https://10.0.0.5",
-		"https://127.0.0.1",
-		"https://169.254.169.254",
-		"https://[::1]",
-		"https://localhost",
-		"https://metadata.google.internal",
-		"https://192.168.1.1",
-		"https://0.0.0.0",
-	} {
-		if _, err := ghapi.Base(endpoint); err == nil {
-			t.Errorf("Base(%q) succeeded; want an error", endpoint)
-		}
-	}
-}
-
-func TestBase_AnOperatorExtraHostCanNeverReopenAnInternalOrMetadataAddress(t *testing.T) {
-	// Even an operator-configured extra host must not point a real installation token at cloud metadata or an internal address.
-	cases := []struct{ host, endpoint string }{
-		{"10.0.0.5", "https://10.0.0.5"},
-		{"127.0.0.1", "https://127.0.0.1"},
-		{"169.254.169.254", "https://169.254.169.254"},
-		{"[::1]", "https://[::1]"},
-		{"localhost", "https://localhost"},
-		{"metadata.google.internal", "https://metadata.google.internal"},
-		{"0.0.0.0", "https://0.0.0.0"},
-		// A bare IP literal is refused even when it is a perfectly public
-		// address — only hostnames are an acceptable GitHub Enterprise shape.
-		{"8.8.8.8", "https://8.8.8.8"},
-	}
-	for _, c := range cases {
-		if _, err := ghapi.Base(c.endpoint, c.host); err == nil {
-			t.Errorf("Base(%q, extraHosts=%q) succeeded; an operator config value must not reopen an internal/metadata/bare-IP host", c.endpoint, c.host)
-		}
+			if b.String() != tc.want || (tc.want == "") != (err != nil) {
+				t.Errorf("Base(%q, %q) = %q, %v; want %q", tc.endpoint, tc.extra, b.String(), err, tc.want)
+			}
+		})
 	}
 }
 
 func TestBaseFromEnv_ResolvesAgainstTheOperatorsEnvAllowlist(t *testing.T) {
-	const envVar = "MITSTACK_GITHUB_API_HOSTS"
+	envOf := func(v string) *string { return &v }
 	cases := []struct {
 		name     string
 		env      *string
 		endpoint string
 		want     string
 	}{
-		{name: "unset env accepts api.github.com", endpoint: "https://api.github.com", want: "https://api.github.com"},
-		{name: "unset env refuses an enterprise host", endpoint: "https://ghe.example.com/api/v3"},
-		{name: "listed enterprise host resolves with the path dropped", env: envOf("ghe.example.com"), endpoint: "https://ghe.example.com/api/v3", want: "https://ghe.example.com"},
-		{name: "entries are trimmed and lower-cased", env: envOf(" GHE.Example.com , other.example "), endpoint: "https://ghe.example.com", want: "https://ghe.example.com"},
-		{name: "second trimmed entry is honoured", env: envOf(" GHE.Example.com , other.example "), endpoint: "https://other.example", want: "https://other.example"},
-		{name: "an extra host never removes api.github.com", env: envOf("ghe.example.com"), endpoint: "https://api.github.com", want: "https://api.github.com"},
-		{name: "empty entries refuse an enterprise host", env: envOf(",, ,"), endpoint: "https://ghe.example.com/api/v3"},
-		{name: "empty entries still accept api.github.com", env: envOf(",, ,"), endpoint: "https://api.github.com", want: "https://api.github.com"},
-		{name: "an entry carrying a scheme is not a host", env: envOf("https://ghe.example.com"), endpoint: "https://ghe.example.com"},
-		{name: "listed metadata IP is refused", env: envOf("169.254.169.254"), endpoint: "https://169.254.169.254"},
-		{name: "listed public IP literal is refused", env: envOf("8.8.8.8"), endpoint: "https://8.8.8.8"},
-		{name: "listed localhost is refused", env: envOf("localhost"), endpoint: "https://localhost"},
-		{name: "listed metadata hostname is refused", env: envOf("metadata.google.internal"), endpoint: "https://metadata.google.internal"},
-		{name: "listed host over http is refused", env: envOf("ghe.example.com"), endpoint: "http://ghe.example.com"},
-		{name: "unset env has no loopback carve-out", endpoint: "http://127.0.0.1:8080"},
-		{name: "listed loopback has no http carve-out", env: envOf("127.0.0.1:8080"), endpoint: "http://127.0.0.1:8080"},
+		{"unset env accepts api.github.com", nil, "https://api.github.com", "https://api.github.com"},
+		{"unset env refuses an enterprise host", nil, "https://ghe.example.com/api/v3", ""},
+		{"a listed enterprise host resolves with the path dropped", envOf("ghe.example.com"), "https://ghe.example.com/api/v3", "https://ghe.example.com"},
+		{"entries are trimmed and lower-cased", envOf(" GHE.Example.com , other.example "), "https://ghe.example.com", "https://ghe.example.com"},
+		{"a second trimmed entry is honoured", envOf(" GHE.Example.com , other.example "), "https://other.example", "https://other.example"},
+		{"an extra host never removes api.github.com", envOf("ghe.example.com"), "https://api.github.com", "https://api.github.com"},
+		{"empty entries refuse an enterprise host", envOf(",, ,"), "https://ghe.example.com/api/v3", ""},
+		{"empty entries still accept api.github.com", envOf(",, ,"), "https://api.github.com", "https://api.github.com"},
+		{"an entry carrying a scheme is not a host", envOf("https://ghe.example.com"), "https://ghe.example.com", ""},
+		{"a listed metadata IP is refused", envOf("169.254.169.254"), "https://169.254.169.254", ""},
+		{"a listed public IP literal is refused", envOf("8.8.8.8"), "https://8.8.8.8", ""},
+		{"a listed localhost is refused", envOf("localhost"), "https://localhost", ""},
+		{"a listed metadata hostname is refused", envOf("metadata.google.internal"), "https://metadata.google.internal", ""},
+		{"a listed host over http is refused", envOf("ghe.example.com"), "http://ghe.example.com", ""},
+		{"unset env has no loopback carve-out", nil, "http://127.0.0.1:8080", ""},
+		{"a listed loopback has no http carve-out", envOf("127.0.0.1:8080"), "http://127.0.0.1:8080", ""},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if c.env == nil {
-				t.Setenv(envVar, "")
-				if err := os.Unsetenv(envVar); err != nil {
-					t.Fatalf("unset %s: %v", envVar, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(ghapi.HostsEnv, "")
+			if tc.env == nil {
+				if err := os.Unsetenv(ghapi.HostsEnv); err != nil {
+					t.Fatalf("unset %s: %v", ghapi.HostsEnv, err)
 				}
 			} else {
-				t.Setenv(envVar, *c.env)
+				t.Setenv(ghapi.HostsEnv, *tc.env)
 			}
-			b, err := ghapi.BaseFromEnv(c.endpoint)
-			if c.want == "" {
-				if err == nil {
-					t.Fatalf("BaseFromEnv(%q) with %s=%s = %q, want an error", c.endpoint, envVar, describeEnv(c.env), b.String())
-				}
-				if !b.IsZero() {
-					t.Errorf("BaseFromEnv(%q) returned a non-zero Base %q alongside its error", c.endpoint, b.String())
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("BaseFromEnv(%q) with %s=%s: unexpected error: %v", c.endpoint, envVar, describeEnv(c.env), err)
-			}
-			if b.String() != c.want {
-				t.Errorf("BaseFromEnv(%q).String() = %q, want %q", c.endpoint, b.String(), c.want)
+
+			b, err := ghapi.BaseFromEnv(tc.endpoint)
+
+			if b.String() != tc.want || (tc.want == "") != (err != nil) || (err != nil && !b.IsZero()) {
+				t.Errorf("BaseFromEnv(%q) with %s=%v = %q, %v; want %q, and a zero Base with any error", tc.endpoint, ghapi.HostsEnv, tc.env, b.String(), err, tc.want)
 			}
 		})
 	}
-}
-
-func envOf(v string) *string { return &v }
-
-func describeEnv(v *string) string {
-	if v == nil {
-		return "<unset>"
-	}
-	return "\"" + *v + "\""
 }
