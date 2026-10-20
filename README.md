@@ -1074,5 +1074,12 @@ new file until you stage the move.
 
 ## Licence
 
-The kit is licensed under the Apache License, Version 2.0, whose full text is
-in [the LICENSE file](LICENSE).
+The kit is licensed under the Business Source License 1.1, whose full text is
+in [the LICENSE file](LICENSE). You may read, copy and change the kit, and use
+it in production only to build, run or operate what the mitstack platform
+manages. Each release becomes Apache-2.0 four years after it is published.
+
+`v2.5.0` is the first release under this licence. Every `v0`, `v1` and `v2`
+release before it was published under the Apache License, Version 2.0, and
+keeps that licence. A maintenance release cut later from an older line carries
+this licence, so its branch takes this LICENSE file before the tag.
