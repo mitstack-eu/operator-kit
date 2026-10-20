@@ -1,376 +1,254 @@
 package stackitid_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 	"github.com/mitstack-eu/operator-kit/v2/stackitid"
 )
 
 const (
-	leakAssertion = "STACKIT-ASSERTION-JWT-THAT-MUST-NEVER-SURFACE"
-	testAudience  = "urn:stackit:iam:project:11111111-1111-1111-1111-111111111111"
+	leakAssertion   = "STACKIT-ASSERTION-JWT-THAT-MUST-NEVER-SURFACE"
+	leakAccessToken = "STACKIT-ACCESS-TOKEN-THAT-MUST-NEVER-SURFACE"
+	testAudience    = "urn:stackit:iam:project:11111111-1111-1111-1111-111111111111"
+	okBody          = `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func fixtureServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewTLSServer(handler)
-	t.Cleanup(srv.Close)
-	return srv
+// tokenRequest is the last request the fixture token endpoint received, and how many it received.
+type tokenRequest struct {
+	method, contentType string
+	form                url.Values
+	n                   int
 }
 
-func validIdentity(srv *httptest.Server) stackitid.Identity {
-	return stackitid.Identity{
-		TokenURL:  srv.URL + "/token",
-		Audience:  testAudience,
-		Assertion: leakAssertion,
-		Client:    srv.Client(),
-	}
-}
-
-func jsonHandler(t *testing.T, status int, body string) http.HandlerFunc {
+// endpoint serves status and body over TLS and returns an identity pointed at it, recording each request into got.
+func endpoint(t *testing.T, status int, body string, got *tokenRequest) stackitid.Identity {
 	t.Helper()
-	return func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("server: parse form: %v", err)
+		}
+		if got != nil {
+			*got = tokenRequest{r.Method, r.Header.Get("Content-Type"), r.PostForm, got.n + 1}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return stackitid.Identity{TokenURL: srv.URL + "/token", Audience: testAudience, Assertion: leakAssertion, Client: srv.Client()}
+}
+
+func TestResolve_ExchangesTheAssertion(t *testing.T) {
+	form := url.Values{
+		"grant_type":         {"urn:ietf:params:oauth:grant-type:token-exchange"},
+		"subject_token":      {leakAssertion},
+		"subject_token_type": {"urn:ietf:params:oauth:token-type:jwt"},
+		"audience":           {testAudience},
+	}
+	withScope := url.Values{"scope": {"resource-manager.projects"}}
+	for k, v := range form {
+		withScope[k] = v
+	}
+	cases := []struct {
+		name, scope, body string
+		wantForm          url.Values
+		want              stackitid.Credential
+		wantExpiresIn     time.Duration
+	}{
+		{"it posts the form-encoded exchange and returns the token with its absolute expiry", "", `{"access_token":"the-access-token","token_type":"Bearer","expires_in":3600}`,
+			form, stackitid.Credential{AccessToken: "the-access-token", TokenType: "Bearer"}, 3600 * time.Second},
+		{"a set scope is sent", "resource-manager.projects", okBody, withScope, stackitid.Credential{AccessToken: "tok", TokenType: "Bearer"}, 3600 * time.Second},
+		{"a missing expires_in leaves the expiry zero, which is never cached", "", `{"access_token":"tok","token_type":"Bearer"}`, form, stackitid.Credential{AccessToken: "tok", TokenType: "Bearer"}, 0},
+		{"a zero expires_in leaves the expiry zero", "", `{"access_token":"tok","token_type":"Bearer","expires_in":0}`, form, stackitid.Credential{AccessToken: "tok", TokenType: "Bearer"}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got tokenRequest
+			id := endpoint(t, http.StatusOK, tc.body, &got)
+			id.Scope = tc.scope
+			before := time.Now()
+
+			cred, err := stackitid.Resolve(context.Background(), id)
+
+			after := time.Now()
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if got.n != 1 || got.method != http.MethodPost || !strings.HasPrefix(got.contentType, "application/x-www-form-urlencoded") || !reflect.DeepEqual(got.form, tc.wantForm) {
+				t.Errorf("request = %+v, want a form-encoded POST of %v", got, tc.wantForm)
+			}
+			if expires := cred.Expires; tc.wantExpiresIn == 0 && !expires.IsZero() || tc.wantExpiresIn != 0 && (expires.Before(before.Add(tc.wantExpiresIn)) || expires.After(after.Add(tc.wantExpiresIn))) {
+				t.Errorf("Expires = %v, want %v after the exchange (zero for none)", expires, tc.wantExpiresIn)
+			}
+			cred.Expires = time.Time{}
+			if cred != tc.want {
+				t.Errorf("credential = %+v, want %+v", cred, tc.want)
+			}
+		})
 	}
 }
 
-func TestResolve_PostsFormEncodedTokenExchangeRequest(t *testing.T) {
-	var gotMethod, gotContentType string
-	var gotForm map[string][]string
-
-	srv := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotContentType = r.Header.Get("Content-Type")
-		if err := r.ParseForm(); err != nil {
-			t.Fatalf("server: parse form: %v", err)
-		}
-		gotForm = map[string][]string(r.PostForm)
-		jsonHandler(t, http.StatusOK, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)(w, r)
-	})
-
-	if _, err := stackitid.Resolve(context.Background(), validIdentity(srv)); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if gotMethod != http.MethodPost {
-		t.Errorf("method = %q, want POST", gotMethod)
-	}
-	if !strings.HasPrefix(gotContentType, "application/x-www-form-urlencoded") {
-		t.Errorf("Content-Type = %q, want form-encoded", gotContentType)
-	}
-
-	want := map[string]string{
-		"grant_type":         "urn:ietf:params:oauth:grant-type:token-exchange",
-		"subject_token":      leakAssertion,
-		"subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-		"audience":           testAudience,
-	}
-	for k, v := range want {
-		got := gotForm[k]
-		if len(got) != 1 || got[0] != v {
-			t.Errorf("form[%q] = %v, want [%q]", k, got, v)
-		}
-	}
-}
-
-func TestResolve_IncludesScopeWhenSet(t *testing.T) {
-	var gotScope []string
-	srv := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			t.Fatalf("server: parse form: %v", err)
-		}
-		gotScope = r.PostForm["scope"]
-		jsonHandler(t, http.StatusOK, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)(w, r)
-	})
-
-	id := validIdentity(srv)
-	id.Scope = "resource-manager.projects"
-	if _, err := stackitid.Resolve(context.Background(), id); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(gotScope) != 1 || gotScope[0] != "resource-manager.projects" {
-		t.Errorf("form[scope] = %v, want [resource-manager.projects]", gotScope)
-	}
-}
-
-func TestResolve_OmitsScopeParameterWhenUnset(t *testing.T) {
-	var sawScope bool
-	srv := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			t.Fatalf("server: parse form: %v", err)
-		}
-		_, sawScope = r.PostForm["scope"]
-		jsonHandler(t, http.StatusOK, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)(w, r)
-	})
-
-	id := validIdentity(srv)
-	id.Scope = ""
-	if _, err := stackitid.Resolve(context.Background(), id); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sawScope {
-		t.Error("scope form field present with an empty Identity.Scope, want it omitted")
-	}
-}
-
-func TestResolve_ReturnsCredentialFromTokenResponse(t *testing.T) {
-	srv := fixtureServer(t, jsonHandler(t, http.StatusOK, `{"access_token":"the-access-token","token_type":"Bearer","expires_in":3600}`))
-
-	before := time.Now()
-	cred, err := stackitid.Resolve(context.Background(), validIdentity(srv))
-	after := time.Now()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cred.AccessToken != "the-access-token" {
-		t.Errorf("AccessToken = %q, want %q", cred.AccessToken, "the-access-token")
-	}
-	if cred.TokenType != "Bearer" {
-		t.Errorf("TokenType = %q, want %q", cred.TokenType, "Bearer")
-	}
-	wantMin := before.Add(3600 * time.Second)
-	wantMax := after.Add(3600 * time.Second)
-	if cred.Expires.Before(wantMin) || cred.Expires.After(wantMax) {
-		t.Errorf("Expires = %v, want between %v and %v (expires_in converted to an absolute time)", cred.Expires, wantMin, wantMax)
-	}
-}
-
-func TestResolve_RejectsEmptyAccessTokenInResponse(t *testing.T) {
-	srv := fixtureServer(t, jsonHandler(t, http.StatusOK, `{"access_token":"","token_type":"Bearer","expires_in":3600}`))
-
-	_, err := stackitid.Resolve(context.Background(), validIdentity(srv))
-	if err == nil {
-		t.Fatal("expected an error for an incomplete credential, want it rejected rather than cached")
-	}
-}
-
-func TestResolve_MissingExpiresInLeavesExpiresZero(t *testing.T) {
-	srv := fixtureServer(t, jsonHandler(t, http.StatusOK, `{"access_token":"tok","token_type":"Bearer"}`))
-
-	cred, err := stackitid.Resolve(context.Background(), validIdentity(srv))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cred.Expires.IsZero() {
-		t.Errorf("Expires = %v, want zero when expires_in is absent (credrefresh treats zero as unusable-for-caching)", cred.Expires)
-	}
-}
-
-func TestResolve_ZeroExpiresInLeavesExpiresZero(t *testing.T) {
-	srv := fixtureServer(t, jsonHandler(t, http.StatusOK, `{"access_token":"tok","token_type":"Bearer","expires_in":0}`))
-
-	cred, err := stackitid.Resolve(context.Background(), validIdentity(srv))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cred.Expires.IsZero() {
-		t.Errorf("Expires = %v, want zero when expires_in is 0", cred.Expires)
-	}
-}
-
-func TestResolve_RejectsNonJSONResponseBody(t *testing.T) {
-	srv := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("this is not json"))
-	})
-
-	_, err := stackitid.Resolve(context.Background(), validIdentity(srv))
-	if err == nil {
-		t.Fatal("expected an error for a non-JSON response body")
-	}
-}
-
-func TestResolve_ServerErrorReturnsError(t *testing.T) {
-	srv := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("internal server error"))
-	})
-
-	_, err := stackitid.Resolve(context.Background(), validIdentity(srv))
-	if err == nil {
-		t.Fatal("expected an error for a 500 response")
-	}
-}
-
-func TestResolve_InvalidGrantErrorNamesTheRejection(t *testing.T) {
-	const description = "assertion signature verification failed"
-	srv := fixtureServer(t, jsonHandler(t, http.StatusBadRequest,
-		`{"error":"invalid_grant","error_description":"`+description+`"}`))
-
-	_, err := stackitid.Resolve(context.Background(), validIdentity(srv))
-	if err == nil {
-		t.Fatal("expected an error for a rejected assertion")
-	}
-	if !strings.Contains(err.Error(), "invalid_grant") {
-		t.Errorf("error = %v, want it to name invalid_grant", err)
-	}
-	if !strings.Contains(err.Error(), description) {
-		t.Errorf("error = %v, want it to carry the RFC 6749 error_description", err)
-	}
-	if !errors.Is(err, stackitid.ErrInvalidGrant) {
-		t.Errorf("error = %v, want errors.Is(err, stackitid.ErrInvalidGrant) so an operator can map it to statusDetail", err)
-	}
-}
-
-func TestResolve_RequiresTokenURL(t *testing.T) {
-	id := stackitid.Identity{Audience: testAudience, Assertion: leakAssertion}
-	if _, err := stackitid.Resolve(context.Background(), id); err == nil {
-		t.Error("expected an error when TokenURL is empty")
-	}
-}
-
-func TestResolve_RequiresAudience(t *testing.T) {
-	id := stackitid.Identity{TokenURL: "https://sts.stackit.cloud/token", Assertion: leakAssertion}
-	if _, err := stackitid.Resolve(context.Background(), id); err == nil {
-		t.Error("expected an error when Audience is empty")
-	}
-}
-
-func TestResolve_RequiresAssertion(t *testing.T) {
-	id := stackitid.Identity{TokenURL: "https://sts.stackit.cloud/token", Audience: testAudience}
-	if _, err := stackitid.Resolve(context.Background(), id); err == nil {
-		t.Error("expected an error when Assertion is empty")
-	}
-}
-
-func TestResolve_RejectsNonHTTPSTokenURL(t *testing.T) {
-	// The unreachable TEST-NET-2 address would hang if the package tried to connect, so a fast error proves rejection precedes any network attempt.
-	id := stackitid.Identity{
-		TokenURL:  "http://198.51.100.1:1/token",
-		Audience:  testAudience,
-		Assertion: leakAssertion,
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := stackitid.Resolve(ctx, id)
-	if err == nil {
-		t.Fatal("expected an error for a non-HTTPS TokenURL")
-	}
-	if !strings.Contains(err.Error(), "https") {
-		t.Errorf("error = %v, want it to name the https requirement (and to fail before dialing)", err)
-	}
-}
-
-func TestResolve_RejectsUnparseableTokenURL(t *testing.T) {
-	id := stackitid.Identity{
-		TokenURL:  "://not-a-url",
-		Audience:  testAudience,
-		Assertion: leakAssertion,
-	}
-	if _, err := stackitid.Resolve(context.Background(), id); err == nil {
-		t.Error("expected an error for an unparseable TokenURL")
-	}
-}
-
-func TestResolve_HonoursContextCancellation(t *testing.T) {
-	srv := fixtureServer(t, jsonHandler(t, http.StatusOK, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`))
-
-	ctx, cancel := context.WithCancel(context.Background())
+// Every failure is an error carrying neither the assertion nor any other request material.
+func TestResolve_FailsWithoutLeakingTheAssertion(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-
-	_, err := stackitid.Resolve(ctx, validIdentity(srv))
-	if err == nil {
-		t.Fatal("expected an error for an already-cancelled context")
+	cases := []struct {
+		name      string
+		id        func(t *testing.T) stackitid.Identity
+		ctx       context.Context
+		wantIs    error
+		wantInErr []string
+	}{
+		{"no TokenURL", func(*testing.T) stackitid.Identity {
+			return stackitid.Identity{Audience: testAudience, Assertion: leakAssertion}
+		}, nil, nil, nil},
+		{"no Audience", func(*testing.T) stackitid.Identity {
+			return stackitid.Identity{TokenURL: "https://sts.stackit.cloud/token", Assertion: leakAssertion}
+		}, nil, nil, nil},
+		{"no Assertion", func(*testing.T) stackitid.Identity {
+			return stackitid.Identity{TokenURL: "https://sts.stackit.cloud/token", Audience: testAudience}
+		}, nil, nil, nil},
+		{"a TokenURL that is not https is refused before any dial to its unreachable host", func(*testing.T) stackitid.Identity {
+			return stackitid.Identity{TokenURL: "http://198.51.100.1:1/token", Audience: testAudience, Assertion: leakAssertion}
+		}, nil, nil, []string{"https"}},
+		{"a TokenURL that does not parse", func(*testing.T) stackitid.Identity {
+			return stackitid.Identity{TokenURL: "://not-a-url", Audience: testAudience, Assertion: leakAssertion}
+		}, nil, nil, nil},
+		{"a rejected assertion names invalid_grant and its description", func(t *testing.T) stackitid.Identity {
+			return endpoint(t, http.StatusBadRequest, `{"error":"invalid_grant","error_description":"assertion signature verification failed"}`, nil)
+		}, nil, stackitid.ErrInvalidGrant, []string{"invalid_grant", "assertion signature verification failed"}},
+		{"a server error", func(t *testing.T) stackitid.Identity {
+			return endpoint(t, http.StatusInternalServerError, "internal server error", nil)
+		}, nil, nil, nil},
+		{"a body that is not JSON", func(t *testing.T) stackitid.Identity { return endpoint(t, http.StatusOK, "this is not json", nil) }, nil, nil, nil},
+		{"an empty access token, which must not be cached", func(t *testing.T) stackitid.Identity {
+			return endpoint(t, http.StatusOK, `{"access_token":"","token_type":"Bearer","expires_in":3600}`, nil)
+		}, nil, nil, nil},
+		{"an already cancelled context", func(t *testing.T) stackitid.Identity { return endpoint(t, http.StatusOK, okBody, nil) }, cancelled, context.Canceled, nil},
+		{"a transport failure whose text carries the assertion", func(*testing.T) stackitid.Identity {
+			return stackitid.Identity{TokenURL: "https://sts.stackit.cloud/token", Audience: testAudience, Assertion: leakAssertion,
+				Client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return nil, errors.New("dial tcp: connection refused, assertion=" + leakAssertion)
+				})}}
+		}, nil, nil, nil},
 	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("error = %v, want it to wrap context.Canceled", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := tc.ctx
+			if ctx == nil {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+			}
+			id := tc.id(t)
+
+			cred, err := stackitid.Resolve(ctx, id)
+
+			if err == nil {
+				t.Fatalf("Resolve = %+v; want an error", cred)
+			}
+			kittest.AssertNoSecret(t, "the Resolve error", err.Error(), leakAssertion)
+			if tc.wantIs != nil && !errors.Is(err, tc.wantIs) {
+				t.Errorf("Resolve error = %v, want it to wrap %v", err, tc.wantIs)
+			}
+			for _, want := range tc.wantInErr {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Resolve error = %v, want it to name %q", err, want)
+				}
+			}
+		})
 	}
 }
 
-func TestResolve_TransportFailureReturnsError(t *testing.T) {
-	id := stackitid.Identity{
-		TokenURL:  "https://sts.stackit.cloud/token",
-		Audience:  testAudience,
-		Assertion: leakAssertion,
-		Client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			return nil, errors.New("dial tcp: connection refused")
-		})},
-	}
-	if _, err := stackitid.Resolve(context.Background(), id); err == nil {
-		t.Error("expected an error when the transport fails")
-	}
-}
-
-func TestRefresher_ReusesCredentialUntilNearExpiry(t *testing.T) {
-	var calls int
+func TestRefresher_Get(t *testing.T) {
 	now := time.Now()
-	r := stackitid.NewRefresher(func(context.Context) (stackitid.Credential, error) {
-		calls++
-		return stackitid.Credential{AccessToken: "tok", Expires: now.Add(time.Hour)}, nil
-	})
-	r.Now = func() time.Time { return now }
-
-	for range 3 {
-		if _, err := r.Get(context.Background()); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+	cases := []struct {
+		name      string
+		resolve   func() (stackitid.Credential, error)
+		gets      int
+		wantErr   bool
+		wantCalls int
+	}{
+		{"a valid credential is reused rather than re-minted per call", func() (stackitid.Credential, error) {
+			return stackitid.Credential{AccessToken: "tok", Expires: now.Add(time.Hour)}, nil
+		}, 3, false, 1},
+		{"a credential that comes back already expired fails closed", func() (stackitid.Credential, error) {
+			return stackitid.Credential{AccessToken: "tok", Expires: now.Add(-time.Hour)}, nil
+		}, 1, true, 1},
+		{"a resolver error fails closed", func() (stackitid.Credential, error) {
+			return stackitid.Credential{}, errors.New("token endpoint unreachable")
+		}, 1, true, 1},
+		{"the fail-closed error carries no credential material", func() (stackitid.Credential, error) {
+			return stackitid.Credential{AccessToken: leakAccessToken, Expires: now.Add(-time.Hour)}, nil
+		}, 1, true, 1},
 	}
-	if calls != 1 {
-		t.Errorf("resolved %d times, want 1 — a valid credential must not be re-minted per call", calls)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			r := stackitid.NewRefresher(func(context.Context) (stackitid.Credential, error) { calls++; return tc.resolve() })
+			r.Now = func() time.Time { return now }
 
-func TestRefresher_FailsClosedWhenCredentialComesBackAlreadyExpired(t *testing.T) {
-	now := time.Now()
-	r := stackitid.NewRefresher(func(context.Context) (stackitid.Credential, error) {
-		return stackitid.Credential{AccessToken: "tok", Expires: now.Add(-time.Hour)}, nil
-	})
-	r.Now = func() time.Time { return now }
+			var got stackitid.Credential
+			var err error
+			for range tc.gets {
+				got, err = r.Get(context.Background())
+			}
 
-	got, err := r.Get(context.Background())
-	if err == nil {
-		t.Fatal("an already-expired credential must fail closed, never be returned")
-	}
-	if got.AccessToken != "" {
-		t.Errorf("returned credential %+v alongside the error — the caller must get nothing usable", got)
-	}
-}
-
-func TestRefresher_FailsClosedWhenResolverErrors(t *testing.T) {
-	now := time.Now()
-	r := stackitid.NewRefresher(func(context.Context) (stackitid.Credential, error) {
-		return stackitid.Credential{}, errors.New("token endpoint unreachable")
-	})
-	r.Now = func() time.Time { return now }
-
-	got, err := r.Get(context.Background())
-	if err == nil {
-		t.Fatal("expected the resolver's error to propagate")
-	}
-	if got.AccessToken != "" {
-		t.Errorf("returned credential %+v alongside the error — the caller must get nothing usable", got)
+			if (err != nil) != tc.wantErr || calls != tc.wantCalls {
+				t.Errorf("Get = %+v, %v after %d resolves; want error %v after %d", got, err, calls, tc.wantErr, tc.wantCalls)
+			}
+			if tc.wantErr {
+				if got.AccessToken != "" {
+					t.Errorf("Get returned %+v alongside its error; the caller must get nothing usable", got)
+				}
+				kittest.AssertNoSecret(t, "the Refresher error", err.Error(), leakAccessToken)
+			}
+		})
 	}
 }
 
 func TestFromIdentity_ResolvesUsingTheGivenIdentity(t *testing.T) {
-	var calls int
-	srv := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		jsonHandler(t, http.StatusOK, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)(w, r)
+	var req tokenRequest
+	r := stackitid.FromIdentity(endpoint(t, http.StatusOK, okBody, &req))
+
+	got, err := r.Get(context.Background())
+
+	if err != nil || got.AccessToken != "tok" || req.n != 1 {
+		t.Errorf("Get = %+v, %v after request %+v; want token tok from one exchange", got, err, req)
+	}
+}
+
+func TestResolve_LogsNoSecretOnAnyPath(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	ok := endpoint(t, http.StatusOK, `{"access_token":"`+leakAccessToken+`","token_type":"Bearer","expires_in":3600}`, nil)
+	rejected := endpoint(t, http.StatusBadRequest, `{"error":"invalid_grant","error_description":"assertion signature verification failed"}`, nil)
+	expired := stackitid.NewRefresher(func(context.Context) (stackitid.Credential, error) {
+		return stackitid.Credential{AccessToken: leakAccessToken, Expires: time.Now().Add(-time.Hour)}, nil
 	})
 
-	r := stackitid.FromIdentity(validIdentity(srv))
-	got, err := r.Get(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := stackitid.Resolve(context.Background(), ok); err != nil {
+		t.Fatalf("Resolve: %v", err)
 	}
-	if got.AccessToken != "tok" {
-		t.Errorf("AccessToken = %q, want %q", got.AccessToken, "tok")
-	}
-	if calls != 1 {
-		t.Errorf("token endpoint called %d times, want 1", calls)
-	}
+	_, _ = stackitid.Resolve(context.Background(), rejected)
+	_, _ = expired.Get(context.Background())
+
+	kittest.AssertNoSecret(t, "the log", buf.String(), leakAssertion, leakAccessToken)
 }

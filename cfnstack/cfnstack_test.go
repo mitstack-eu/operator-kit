@@ -98,105 +98,47 @@ func TestCapabilityNamedIAM_IsCloudFormationsName(t *testing.T) {
 	}
 }
 
-func TestValidate_PassesTheTemplateBodyAndReturnsNilOnSuccess(t *testing.T) {
-	c := &fakeClient{}
-	if err := cfnstack.New(c).Validate(context.Background(), templateBody); err != nil {
-		t.Fatalf("Validate = %v, want nil", err)
-	}
-	if !reflect.DeepEqual(c.validated, []string{templateBody}) {
-		t.Errorf("ValidateTemplate saw %q, want the template body once", c.validated)
-	}
-}
-
-func TestValidate_ReturnsTheClientError(t *testing.T) {
-	wantErr := errors.New("ValidationError: Template format error: unexpected token")
-	c := &fakeClient{validateErr: wantErr}
-	err := cfnstack.New(c).Validate(context.Background(), "<bad-template>")
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("Validate = %v, want the client's error %v", err, wantErr)
-	}
-	if len(c.validated) != 1 {
-		t.Errorf("ValidateTemplate called %d times, want once", len(c.validated))
-	}
-}
-
-func TestEnsureStack_CreatesANewStackWithNamedIAMAndNoUpdate(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		p, tags map[string]string
-	}{
-		{"params and tags", params(), tags()},
-		{"no params or tags", nil, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := &fakeClient{}
-			if err := cfnstack.New(c).EnsureStack(context.Background(), stackName, templateBody, tc.p, tc.tags); err != nil {
-				t.Fatalf("EnsureStack = %v, want nil on a fresh create", err)
-			}
-			if len(c.created) != 1 {
-				t.Fatalf("CreateStack called %d times, want once", len(c.created))
-			}
-			if want := wantInput(tc.p, tc.tags); !reflect.DeepEqual(c.created[0], want) {
-				t.Errorf("CreateStack input = %+v, want %+v", c.created[0], want)
-			}
-			if len(c.updated) != 0 {
-				t.Errorf("UpdateStack called %d times after a successful create, want none", len(c.updated))
-			}
-		})
-	}
-}
-
-func TestEnsureStack_AlreadyExistsFallsBackToAnUpdateWithTheSameInput(t *testing.T) {
+func TestValidate(t *testing.T) {
+	invalid := errors.New("ValidationError: Template format error: unexpected token")
 	for _, tc := range []struct {
 		name string
 		err  error
 	}{
-		{"bare", alreadyExists()},
-		{"wrapped once", operationError("CreateStack", alreadyExists())},
-		{"wrapped twice", fmt.Errorf("ensure: %w", operationError("CreateStack", alreadyExists()))},
+		{"it passes the template body and returns nil on success", nil},
+		{"it returns the client's error", invalid},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := &fakeClient{createErr: tc.err}
-			if err := cfnstack.New(c).EnsureStack(context.Background(), stackName, templateBody, params(), tags()); err != nil {
-				t.Fatalf("EnsureStack = %v, want nil once the update succeeds", err)
-			}
-			if len(c.created) != 1 || len(c.updated) != 1 {
-				t.Fatalf("CreateStack called %d and UpdateStack %d times, want once each", len(c.created), len(c.updated))
-			}
-			if want := wantInput(params(), tags()); !reflect.DeepEqual(c.updated[0], want) {
-				t.Errorf("UpdateStack input = %+v, want the create's input %+v", c.updated[0], want)
+			c := &fakeClient{validateErr: tc.err}
+
+			err := cfnstack.New(c).Validate(context.Background(), templateBody)
+
+			if !errors.Is(err, tc.err) || !reflect.DeepEqual(c.validated, []string{templateBody}) {
+				t.Errorf("Validate = %v after ValidateTemplate saw %q; want %v after the template body once", err, c.validated, tc.err)
 			}
 		})
 	}
 }
 
-func TestEnsureStack_UpdateWithNoUpdatesToPerformReturnsNil(t *testing.T) {
-	c := &fakeClient{
-		createErr: operationError("CreateStack", alreadyExists()),
-		updateErr: errors.New("operation error CloudFormation: UpdateStack, https response error StatusCode: 400, RequestID: x, ValidationError: No updates are to be performed."),
+func TestEnsureStack(t *testing.T) {
+	stuck := errors.New("ValidationError: Stack is in UPDATE_IN_PROGRESS state and can not be updated")
+	noUpdates := errors.New("operation error CloudFormation: UpdateStack, https response error StatusCode: 400, RequestID: x, ValidationError: No updates are to be performed.")
+	type ensureCase struct {
+		name                 string
+		p, tags              map[string]string
+		createErr, updateErr error
+		wantErr              error
+		wantUpdate           bool
 	}
-	if err := cfnstack.New(c).EnsureStack(context.Background(), stackName, templateBody, params(), tags()); err != nil {
-		t.Fatalf("EnsureStack = %v, want nil when the stack is already converged", err)
+	cases := []ensureCase{
+		{"a new stack is created with named IAM and never updated", params(), tags(), nil, nil, nil, false},
+		{"a new stack with no params or tags is created", nil, nil, nil, nil, nil, false},
+		{"a bare AlreadyExistsException falls back to an update with the same input", params(), tags(), alreadyExists(), nil, nil, true},
+		{"an AlreadyExistsException wrapped once falls back to an update", params(), tags(), operationError("CreateStack", alreadyExists()), nil, nil, true},
+		{"an AlreadyExistsException wrapped twice falls back to an update", params(), tags(), fmt.Errorf("ensure: %w", operationError("CreateStack", alreadyExists())), nil, nil, true},
+		{"an update with no updates to perform is an already converged stack", params(), tags(), operationError("CreateStack", alreadyExists()), noUpdates, nil, true},
+		{"any other update error is returned", params(), tags(), operationError("CreateStack", alreadyExists()), operationError("UpdateStack", stuck), stuck, true},
 	}
-	if len(c.updated) != 1 {
-		t.Errorf("UpdateStack called %d times, want once", len(c.updated))
-	}
-}
-
-func TestEnsureStack_ReturnsAnyOtherUpdateError(t *testing.T) {
-	sentinel := errors.New("ValidationError: Stack is in UPDATE_IN_PROGRESS state and can not be updated")
-	c := &fakeClient{
-		createErr: operationError("CreateStack", alreadyExists()),
-		updateErr: operationError("UpdateStack", sentinel),
-	}
-	err := cfnstack.New(c).EnsureStack(context.Background(), stackName, templateBody, params(), tags())
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("EnsureStack = %v, want the update's error %v", err, sentinel)
-	}
-}
-
-func TestEnsureStack_ReturnsAnyOtherCreateErrorAndNeverUpdates(t *testing.T) {
-	for _, tc := range []struct {
+	for _, err := range []struct {
 		name string
 		err  error
 	}{
@@ -208,101 +150,76 @@ func TestEnsureStack_ReturnsAnyOtherCreateErrorAndNeverUpdates(t *testing.T) {
 		{"no updates text on create", errors.New("ValidationError: No updates are to be performed.")},
 		{"does not exist text on create", errors.New("ValidationError: Stack with id " + stackName + " does not exist")},
 	} {
+		cases = append(cases, ensureCase{"a create error with " + err.name + " is returned and never updates", params(), tags(), err.err, nil, err.err, false})
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := &fakeClient{createErr: tc.err}
-			err := cfnstack.New(c).EnsureStack(context.Background(), stackName, templateBody, params(), tags())
-			if !errors.Is(err, tc.err) {
-				t.Fatalf("EnsureStack = %v, want the create's error %v", err, tc.err)
+			c := &fakeClient{createErr: tc.createErr, updateErr: tc.updateErr}
+			want := wantInput(tc.p, tc.tags)
+
+			err := cfnstack.New(c).EnsureStack(context.Background(), stackName, templateBody, tc.p, tc.tags)
+
+			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
+				t.Errorf("EnsureStack = %v, want %v", err, tc.wantErr)
 			}
-			if len(c.updated) != 0 {
-				t.Errorf("UpdateStack called %d times after a create error that is not AlreadyExistsException, want none", len(c.updated))
+			if len(c.created) != 1 || !reflect.DeepEqual(c.created[0], want) {
+				t.Errorf("CreateStack inputs = %+v, want once %+v", c.created, want)
+			}
+			if wantUpdates := map[bool]int{true: 1}[tc.wantUpdate]; len(c.updated) != wantUpdates || (wantUpdates == 1 && !reflect.DeepEqual(c.updated[0], want)) {
+				t.Errorf("UpdateStack inputs = %+v, want %d update(s) with the create's input", c.updated, wantUpdates)
 			}
 		})
 	}
 }
 
-func TestDeleteStack_DeletesTheNamedStack(t *testing.T) {
-	c := &fakeClient{}
-	if err := cfnstack.New(c).DeleteStack(context.Background(), stackName); err != nil {
-		t.Fatalf("DeleteStack = %v, want nil", err)
-	}
-	if !reflect.DeepEqual(c.deleted, []string{stackName}) {
-		t.Errorf("DeleteStack saw %q, want %q once", c.deleted, stackName)
-	}
-}
-
-func TestDeleteStack_StackThatDoesNotExistReturnsNil(t *testing.T) {
-	c := &fakeClient{deleteErr: fmt.Errorf("operation error CloudFormation: DeleteStack, ValidationError: Stack with id %s does not exist", stackName)}
-	if err := cfnstack.New(c).DeleteStack(context.Background(), stackName); err != nil {
-		t.Fatalf("DeleteStack = %v, want nil for a stack that does not exist", err)
-	}
-	if len(c.deleted) != 1 {
-		t.Errorf("DeleteStack called %d times, want once", len(c.deleted))
-	}
-}
-
-func TestDeleteStack_ReturnsAnyOtherError(t *testing.T) {
-	sentinel := errors.New("Throttling: Rate exceeded")
-	c := &fakeClient{deleteErr: operationError("DeleteStack", sentinel)}
-	err := cfnstack.New(c).DeleteStack(context.Background(), stackName)
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("DeleteStack = %v, want the client's error %v", err, sentinel)
-	}
-}
-
-func TestStackStatus_ReturnsTheFirstStacksStatus(t *testing.T) {
-	c := &fakeClient{stacks: []cfnstack.Stack{
-		{Name: stackName, Status: "CREATE_COMPLETE"},
-		{Name: stackName, Status: "DELETE_FAILED"},
-	}}
-	status, err := cfnstack.New(c).StackStatus(context.Background(), stackName)
-	if err != nil {
-		t.Fatalf("StackStatus = %v, want nil", err)
-	}
-	if status != "CREATE_COMPLETE" {
-		t.Errorf("StackStatus = %q, want CREATE_COMPLETE", status)
-	}
-	if !reflect.DeepEqual(c.described, []string{stackName}) {
-		t.Errorf("DescribeStacks saw %q, want %q once", c.described, stackName)
-	}
-}
-
-func TestStackStatus_ClientErrorReachesTheCaller(t *testing.T) {
+func TestDeleteStack(t *testing.T) {
+	throttled := errors.New("Throttling: Rate exceeded")
 	for _, tc := range []struct {
-		name string
-		err  error
+		name               string
+		deleteErr, wantErr error
 	}{
-		{"stack does not exist", fmt.Errorf("operation error CloudFormation: DescribeStacks, ValidationError: Stack with id %s does not exist", stackName)},
-		{"throttled", operationError("DescribeStacks", errors.New("Throttling: Rate exceeded"))},
+		{"it deletes the named stack", nil, nil},
+		{"a stack that does not exist succeeds", fmt.Errorf("operation error CloudFormation: DeleteStack, ValidationError: Stack with id %s does not exist", stackName), nil},
+		{"any other error is returned", operationError("DeleteStack", throttled), throttled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := &fakeClient{describeErr: tc.err}
+			c := &fakeClient{deleteErr: tc.deleteErr}
+
+			err := cfnstack.New(c).DeleteStack(context.Background(), stackName)
+
+			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) || !reflect.DeepEqual(c.deleted, []string{stackName}) {
+				t.Errorf("DeleteStack = %v after deleting %q; want %v after %q once", err, c.deleted, tc.wantErr, stackName)
+			}
+		})
+	}
+}
+
+func TestStackStatus(t *testing.T) {
+	missing := fmt.Errorf("operation error CloudFormation: DescribeStacks, ValidationError: Stack with id %s does not exist", stackName)
+	throttled := operationError("DescribeStacks", errors.New("Throttling: Rate exceeded"))
+	errNoStack := errors.New("no stack")
+	for _, tc := range []struct {
+		name                 string
+		stacks               []cfnstack.Stack
+		describeErr, wantErr error
+		want                 string
+	}{
+		{"it returns the first stack's status", []cfnstack.Stack{{Name: stackName, Status: "CREATE_COMPLETE"}, {Name: stackName, Status: "DELETE_FAILED"}}, nil, nil, "CREATE_COMPLETE"},
+		{"a stack that does not exist reaches the caller", nil, missing, missing, ""},
+		{"a throttled describe reaches the caller", nil, throttled, throttled, ""},
+		{"a nil answer is an error", nil, nil, errNoStack, ""},
+		{"an empty answer is an error", []cfnstack.Stack{}, nil, errNoStack, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &fakeClient{stacks: tc.stacks, describeErr: tc.describeErr}
+
 			status, err := cfnstack.New(c).StackStatus(context.Background(), stackName)
-			if !errors.Is(err, tc.err) {
-				t.Fatalf("StackStatus error = %v, want the client's error %v", err, tc.err)
-			}
-			if status != "" {
-				t.Errorf("StackStatus = %q alongside an error, want empty", status)
-			}
-		})
-	}
-}
 
-func TestStackStatus_NoStackIsAnError(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		stacks []cfnstack.Stack
-	}{
-		{"nil", nil},
-		{"empty", []cfnstack.Stack{}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			status, err := cfnstack.New(&fakeClient{stacks: tc.stacks}).StackStatus(context.Background(), stackName)
-			if err == nil {
-				t.Fatal("StackStatus returned no error when the client answered with no stack")
-			}
-			if status != "" {
-				t.Errorf("StackStatus = %q alongside an error, want empty", status)
+			switch {
+			case tc.wantErr == errNoStack && err == nil, tc.wantErr != errNoStack && !errors.Is(err, tc.wantErr), tc.wantErr == nil && err != nil:
+				t.Errorf("StackStatus error = %v, want %v", err, tc.wantErr)
+			case status != tc.want || !reflect.DeepEqual(c.described, []string{stackName}):
+				t.Errorf("StackStatus = %q after describing %q; want %q after %q once", status, c.described, tc.want, stackName)
 			}
 		})
 	}

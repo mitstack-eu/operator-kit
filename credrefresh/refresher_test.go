@@ -10,278 +10,122 @@ import (
 	"time"
 
 	"github.com/mitstack-eu/operator-kit/v2/credrefresh"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
+const leakSecret = "PROVIDER-CREDENTIAL-MATERIAL-THAT-MUST-NEVER-SURFACE"
+
 type cred struct {
-	id string
+	id, token string
 }
 
-func TestRefresher_ReusesCredentialUntilItNearsExpiry(t *testing.T) {
-	var calls int
-	clock := time.Now()
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		calls++
-		return cred{id: "A"}, clock.Add(time.Hour), nil
-	})
-	r.Now = func() time.Time { return clock }
+type outcome int
 
-	for range 3 {
-		if _, err := r.Get(context.Background()); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-	if calls != 1 {
-		t.Errorf("resolved %d times, want 1 — a valid credential well outside the renewal margin must not be re-minted per call", calls)
-	}
+const (
+	usable outcome = iota
+	refused
+)
+
+// get is one Refresher.Get at an offset from the start, with the outcome and credential id it must have.
+type get struct {
+	at   time.Duration
+	want outcome
+	id   string
 }
 
-func TestRefresher_RenewsInsideTheRenewalMarginButNotYetExpired(t *testing.T) {
-	var calls int
-	clock := time.Now()
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		calls++
-		return cred{id: "A"}, clock.Add(time.Hour), nil
-	})
-	r.Now = func() time.Time { return clock }
-
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	r.Now = func() time.Time { return clock.Add(time.Hour - credrefresh.DefaultRenewMargin/2) }
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if calls != 2 {
-		t.Errorf("resolved %d times, want 2 — a credential inside the renewal margin must be renewed", calls)
-	}
+// mint is a resolver for a credential expiring d after the moment it is minted.
+func mint(c cred, d time.Duration) func(int, time.Time, time.Time) (cred, time.Time, error) {
+	return func(_ int, _, now time.Time) (cred, time.Time, error) { return c, now.Add(d), nil }
 }
 
-func TestRefresher_ZeroValuedCredentialWithAGoodExpiryIsStillHeldAndReused(t *testing.T) {
-	// There is no universal "empty" sentinel for an arbitrary credential type, so a zero T with a good expiry is still held.
-	var calls int
-	clock := time.Now()
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		calls++
-		return cred{}, clock.Add(time.Hour), nil
-	})
-	r.Now = func() time.Time { return clock }
-
-	for range 3 {
-		if _, err := r.Get(context.Background()); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-	if calls != 1 {
-		t.Errorf("resolved %d times, want 1 — a zero-valued credential with a good expiry is still a held credential", calls)
-	}
+// mintUntil is a resolver for a credential expiring d after the start, whenever it is minted.
+func mintUntil(c cred, d time.Duration) func(int, time.Time, time.Time) (cred, time.Time, error) {
+	return func(_ int, start, _ time.Time) (cred, time.Time, error) { return c, start.Add(d), nil }
 }
 
-func TestRefresher_FailsClosedWhenRenewalFails(t *testing.T) {
-	clock := time.Now()
-	var fail bool
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		if fail {
-			return cred{}, time.Time{}, errors.New("network down")
-		}
-		return cred{id: "A"}, clock.Add(time.Hour), nil
-	})
-	r.Now = func() time.Time { return clock }
+func TestRefresher_Get(t *testing.T) {
+	a := cred{id: "A"}
+	cases := []struct {
+		name      string
+		margin    time.Duration
+		resolve   func(call int, start, now time.Time) (cred, time.Time, error)
+		gets      []get
+		wantCalls int
+		realClock bool
+	}{
+		{"a credential well outside the renewal margin is reused", 0, mint(a, time.Hour),
+			[]get{{0, usable, "A"}, {0, usable, "A"}, {0, usable, "A"}}, 1, false},
+		{"a credential inside the default renewal margin is renewed when RenewMargin is unset", 0, mintUntil(a, time.Hour),
+			[]get{{0, usable, "A"}, {time.Hour - credrefresh.DefaultRenewMargin/2, usable, "A"}}, 2, false},
+		{"a zero-valued credential with a good expiry is still held, since no type has a universal empty sentinel", 0, mint(cred{}, time.Hour),
+			[]get{{0, usable, ""}, {0, usable, ""}, {0, usable, ""}}, 1, false},
+		{"a renewal that fails past expiry fails closed and clears the held credential", 0, func(call int, _, now time.Time) (cred, time.Time, error) {
+			if call == 2 {
+				return cred{}, time.Time{}, errors.New("network down")
+			}
+			return a, now.Add(time.Hour), nil
+		}, []get{{0, usable, "A"}, {2 * time.Hour, refused, ""}, {2 * time.Hour, usable, "A"}}, 3, false},
+		{"a fresh credential already expired on arrival fails closed", 0, mint(a, -time.Minute), []get{{0, refused, ""}}, 1, false},
+		{"a fresh credential expiring exactly now has no usable life left", 0, mint(a, 0), []get{{0, refused, ""}}, 1, false},
+		{"a renewal past the first credential's renewal point yields a usable one", 0, mint(a, 3*time.Hour),
+			[]get{{0, usable, "A"}, {2 * time.Hour, usable, "A"}}, 0, false},
+		{"a credential of unknown expiry is never served from cache", 0, func(int, time.Time, time.Time) (cred, time.Time, error) {
+			return a, time.Time{}, nil
+		}, []get{{0, usable, "A"}, {0, usable, "A"}, {0, usable, "A"}}, 3, true},
+		{"a non-zero RenewMargin overrides the default", time.Minute, mintUntil(a, time.Hour),
+			[]get{{0, usable, "A"}, {time.Hour - 5*time.Minute, usable, "A"}}, 1, false},
+		{"a negative RenewMargin never serves a credential past its real expiry", -30 * time.Minute, mintUntil(a, time.Hour),
+			[]get{{0, usable, "A"}, {70 * time.Minute, refused, ""}}, 0, false},
+		{"a zero-valued credential gets no exemption at its exact expiry", time.Nanosecond, mintUntil(cred{}, time.Hour),
+			[]get{{0, usable, ""}, {time.Hour, refused, ""}}, 0, false},
+		{"the fail-closed error carries no credential material", 0, mint(cred{token: leakSecret}, -time.Hour), []get{{0, refused, ""}}, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Now()
+			var now time.Time
+			calls := 0
+			r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
+				calls++
+				return tc.resolve(calls, start, now)
+			})
+			r.RenewMargin = tc.margin
 
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+			for i, g := range tc.gets {
+				now = start.Add(g.at)
+				if !tc.realClock {
+					r.Now = func() time.Time { return now }
+				}
 
-	fail = true
-	clock = clock.Add(2 * time.Hour) // past the held credential's expiry
+				got, err := r.Get(context.Background())
 
-	got, err := r.Get(context.Background())
-	if err == nil {
-		t.Fatal("a credential past expiry that cannot be renewed MUST fail, never fall back to the stale one")
-	}
-	var zero cred
-	if got != zero {
-		t.Errorf("Get returned %+v alongside the error — the caller must get nothing usable, only the zero value", got)
-	}
-
-	// The held credential must be cleared, so a later resolve re-mints rather than reusing the one that failed to renew.
-	fail = false
-	got, err = r.Get(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error on recovery: %v", err)
-	}
-	if got.id != "A" {
-		t.Errorf("Get = %+v after recovery, want the freshly minted credential", got)
-	}
-}
-
-func TestRefresher_FailsClosedOnAnAlreadyExpiredFreshCredential(t *testing.T) {
-	// A cached issuer response or clock skew can hand back a credential already dead on arrival.
-	clock := time.Now()
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		return cred{id: "A"}, clock.Add(-time.Minute), nil
-	})
-	r.Now = func() time.Time { return clock }
-
-	got, err := r.Get(context.Background())
-	if err == nil {
-		t.Fatal("a resolver handing back a credential already expired must fail closed, not pass it through")
-	}
-	var zero cred
-	if got != zero {
-		t.Errorf("Get returned %+v alongside the error — the caller must get nothing usable", got)
-	}
-}
-
-func TestRefresher_FailsClosedWhenFreshCredentialExpiresExactlyNow(t *testing.T) {
-	clock := time.Now()
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		return cred{id: "A"}, clock, nil
-	})
-	r.Now = func() time.Time { return clock }
-
-	if _, err := r.Get(context.Background()); err == nil {
-		t.Fatal("a credential expiring exactly at now has no usable life left and must fail closed, not be treated as valid")
-	}
-}
-
-func TestRefresher_RenewalPastExpiryYieldsAUsableCredential(t *testing.T) {
-	clock := time.Now()
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		return cred{id: "A"}, clock.Add(3 * time.Hour), nil
-	})
-	r.Now = func() time.Time { return clock }
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	clock = clock.Add(2 * time.Hour)
-	got, err := r.Get(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.id != "A" {
-		t.Errorf("Get returned %+v, want the renewed credential", got)
-	}
-}
-
-func TestRefresher_ZeroExpiryIsNeverCached(t *testing.T) {
-	// An unknown expiry must not be read as "never expires", which is the fail-open reading.
-	var calls int
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		calls++
-		return cred{id: "A"}, time.Time{}, nil
-	})
-	for range 3 {
-		if _, err := r.Get(context.Background()); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-	if calls != 3 {
-		t.Errorf("resolved %d times, want 3 — a credential with an unknown (zero) expiry must never be served from cache", calls)
-	}
-}
-
-func TestRefresher_DefaultRenewMarginAppliesWhenUnset(t *testing.T) {
-	var calls int
-	clock := time.Now()
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		calls++
-		return cred{id: "A"}, clock.Add(time.Hour), nil
-	})
-	r.Now = func() time.Time { return clock }
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	r.Now = func() time.Time { return clock.Add(time.Hour - credrefresh.DefaultRenewMargin/2) }
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if calls != 2 {
-		t.Errorf("resolved %d times, want 2 — RenewMargin left zero must fall back to DefaultRenewMargin", calls)
-	}
-}
-
-func TestRefresher_NonZeroRenewMarginOverridesTheDefault(t *testing.T) {
-	var calls int
-	clock := time.Now()
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		calls++
-		return cred{id: "A"}, clock.Add(time.Hour), nil
-	})
-	r.Now = func() time.Time { return clock }
-	r.RenewMargin = time.Minute
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// DefaultRenewMargin's ten minutes would force a renewal here, so this proves the override is honoured.
-	r.Now = func() time.Time { return clock.Add(time.Hour - 5*time.Minute) }
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if calls != 1 {
-		t.Errorf("resolved %d times, want 1 — a non-zero RenewMargin must override DefaultRenewMargin", calls)
-	}
-}
-
-func TestRefresher_NegativeRenewMarginNeverServesAnExpiredCredential(t *testing.T) {
-	// RenewMargin is unvalidated, and a negative one pushes the "still fresh" boundary past the real expiry.
-	clock := time.Now()
-	expiry := clock.Add(time.Hour)
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		return cred{id: "A"}, expiry, nil
-	})
-	r.Now = func() time.Time { return clock }
-	r.RenewMargin = -30 * time.Minute
-
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error priming the cache: %v", err)
-	}
-
-	clock = clock.Add(70 * time.Minute)
-	got, err := r.Get(context.Background())
-	if err == nil {
-		t.Errorf("Get returned %+v with no error for a credential ten minutes past its real expiry under a negative RenewMargin — a negative margin must never serve an expired credential", got)
-	}
-}
-
-func TestRefresher_ZeroValuedCredentialAtExactExpiryBoundaryFailsClosed(t *testing.T) {
-	// A zero-valued credential gets no exemption from the exact-expiry rule.
-	clock := time.Now()
-	expiry := clock.Add(time.Hour)
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		return cred{}, expiry, nil
-	})
-	r.Now = func() time.Time { return clock }
-	r.RenewMargin = time.Nanosecond // effectively no renewal margin
-
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error priming the cache: %v", err)
-	}
-
-	clock = clock.Add(time.Hour) // exactly at expiry
-	got, err := r.Get(context.Background())
-	if err == nil {
-		t.Errorf("Get returned %+v with no error for a zero-valued credential exactly at its expiry, want a fail-closed error", got)
+				switch {
+				case g.want == usable && (err != nil || got.id != g.id):
+					t.Fatalf("Get #%d at +%v = %+v, %v; want credential %q", i+1, g.at, got, err, g.id)
+				case g.want == refused && err == nil:
+					t.Fatalf("Get #%d at +%v = %+v; want a fail-closed error, never a stale credential", i+1, g.at, got)
+				case g.want == refused:
+					if got != (cred{}) {
+						t.Errorf("Get #%d returned %+v alongside its error; want only the zero value", i+1, got)
+					}
+					kittest.AssertNoSecret(t, "the Refresher error", err.Error(), leakSecret)
+				}
+			}
+			if tc.wantCalls != 0 && calls != tc.wantCalls {
+				t.Errorf("resolved %d times, want %d", calls, tc.wantCalls)
+			}
+		})
 	}
 }
 
 func TestRefresher_ErrorWrapsTheResolverError(t *testing.T) {
 	sentinel := errors.New("network down")
-	r := credrefresh.New(func(context.Context) (cred, time.Time, error) {
-		return cred{}, time.Time{}, sentinel
-	})
+	r := credrefresh.New(func(context.Context) (cred, time.Time, error) { return cred{}, time.Time{}, sentinel })
 
 	_, err := r.Get(context.Background())
-	if err == nil {
-		t.Fatal("expected an error from a resolver that always fails")
-	}
-	if !errors.Is(err, sentinel) {
-		t.Errorf("Get error %v does not wrap the resolver's sentinel error — errors.Is must reach it", err)
-	}
-	if !strings.Contains(err.Error(), sentinel.Error()) {
-		t.Errorf("Get error %q does not carry the resolver's message text, which a caller's classifier still matches on", err.Error())
+
+	if !errors.Is(err, sentinel) || !strings.Contains(err.Error(), sentinel.Error()) {
+		t.Errorf("Get error = %v; want it to wrap %v and carry its text, which a caller's classifier matches on", err, sentinel)
 	}
 }
 
@@ -293,20 +137,20 @@ func TestRefresher_SerialisesConcurrentGetCalls(t *testing.T) {
 		return cred{id: "A"}, clock.Add(time.Hour), nil
 	})
 	r.Now = func() time.Time { return clock }
-
 	var wg sync.WaitGroup
+
 	for range 50 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if _, err := r.Get(context.Background()); err != nil {
-				t.Errorf("unexpected error from a concurrent Get: %v", err)
+				t.Errorf("concurrent Get: %v", err)
 			}
 		}()
 	}
 	wg.Wait()
 
 	if got := atomic.LoadInt64(&calls); got != 1 {
-		t.Errorf("resolved %d times across 50 concurrent Get calls, want 1 — Get must serialise access to the held credential", got)
+		t.Errorf("resolved %d times across 50 concurrent Get calls, want 1", got)
 	}
 }
