@@ -9,11 +9,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/mitstack-eu/operator-kit/v2/delivery"
 )
+
+const token = "sekrit-token-xyz-999"
+
+var sha = strings.Repeat("f", 40)
 
 func readGolden(t *testing.T) []byte {
 	t.Helper()
@@ -24,243 +29,149 @@ func readGolden(t *testing.T) []byte {
 	return b
 }
 
-func compactJSON(t *testing.T, s string) []byte {
+func goldenRecord(t *testing.T) delivery.Record {
 	t.Helper()
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, []byte(s)); err != nil {
-		t.Fatalf("compact: %v", err)
+	var rec delivery.Record
+	if err := json.Unmarshal(readGolden(t), &rec); err != nil {
+		t.Fatalf("unmarshal golden fixture into Record: %v", err)
 	}
-	return buf.Bytes()
+	return rec
 }
 
 func TestRecord_GoldenFileRoundTripsByteForByte(t *testing.T) {
 	golden := readGolden(t)
 
-	var rec delivery.Record
-	if err := json.Unmarshal(golden, &rec); err != nil {
-		t.Fatalf("unmarshal golden fixture into Record: %v", err)
-	}
+	out, err := json.Marshal(goldenRecord(t))
 
-	out, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatalf("marshal Record: %v", err)
 	}
-
-	want := bytes.TrimRight(golden, "\n")
-	if !bytes.Equal(out, want) {
+	if want := bytes.TrimRight(golden, "\n"); !bytes.Equal(out, want) {
 		t.Errorf("round trip = %s\nwant        = %s", out, want)
 	}
 }
 
 func TestRecord_GoldenFieldsDecodeAsExpected(t *testing.T) {
+	healthy := "healthy"
+	want := delivery.Record{
+		AppID:       "app_delivery_1",
+		SHA:         sha,
+		Repo:        "acme/delivery-app",
+		Verdict:     json.RawMessage(`{"repo":"acme/delivery-app","sha":"` + sha + `","gates":"pass"}`),
+		DeployState: &healthy,
+		BuildResult: &delivery.BuildResult{Conclusion: delivery.ConclusionSuccess, RunURL: "https://github.com/acme/delivery-app-ci/actions/runs/1"},
+		Phase:       delivery.PhaseHealthy,
+	}
+
+	got := goldenRecord(t)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("golden record = %+v (deployState %v, buildResult %+v)\nwant %+v", got, *got.DeployState, *got.BuildResult, want)
+	}
+}
+
+type seenRequest struct{ path, auth, accept string }
+
+func TestClient_Get(t *testing.T) {
 	golden := readGolden(t)
-	var rec delivery.Record
-	if err := json.Unmarshal(golden, &rec); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	cases := []struct {
+		name       string
+		baseSuffix string
+		nilHTTP    bool
+		status     int
+		body       []byte
+		check      func(t *testing.T, rec *delivery.Record, err error, req seenRequest)
+	}{
+		{"it requests the record's path with the bearer token and decodes the golden record", "", false, http.StatusOK, golden,
+			func(t *testing.T, rec *delivery.Record, err error, req seenRequest) {
+				if err != nil {
+					t.Fatalf("Get: %v", err)
+				}
+				want := seenRequest{path: "/delivery/app_delivery_1/" + sha, auth: "Bearer " + token, accept: "application/json"}
+				if req != want {
+					t.Errorf("request = %+v, want %+v", req, want)
+				}
+				if wantRec := goldenRecord(t); !reflect.DeepEqual(*rec, wantRec) {
+					t.Errorf("record = %+v, want %+v", *rec, wantRec)
+				}
+			}},
+		{"a base with a trailing slash still requests exactly one slash", "/", false, http.StatusOK, golden,
+			func(t *testing.T, _ *delivery.Record, err error, req seenRequest) {
+				if want := "/delivery/app_delivery_1/" + sha; err != nil || req.path != want {
+					t.Errorf("Get = %v, request path %q; want %q", err, req.path, want)
+				}
+			}},
+		{"a nil http.Client falls back to the default client", "", true, http.StatusOK, golden,
+			func(t *testing.T, rec *delivery.Record, err error, _ seenRequest) {
+				if err != nil || rec.Phase != delivery.PhaseHealthy {
+					t.Errorf("Get = %+v, %v; want phase %q", rec, err, delivery.PhaseHealthy)
+				}
+			}},
+		{"a 404 wraps ErrNotFound", "", false, http.StatusNotFound, []byte(`{"error":"no registered build for app_delivery_1"}`),
+			func(t *testing.T, _ *delivery.Record, err error, _ seenRequest) {
+				if !errors.Is(err, delivery.ErrNotFound) {
+					t.Errorf("err = %v, want errors.Is(err, delivery.ErrNotFound)", err)
+				}
+			}},
+		{"any other error status is a StatusError carrying the body", "", false, http.StatusInternalServerError, []byte("internal error, please retry later"),
+			func(t *testing.T, _ *delivery.Record, err error, _ seenRequest) {
+				var statusErr *delivery.StatusError
+				if !errors.As(err, &statusErr) {
+					t.Fatalf("err = %v (%T), want a *delivery.StatusError", err, err)
+				}
+				want := delivery.StatusError{StatusCode: http.StatusInternalServerError, Body: "internal error, please retry later"}
+				if *statusErr != want {
+					t.Errorf("StatusError = %+v, want %+v", *statusErr, want)
+				}
+			}},
+		{"a 200 whose body is not JSON is a decode error", "", false, http.StatusOK, []byte("not json"),
+			func(t *testing.T, rec *delivery.Record, err error, _ seenRequest) {
+				if err == nil {
+					t.Errorf("Get = %+v with no error, want a decode error", rec)
+				}
+			}},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var req seenRequest
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				req = seenRequest{path: r.URL.Path, auth: r.Header.Get("Authorization"), accept: r.Header.Get("Accept")}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write(tc.body)
+			}))
+			defer srv.Close()
+			httpClient := srv.Client()
+			if tc.nilHTTP {
+				httpClient = nil
+			}
 
-	if rec.AppID != "app_delivery_1" {
-		t.Errorf("AppID = %q, want app_delivery_1", rec.AppID)
-	}
-	if rec.SHA != strings.Repeat("f", 40) {
-		t.Errorf("SHA = %q, want 40 f's", rec.SHA)
-	}
-	if rec.Repo != "acme/delivery-app" {
-		t.Errorf("Repo = %q", rec.Repo)
-	}
-	if rec.DeployState == nil || *rec.DeployState != "healthy" {
-		t.Errorf("DeployState = %v, want a non-nil pointer to \"healthy\"", rec.DeployState)
-	}
-	if rec.BuildResult == nil {
-		t.Fatal("BuildResult = nil, want a populated *BuildResult")
-	}
-	if rec.BuildResult.Conclusion != delivery.ConclusionSuccess {
-		t.Errorf("BuildResult.Conclusion = %q, want %q", rec.BuildResult.Conclusion, delivery.ConclusionSuccess)
-	}
-	if rec.BuildResult.RunURL != "https://github.com/acme/delivery-app-ci/actions/runs/1" {
-		t.Errorf("BuildResult.RunURL = %q", rec.BuildResult.RunURL)
-	}
-	if rec.Phase != delivery.PhaseHealthy {
-		t.Errorf("Phase = %q, want %q", rec.Phase, delivery.PhaseHealthy)
-	}
+			rec, err := delivery.NewClient(srv.URL+tc.baseSuffix, token, httpClient).Get(context.Background(), "app_delivery_1", sha)
 
-	wantVerdict := compactJSON(t, `{"repo":"acme/delivery-app","sha":"ffffffffffffffffffffffffffffffffffffffff","gates":"pass"}`)
-	if !bytes.Equal([]byte(rec.Verdict), wantVerdict) {
-		t.Errorf("Verdict = %s, want %s", rec.Verdict, wantVerdict)
-	}
-}
-
-func TestClient_Get_RequestsTheRightPathAndHeaders(t *testing.T) {
-	golden := readGolden(t)
-	const token = "sekrit-token-xyz-999"
-
-	var gotPath, gotAuth, gotAccept string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotAuth = r.Header.Get("Authorization")
-		gotAccept = r.Header.Get("Accept")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(golden)
-	}))
-	defer srv.Close()
-
-	c := delivery.NewClient(srv.URL, token, srv.Client())
-	rec, err := c.Get(context.Background(), "app_delivery_1", strings.Repeat("f", 40))
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-
-	if gotPath != "/delivery/app_delivery_1/"+strings.Repeat("f", 40) {
-		t.Errorf("request path = %q", gotPath)
-	}
-	if gotAuth != "Bearer "+token {
-		t.Errorf("Authorization header = %q, want Bearer %s", gotAuth, token)
-	}
-	if gotAccept != "application/json" {
-		t.Errorf("Accept header = %q, want application/json", gotAccept)
-	}
-
-	if rec.Phase != delivery.PhaseHealthy {
-		t.Errorf("Phase = %q, want %q", rec.Phase, delivery.PhaseHealthy)
-	}
-	if rec.DeployState == nil || *rec.DeployState != "healthy" {
-		t.Errorf("DeployState = %v, want \"healthy\"", rec.DeployState)
-	}
-	if rec.BuildResult == nil || rec.BuildResult.Conclusion != delivery.ConclusionSuccess {
-		t.Errorf("BuildResult = %+v, want Conclusion %q", rec.BuildResult, delivery.ConclusionSuccess)
-	}
-	wantVerdict := compactJSON(t, `{"repo":"acme/delivery-app","sha":"ffffffffffffffffffffffffffffffffffffffff","gates":"pass"}`)
-	if !bytes.Equal([]byte(rec.Verdict), wantVerdict) {
-		t.Errorf("Verdict = %s, want %s", rec.Verdict, wantVerdict)
-	}
-}
-
-func TestClient_Get_ABaseWithATrailingSlashStillRequestsExactlyOneSlash(t *testing.T) {
-	golden := readGolden(t)
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(golden)
-	}))
-	defer srv.Close()
-
-	c := delivery.NewClient(srv.URL+"/", "tok", srv.Client())
-	if _, err := c.Get(context.Background(), "app_delivery_1", strings.Repeat("f", 40)); err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-
-	want := "/delivery/app_delivery_1/" + strings.Repeat("f", 40)
-	if gotPath != want {
-		t.Errorf("request path = %q, want %q (no double slash from a trailing-slash Base)", gotPath, want)
-	}
-}
-
-func TestClient_Get_ANilHTTPClientFallsBackToDefaultClient(t *testing.T) {
-	golden := readGolden(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(golden)
-	}))
-	defer srv.Close()
-
-	c := delivery.NewClient(srv.URL, "tok", nil)
-	rec, err := c.Get(context.Background(), "app_delivery_1", strings.Repeat("f", 40))
-	if err != nil {
-		t.Fatalf("Get with a nil http.Client (must fall back to http.DefaultClient): %v", err)
-	}
-	if rec.Phase != delivery.PhaseHealthy {
-		t.Errorf("Phase = %q, want %q", rec.Phase, delivery.PhaseHealthy)
-	}
-}
-
-func TestClient_Get_404ReturnsAnErrorSatisfyingErrNotFound(t *testing.T) {
-	const token = "sekrit-token-xyz-404"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":"no registered build for app_never_registered"}`))
-	}))
-	defer srv.Close()
-
-	c := delivery.NewClient(srv.URL, token, srv.Client())
-	_, err := c.Get(context.Background(), "app_never_registered", strings.Repeat("f", 40))
-	if err == nil {
-		t.Fatal("Get on a 404 returned a nil error")
-	}
-	if !errors.Is(err, delivery.ErrNotFound) {
-		t.Errorf("err = %v, want errors.Is(err, delivery.ErrNotFound)", err)
-	}
-	if strings.Contains(err.Error(), token) {
-		t.Errorf("err.Error() leaked the bearer token: %q", err.Error())
-	}
-}
-
-func TestClient_Get_ANon404ErrorStatusReturnsAStatusErrorCarryingTheBody(t *testing.T) {
-	const token = "sekrit-token-xyz-500"
-	const body = "internal error, please retry later"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(body))
-	}))
-	defer srv.Close()
-
-	c := delivery.NewClient(srv.URL, token, srv.Client())
-	_, err := c.Get(context.Background(), "app_delivery_1", strings.Repeat("f", 40))
-	if err == nil {
-		t.Fatal("Get on a 500 returned a nil error")
-	}
-
-	var statusErr *delivery.StatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("err = %v (%T), want errors.As to find a *delivery.StatusError", err, err)
-	}
-	if statusErr.StatusCode != http.StatusInternalServerError {
-		t.Errorf("StatusError.StatusCode = %d, want %d", statusErr.StatusCode, http.StatusInternalServerError)
-	}
-	if statusErr.Body != body {
-		t.Errorf("StatusError.Body = %q, want %q", statusErr.Body, body)
-	}
-	if strings.Contains(err.Error(), token) {
-		t.Errorf("err.Error() leaked the bearer token: %q", err.Error())
-	}
-}
-
-func TestClient_Get_A200WithANonJSONBodyIsAnError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("not json"))
-	}))
-	defer srv.Close()
-
-	c := delivery.NewClient(srv.URL, "tok", srv.Client())
-	_, err := c.Get(context.Background(), "app_delivery_1", strings.Repeat("f", 40))
-	if err == nil {
-		t.Fatal("Get with a 200 non-JSON body returned a nil error, want a decode error")
+			tc.check(t, rec, err, req)
+			if err != nil && strings.Contains(err.Error(), token) {
+				t.Errorf("err.Error() leaked the bearer token: %q", err)
+			}
+		})
 	}
 }
 
 func TestBuildResult_FieldsAndConstants(t *testing.T) {
 	br := delivery.BuildResult{Conclusion: delivery.ConclusionFailure, RunURL: "https://example.test/run/9"}
-	out, err := json.Marshal(br)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	want := `{"conclusion":"failure","runUrl":"https://example.test/run/9"}`
-	if string(out) != want {
-		t.Errorf("BuildResult json = %s, want %s", out, want)
-	}
-
 	phases := []string{
 		delivery.PhaseBuilding, delivery.PhaseBuildFailed, delivery.PhaseGatesFailed,
 		delivery.PhaseDeploying, delivery.PhaseHealthy, delivery.PhaseRolledBack,
 	}
+
+	out, err := json.Marshal(br)
+
+	if want := `{"conclusion":"failure","runUrl":"https://example.test/run/9"}`; err != nil || string(out) != want {
+		t.Errorf("json.Marshal(%+v) = %s, %v; want %s", br, out, err, want)
+	}
 	seen := map[string]bool{}
 	for _, p := range phases {
-		if p == "" {
-			t.Errorf("a phase constant is empty")
-		}
-		if seen[p] {
-			t.Errorf("phase constant %q is not unique", p)
+		if p == "" || seen[p] {
+			t.Errorf("phase constant %q is empty or not unique among %q", p, phases)
 		}
 		seen[p] = true
 	}

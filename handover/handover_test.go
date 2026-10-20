@@ -17,7 +17,6 @@ type fakeAPI struct {
 	snapshotID string
 	createErr  error
 	states     []string
-	stateErr   error
 
 	gotVolumeID string
 	gotTags     map[string]string
@@ -38,9 +37,6 @@ func (f *fakeAPI) CreateSnapshot(_ context.Context, volumeID, desc string, tags 
 
 func (f *fakeAPI) SnapshotState(context.Context, string) (string, error) {
 	f.stateCalls++
-	if f.stateErr != nil {
-		return "", f.stateErr
-	}
 	if len(f.states) == 0 {
 		return "pending", nil
 	}
@@ -57,160 +53,104 @@ type fakeClock struct{ now time.Time }
 func (c *fakeClock) Sleep(d time.Duration) { c.now = c.now.Add(d) }
 func (c *fakeClock) Now() time.Time        { return c.now }
 
-func testOpts() handover.Options {
-	return handover.Options{
-		Timeout: time.Minute,
-		Poll:    time.Second,
-		Clock:   &fakeClock{now: time.Unix(1_700_000_000, 0)},
-	}
+func api(states ...string) *fakeAPI {
+	return &fakeAPI{volumeID: "vol-123", snapshotID: "snap-abc", states: states}
 }
 
-func TestSnapshot_ReturnsIDOnceCompleted(t *testing.T) {
-	api := &fakeAPI{volumeID: "vol-123", snapshotID: "snap-abc", states: []string{"pending", "pending", "completed"}}
-
-	got, err := handover.Snapshot(context.Background(), api, "app_1", testOpts())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestSnapshot(t *testing.T) {
+	cases := []struct {
+		name      string
+		api       *fakeAPI
+		appID     string
+		zeroOpts  bool
+		wantID    string
+		wantErrIs error
+		wantInErr string
+		check     func(t *testing.T, f *fakeAPI)
+	}{
+		{"it polls the app's data volume's snapshot until completed and returns its id", api("pending", "pending", "completed"), "app_1", false, "snap-abc", nil, "",
+			func(t *testing.T, f *fakeAPI) {
+				if f.gotVolumeID != "vol-123" || f.stateCalls < 3 {
+					t.Errorf("snapshotted %q and polled %d times; want vol-123 polled until completed", f.gotVolumeID, f.stateCalls)
+				}
+			}},
+		{"the snapshot is tagged as a retained handover of its app", api("completed"), "app_1", false, "snap-abc", nil, "",
+			func(t *testing.T, f *fakeAPI) {
+				if !handover.IsHandover(f.gotTags) || f.gotTags[handover.TagAppID] != "app_1" {
+					t.Errorf("tags = %v; want a handover tag carrying app_1, or a sweep reclaims it", f.gotTags)
+				}
+			}},
+		{"the description is non-empty ASCII, since EC2 rejects anything else", api("completed"), "app_1", false, "snap-abc", nil, "",
+			func(t *testing.T, f *fakeAPI) {
+				if f.gotDesc == "" || strings.IndexFunc(f.gotDesc, func(r rune) bool { return r > 127 }) >= 0 {
+					t.Errorf("description = %q, want non-empty ASCII", f.gotDesc)
+				}
+			}},
+		{"zero Options select working defaults", api("completed"), "app_1", true, "snap-abc", nil, "", nil},
+		{"a snapshot pending past the timeout tells the caller not to destroy the volume", api("pending"), "app_1", false, "", nil, "must NOT be destroyed", nil},
+		{"a snapshot in state error captured nothing", api("error"), "app_1", false, "", nil, "NOT captured", nil},
+		{"an empty snapshot id is refused", &fakeAPI{volumeID: "vol-123", states: []string{"completed"}}, "app_1", false, "", nil, "returned no id", nil},
+		{"a nil API is loud, never read as nothing to hand over", nil, "app_1", false, "", nil, "no EC2 API configured", nil},
+		{"an empty appID is refused before anything is created", api("completed"), "", false, "", nil, "appID is required",
+			func(t *testing.T, f *fakeAPI) {
+				if f.createCalls != 0 {
+					t.Errorf("CreateSnapshot called %d times; an untagged snapshot cannot be found again", f.createCalls)
+				}
+			}},
+		{"no data volume is the ErrNoVolume sentinel, so teardown can continue", &fakeAPI{}, "app_1", false, "", handover.ErrNoVolume, "", nil},
+		{"a lookup failure surfaces", &fakeAPI{findErr: errors.New("AccessDenied")}, "app_1", false, "", nil, "AccessDenied", nil},
+		{"a create failure surfaces", &fakeAPI{volumeID: "vol-123", createErr: errors.New("SnapshotLimitExceeded")}, "app_1", false, "", nil, "SnapshotLimitExceeded", nil},
 	}
-	if got != "snap-abc" {
-		t.Fatalf("snapshot id = %q, want snap-abc", got)
-	}
-	if api.gotVolumeID != "vol-123" {
-		t.Fatalf("snapshotted %q, want the app's data volume", api.gotVolumeID)
-	}
-	if api.stateCalls < 3 {
-		t.Fatalf("must poll until completed, polled %d times", api.stateCalls)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := handover.Options{Timeout: time.Minute, Poll: time.Second, Clock: &fakeClock{now: time.Unix(1_700_000_000, 0)}}
+			if tc.zeroOpts {
+				opts = handover.Options{}
+			}
+			var ec2 handover.API
+			if tc.api != nil {
+				ec2 = tc.api
+			}
 
-// EC2 returns an id before the data is captured, so an incomplete snapshot must not read as success.
-func TestSnapshot_PendingForeverTimesOutRatherThanReportingSuccess(t *testing.T) {
-	api := &fakeAPI{volumeID: "vol-123", snapshotID: "snap-abc", states: []string{"pending"}}
+			got, err := handover.Snapshot(context.Background(), ec2, tc.appID, opts)
 
-	_, err := handover.Snapshot(context.Background(), api, "app_1", testOpts())
-	if err == nil {
-		t.Fatal("an incomplete snapshot must be an error — the caller destroys the volume next")
-	}
-	if !strings.Contains(err.Error(), "must NOT be destroyed") {
-		t.Fatalf("the error must tell the caller not to proceed, got: %v", err)
-	}
-}
-
-func TestSnapshot_ErrorStateIsAFailure(t *testing.T) {
-	api := &fakeAPI{volumeID: "vol-123", snapshotID: "snap-abc", states: []string{"error"}}
-
-	if _, err := handover.Snapshot(context.Background(), api, "app_1", testOpts()); err == nil {
-		t.Fatal("a snapshot in state 'error' captured nothing and must not be reported as a handover")
-	}
-}
-
-func TestSnapshot_EmptyIDIsRefused(t *testing.T) {
-	api := &fakeAPI{volumeID: "vol-123", snapshotID: "", states: []string{"completed"}}
-
-	if _, err := handover.Snapshot(context.Background(), api, "app_1", testOpts()); err == nil {
-		t.Fatal("an empty snapshot id must be refused, not returned as a successful handover")
-	}
-}
-
-func TestSnapshot_NilAPIIsLoud(t *testing.T) {
-	_, err := handover.Snapshot(context.Background(), nil, "app_1", testOpts())
-	if err == nil {
-		t.Fatal("a nil API must error — silence here reads as 'nothing to hand over' and the volume is destroyed")
-	}
-}
-
-func TestSnapshot_EmptyAppIDIsRefusedBeforeCreating(t *testing.T) {
-	api := &fakeAPI{volumeID: "vol-123", snapshotID: "snap-abc", states: []string{"completed"}}
-
-	if _, err := handover.Snapshot(context.Background(), api, "", testOpts()); err == nil {
-		t.Fatal("an empty appID must be refused")
-	}
-	if api.createCalls != 0 {
-		t.Fatal("nothing may be created before the appID is validated — an untagged snapshot cannot be found again")
-	}
-}
-
-func TestSnapshot_NoVolumeIsADistinctSentinel(t *testing.T) {
-	api := &fakeAPI{volumeID: ""}
-
-	_, err := handover.Snapshot(context.Background(), api, "app_1", testOpts())
-	if !errors.Is(err, handover.ErrNoVolume) {
-		t.Fatalf("want ErrNoVolume so callers can continue the teardown, got %v", err)
-	}
-}
-
-func TestSnapshot_FindErrorPropagates(t *testing.T) {
-	api := &fakeAPI{findErr: errors.New("AccessDenied")}
-
-	_, err := handover.Snapshot(context.Background(), api, "app_1", testOpts())
-	if err == nil || !strings.Contains(err.Error(), "AccessDenied") {
-		t.Fatalf("a lookup failure must surface, got %v", err)
-	}
-}
-
-func TestSnapshot_CreateErrorPropagates(t *testing.T) {
-	api := &fakeAPI{volumeID: "vol-123", createErr: errors.New("SnapshotLimitExceeded")}
-
-	_, err := handover.Snapshot(context.Background(), api, "app_1", testOpts())
-	if err == nil || !strings.Contains(err.Error(), "SnapshotLimitExceeded") {
-		t.Fatalf("a create failure must surface, got %v", err)
-	}
-}
-
-func TestSnapshot_IsTaggedAsARetainedHandover(t *testing.T) {
-	api := &fakeAPI{volumeID: "vol-123", snapshotID: "snap-abc", states: []string{"completed"}}
-
-	if _, err := handover.Snapshot(context.Background(), api, "app_1", testOpts()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !handover.IsHandover(api.gotTags) {
-		t.Fatalf("the snapshot must be tagged as a handover or a sweep will reclaim it: %v", api.gotTags)
-	}
-	if api.gotTags[handover.TagAppID] != "app_1" {
-		t.Fatalf("the snapshot must carry its app id, got %v", api.gotTags)
-	}
-}
-
-func TestSnapshot_DescriptionIsASCII(t *testing.T) {
-	api := &fakeAPI{volumeID: "vol-123", snapshotID: "snap-abc", states: []string{"completed"}}
-
-	if _, err := handover.Snapshot(context.Background(), api, "app_1", testOpts()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	for _, r := range api.gotDesc {
-		if r > 127 {
-			t.Fatalf("description must be pure ASCII (EC2 rejects otherwise), got %q", api.gotDesc)
-		}
-	}
-	if api.gotDesc == "" {
-		t.Fatal("a description is how a human recognises the snapshot months later")
+			if tc.wantID != "" && (err != nil || got != tc.wantID) {
+				t.Fatalf("Snapshot = %q, %v; want %q", got, err, tc.wantID)
+			}
+			if tc.wantID == "" && err == nil {
+				t.Fatalf("Snapshot = %q with no error; want a failure, since the caller destroys the volume next", got)
+			}
+			if tc.wantErrIs != nil && !errors.Is(err, tc.wantErrIs) {
+				t.Errorf("Snapshot error = %v, want %v", err, tc.wantErrIs)
+			}
+			if tc.wantInErr != "" && !strings.Contains(err.Error(), tc.wantInErr) {
+				t.Errorf("Snapshot error = %v, want it to say %q", err, tc.wantInErr)
+			}
+			if tc.check != nil {
+				tc.check(t, tc.api)
+			}
+		})
 	}
 }
 
 func TestIsHandover(t *testing.T) {
-	if handover.IsHandover(nil) {
-		t.Fatal("nil tags must not read as a handover — an untagged snapshot is an orphan")
-	}
-	if handover.IsHandover(map[string]string{"Name": "something"}) {
-		t.Fatal("an unrelated tag set must not read as a handover")
-	}
-	if !handover.IsHandover(handover.Tag("app_1")) {
-		t.Fatal("Tag() and IsHandover must agree — a sweeper matching a tag nobody writes reclaims every handover")
-	}
-}
-
-func TestSnapshot_ZeroOptionsAreUsable(t *testing.T) {
-	api := &fakeAPI{volumeID: "vol-123", snapshotID: "snap-abc", states: []string{"completed"}}
-
-	got, err := handover.Snapshot(context.Background(), api, "app_1", handover.Options{})
-	if err != nil || got != "snap-abc" {
-		t.Fatalf("zero Options must select working defaults, got (%q, %v)", got, err)
+	for _, tc := range []struct {
+		name string
+		tags map[string]string
+		want bool
+	}{
+		{"nil tags are an orphan", nil, false},
+		{"an unrelated tag set is not a handover", map[string]string{"Name": "something"}, false},
+		{"Tag and IsHandover agree, or a sweep reclaims every handover", handover.Tag("app_1"), true},
+	} {
+		if got := handover.IsHandover(tc.tags); got != tc.want {
+			t.Errorf("%s: IsHandover(%v) = %v, want %v", tc.name, tc.tags, got, tc.want)
+		}
 	}
 }
 
 func TestOutputAndParamKeysMatch(t *testing.T) {
 	if handover.OutputKey != handover.ParamKey {
-		t.Fatalf("OutputKey %q and ParamKey %q must match, or the handle never arrives",
-			handover.OutputKey, handover.ParamKey)
+		t.Fatalf("OutputKey %q and ParamKey %q must match, or the handle never arrives", handover.OutputKey, handover.ParamKey)
 	}
 }

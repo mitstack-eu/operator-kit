@@ -42,11 +42,8 @@ func TestIdentity_RejectsAnEmptyAppID(t *testing.T) {
 func TestIdentity_FilterMatchesOnValueNotTagKey(t *testing.T) {
 	f := adopt.Identity{AppID: "app-42"}.Filter()
 
-	if !strings.Contains(f, "tag:"+adopt.TagAppID) || !strings.Contains(f, "app-42") {
-		t.Errorf("Filter() = %q, want a tag:%s=app-42 value filter", f, adopt.TagAppID)
-	}
-	if strings.Contains(f, "tag-key") {
-		t.Errorf("Filter() = %q, must never be a tag-KEY filter — that matches every app", f)
+	if want := "Name=tag:" + adopt.TagAppID + ",Values=app-42"; f != want {
+		t.Errorf("Filter() = %q, want the value filter %q, never a tag-key filter that matches every app", f, want)
 	}
 }
 

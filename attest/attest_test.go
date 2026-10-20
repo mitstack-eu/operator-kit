@@ -32,147 +32,120 @@ func resolverFor(s *kittest.Signer) attest.KeyResolver {
 	}
 }
 
-func TestSign_ThenVerify(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-platform", 9)
-
+// signed returns an attestation of claims() signed by s, failing the test if Sign refuses it.
+func signed(t *testing.T, s *kittest.Signer, mutate func(*attest.Attestation)) attest.Attestation {
+	t.Helper()
 	a, err := attest.Sign(s.Private, s.Kid, claims(), "pass")
 	if err != nil {
-		t.Fatalf("sign: %v", err)
+		t.Fatalf("Sign: %v", err)
 	}
-	if err := attest.Verify(a, resolverFor(s), "sha256:manifest"); err != nil {
-		t.Fatalf("verify: %v", err)
+	if mutate != nil {
+		mutate(&a)
 	}
+	return a
 }
 
-func TestSign_RefusesAnythingButAFullPass(t *testing.T) {
+func TestSign_Refuses(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-platform", 9)
-
-	for _, verdict := range []string{"fail", "partial", "", "PASS", "pass-with-warnings"} {
-		if _, err := attest.Sign(s.Private, s.Kid, claims(), verdict); !errors.Is(err, attest.ErrPartialPass) {
-			t.Errorf("verdict %q: err = %v, want ErrPartialPass — there is no signed-with-exceptions", verdict, err)
-		}
+	cases := []struct {
+		name    string
+		verdict string
+		mutate  func(*attest.Claims)
+		want    error
+	}{
+		{"a fail verdict, since there is no signed-with-exceptions", "fail", nil, attest.ErrPartialPass},
+		{"a partial verdict", "partial", nil, attest.ErrPartialPass},
+		{"an empty verdict", "", nil, attest.ErrPartialPass},
+		{"an upper-case PASS", "PASS", nil, attest.ErrPartialPass},
+		{"a pass with warnings", "pass-with-warnings", nil, attest.ErrPartialPass},
+		{"claims with no blockId", "pass", func(c *attest.Claims) { c.BlockID = "" }, attest.ErrIncomplete},
+		{"claims with no version", "pass", func(c *attest.Claims) { c.Version = "" }, attest.ErrIncomplete},
+		{"claims with no manifestDigest", "pass", func(c *attest.Claims) { c.ManifestDigest = "" }, attest.ErrIncomplete},
+		{"claims with no suiteVersion", "pass", func(c *attest.Claims) { c.SuiteVersion = "" }, attest.ErrIncomplete},
+		{"claims with no resultsDigest", "pass", func(c *attest.Claims) { c.ResultsDigest = "" }, attest.ErrIncomplete},
 	}
-}
-
-func TestSign_RefusesIncompleteClaims(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-platform", 9)
-
-	for name, mutate := range map[string]func(*attest.Claims){
-		"no blockId":        func(c *attest.Claims) { c.BlockID = "" },
-		"no version":        func(c *attest.Claims) { c.Version = "" },
-		"no manifestDigest": func(c *attest.Claims) { c.ManifestDigest = "" },
-		"no suiteVersion":   func(c *attest.Claims) { c.SuiteVersion = "" },
-		"no resultsDigest":  func(c *attest.Claims) { c.ResultsDigest = "" },
-	} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			c := claims()
-			mutate(&c)
-			if _, err := attest.Sign(s.Private, s.Kid, c, "pass"); !errors.Is(err, attest.ErrIncomplete) {
-				t.Errorf("err = %v, want ErrIncomplete — an attestation that omits what it attests to is decorative", err)
+			if tc.mutate != nil {
+				tc.mutate(&c)
+			}
+
+			_, err := attest.Sign(s.Private, s.Kid, c, tc.verdict)
+
+			if !errors.Is(err, tc.want) {
+				t.Errorf("Sign(verdict %q, %+v) error = %v, want %v", tc.verdict, c, err, tc.want)
 			}
 		})
 	}
 }
 
-func TestVerify_UnknownKidFailsClosed(t *testing.T) {
+func TestVerify(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-platform", 9)
-	other := kittest.NewSigner(t, "kid-other", 44)
-
-	a, _ := attest.Sign(s.Private, s.Kid, claims(), "pass")
-	if err := attest.Verify(a, resolverFor(other), "sha256:manifest"); !errors.Is(err, attest.ErrUnknownKid) {
-		t.Errorf("err = %v, want ErrUnknownKid — a key we cannot resolve must never read as fine", err)
+	sameKidOtherKey := kittest.NewSigner(t, "kid-platform", 77)
+	forged, err := attest.Sign(sameKidOtherKey.Private, "kid-platform", claims(), "pass")
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
 	}
-}
+	tamper := func(f func(*attest.Attestation)) attest.Attestation { return signed(t, s, f) }
+	cases := []struct {
+		name    string
+		a       attest.Attestation
+		resolve attest.KeyResolver
+		digest  string
+		want    error
+	}{
+		{"a signed full pass verifies against its manifest", signed(t, s, nil), resolverFor(s), "sha256:manifest", nil},
+		{"a key that cannot be resolved fails closed", signed(t, s, nil), resolverFor(kittest.NewSigner(t, "kid-other", 44)), "sha256:manifest", attest.ErrUnknownKid},
+		{"an edited version breaks the signature", tamper(func(x *attest.Attestation) { x.Claims.Version = "9.9.9" }), resolverFor(s), "sha256:manifest", attest.ErrBadSignature},
+		{"an edited suiteVersion breaks the signature", tamper(func(x *attest.Attestation) { x.Claims.SuiteVersion = "0.0.1" }), resolverFor(s), "sha256:manifest", attest.ErrBadSignature},
+		{"an edited kitVersion breaks the signature", tamper(func(x *attest.Attestation) { x.Claims.KitVersion = "v0.0.1" }), resolverFor(s), "sha256:manifest", attest.ErrBadSignature},
+		{"an edited resultsDigest breaks the signature", tamper(func(x *attest.Attestation) { x.Claims.ResultsDigest = "sha256:other" }), resolverFor(s), "sha256:manifest", attest.ErrBadSignature},
+		{"an edited imageDigest breaks the signature", tamper(func(x *attest.Attestation) { x.Claims.ImageDigest = "sha256:swapped" }), resolverFor(s), "sha256:manifest", attest.ErrBadSignature},
+		{"an edited issuedAt breaks the signature", tamper(func(x *attest.Attestation) { x.Claims.IssuedAt = time.Now() }), resolverFor(s), "sha256:manifest", attest.ErrBadSignature},
+		{"a signature by another key under a known kid fails", forged, resolverFor(s), "sha256:manifest", attest.ErrBadSignature},
+		{"a changed manifest makes it invalid", signed(t, s, nil), resolverFor(s), "sha256:DIFFERENT", attest.ErrManifestChanged},
+		{"a forgery reports its signature before the digest the presenter controls", forged, resolverFor(s), "sha256:ALSO-DIFFERENT", attest.ErrBadSignature},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := attest.Verify(tc.a, tc.resolve, tc.digest)
 
-func TestVerify_TamperedClaimsFail(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-platform", 9)
-	a, _ := attest.Sign(s.Private, s.Kid, claims(), "pass")
-
-	// Every claim is inside the signed payload, so any edit must break it.
-	for name, mutate := range map[string]func(*attest.Attestation){
-		"version":       func(x *attest.Attestation) { x.Claims.Version = "9.9.9" },
-		"suiteVersion":  func(x *attest.Attestation) { x.Claims.SuiteVersion = "0.0.1" },
-		"kitVersion":    func(x *attest.Attestation) { x.Claims.KitVersion = "v0.0.1" },
-		"resultsDigest": func(x *attest.Attestation) { x.Claims.ResultsDigest = "sha256:other" },
-		"imageDigest":   func(x *attest.Attestation) { x.Claims.ImageDigest = "sha256:swapped" },
-		"issuedAt":      func(x *attest.Attestation) { x.Claims.IssuedAt = time.Now() },
-	} {
-		t.Run(name, func(t *testing.T) {
-			tampered := a
-			mutate(&tampered)
-			if err := attest.Verify(tampered, resolverFor(s), "sha256:manifest"); !errors.Is(err, attest.ErrBadSignature) {
-				t.Errorf("editing %s did not break the signature: %v", name, err)
+			if (tc.want == nil && err != nil) || !errors.Is(err, tc.want) {
+				t.Errorf("Verify(digest %q) = %v, want %v", tc.digest, err, tc.want)
 			}
 		})
 	}
 }
 
-func TestVerify_ForgedSignatureFails(t *testing.T) {
+func TestEvaluate(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-platform", 9)
-	other := kittest.NewSigner(t, "kid-platform", 77) // same kid, different key
-
-	a, _ := attest.Sign(other.Private, "kid-platform", claims(), "pass")
-	if err := attest.Verify(a, resolverFor(s), "sha256:manifest"); !errors.Is(err, attest.ErrBadSignature) {
-		t.Errorf("err = %v, want ErrBadSignature for a token signed by another key under a known kid", err)
+	a := signed(t, s, nil)
+	cases := []struct {
+		name    string
+		a       *attest.Attestation
+		digest  string
+		want    attest.Status
+		wantErr bool
+	}{
+		{"no attestation is unverified, not invalid", nil, "sha256:manifest", attest.Unverified, false},
+		{"a broken attestation is invalid and says why", &a, "sha256:CHANGED", attest.Invalid, true},
+		{"a valid attestation is verified", &a, "sha256:manifest", attest.Verified, false},
 	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := attest.Evaluate(tc.a, resolverFor(s), tc.digest)
 
-func TestVerify_ManifestChangeMakesItInvalid(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-platform", 9)
-	a, _ := attest.Sign(s.Private, s.Kid, claims(), "pass")
-
-	if err := attest.Verify(a, resolverFor(s), "sha256:DIFFERENT"); !errors.Is(err, attest.ErrManifestChanged) {
-		t.Errorf("err = %v, want ErrManifestChanged", err)
-	}
-}
-
-func TestVerify_SignatureIsCheckedBeforeTheDigest(t *testing.T) {
-	// A forged attestation must report a signature failure, not a digest mismatch.
-	s := kittest.NewSigner(t, "kid-platform", 9)
-	other := kittest.NewSigner(t, "kid-platform", 55)
-
-	a, _ := attest.Sign(other.Private, "kid-platform", claims(), "pass")
-	err := attest.Verify(a, resolverFor(s), "sha256:ALSO-DIFFERENT")
-
-	if !errors.Is(err, attest.ErrBadSignature) {
-		t.Errorf("err = %v, want ErrBadSignature — the signature must be judged before anything the presenter controls", err)
-	}
-}
-
-func TestEvaluate_NoAttestationIsUnverifiedNotInvalid(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-platform", 9)
-
-	got, err := attest.Evaluate(nil, resolverFor(s), "sha256:manifest")
-	if err != nil || got != attest.Unverified {
-		t.Errorf("status = %v (err %v), want unverified — nobody verified it is not the same as it failed", got, err)
-	}
-}
-
-func TestEvaluate_BrokenAttestationIsInvalidNotUnverified(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-platform", 9)
-	a, _ := attest.Sign(s.Private, s.Kid, claims(), "pass")
-
-	got, err := attest.Evaluate(&a, resolverFor(s), "sha256:CHANGED")
-	if got != attest.Invalid {
-		t.Errorf("status = %v, want invalid", got)
-	}
-	if err == nil {
-		t.Error("Evaluate must return WHY it is invalid, not just that it is")
-	}
-}
-
-func TestEvaluate_ValidAttestationIsVerified(t *testing.T) {
-	s := kittest.NewSigner(t, "kid-platform", 9)
-	a, _ := attest.Sign(s.Private, s.Kid, claims(), "pass")
-
-	got, err := attest.Evaluate(&a, resolverFor(s), "sha256:manifest")
-	if err != nil || got != attest.Verified {
-		t.Errorf("status = %v (err %v), want verified", got, err)
+			if got != tc.want || (err != nil) != tc.wantErr {
+				t.Errorf("Evaluate(digest %q) = %v, %v; want %v, error %v", tc.digest, got, err, tc.want, tc.wantErr)
+			}
+		})
 	}
 }
 
 func TestStatus_ZeroValueIsNotVerified(t *testing.T) {
 	var s attest.Status
+
 	if s == attest.Verified {
 		t.Error("the zero Status must never be Verified")
 	}

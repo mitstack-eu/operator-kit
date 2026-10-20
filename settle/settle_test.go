@@ -82,7 +82,7 @@ func TestGate_OneFailingProbeIsEnoughToWithholdServing(t *testing.T) {
 	g.Add("dns", ready).Add("http", notYet)
 
 	if got := g.Check(context.Background()); got.State == settle.Serving {
-		t.Error("Serving must require EVERY probe — this is the whole point of MIT-1160")
+		t.Error("Serving must require every probe")
 	}
 }
 

@@ -1,177 +1,77 @@
 package tftpl_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/mitstack-eu/operator-kit/v2/tftpl"
 )
 
-func TestRender_SubstitutesPlaceholders(t *testing.T) {
-	got, err := tftpl.Render("reverse_proxy ${app_name}-app:8080", map[string]string{"app_name": "checkout"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+type vars = map[string]string
+
+func TestRender(t *testing.T) {
+	const domainBlock = "a\n%{ if domain != \"\" }\n${domain} {\n}\n%{ endif }\nb"
+	cases := []struct {
+		name, tmpl string
+		vars       vars
+		want       string
+	}{
+		{"a placeholder is substituted", "reverse_proxy ${app_name}-app:8080", vars{"app_name": "checkout"}, "reverse_proxy checkout-app:8080"},
+		{"an escaped placeholder survives as shell syntax the box resolves at run time", "default_sni $${PUBLIC_IP}", vars{}, "default_sni ${PUBLIC_IP}"},
+		{"escaped and interpolated placeholders render together", "https://$${PUBLIC_IP} {\n  reverse_proxy ${app_name}-app:8080\n}", vars{"app_name": "checkout"},
+			"https://${PUBLIC_IP} {\n  reverse_proxy checkout-app:8080\n}"},
+		{"a substituted value is inserted verbatim, never re-interpolated", "name=${app_name}", vars{"app_name": "${domain}"}, "name=${domain}"},
+		{"everything but a placeholder stays byte identical", "#!/bin/bash\nset -euxo pipefail\n\n# a comment with $ and % and {braces}\nexit 0\n", vars{},
+			"#!/bin/bash\nset -euxo pipefail\n\n# a comment with $ and % and {braces}\nexit 0\n"},
+		{"a conditional keeps its body when the variable is set", domainBlock, vars{"domain": "app.example.com"}, "a\n\napp.example.com {\n}\n\nb"},
+		{"a conditional drops its markers and body, keeping the newlines around them, when the variable is empty", domainBlock, vars{"domain": ""}, "a\n\nb"},
+		{"a variable consumed only by a condition counts as used", "a\n%{ if domain != \"\" }\n${domain}\n%{ endif }\nb", vars{"domain": ""}, "a\n\nb"},
+		{"two conditionals do not merge into one greedy match", "%{ if a != \"\" }A%{ endif }MIDDLE%{ if b != \"\" }B%{ endif }", vars{"a": "", "b": "yes"}, "MIDDLEB"},
 	}
-	if got != "reverse_proxy checkout-app:8080" {
-		t.Fatalf("got %q", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tftpl.Render(tc.tmpl, tc.vars)
+
+			if err != nil || got != tc.want {
+				t.Errorf("Render(%q, %v) = %q, %v; want %q", tc.tmpl, tc.vars, got, err, tc.want)
+			}
+		})
 	}
 }
 
-// `$${X}` is a literal `${X}` that the box resolves at run time.
-func TestRender_EscapedPlaceholderSurvivesAsShellSyntax(t *testing.T) {
-	got, err := tftpl.Render("default_sni $${PUBLIC_IP}", map[string]string{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestRender_Refuses(t *testing.T) {
+	cases := []struct {
+		name, tmpl string
+		vars       vars
+		wantNamed  string
+	}{
+		{"a missing value, rather than rendering an empty string", "reverse_proxy ${app_name}-app:8080", vars{}, "app_name"},
+		{"a supplied variable no placeholder uses", "hello", vars{"region": "eu-central-1"}, "region"},
+		{"a condition on an unknown variable, rather than reading it as false", "%{ if nope != \"\" }x%{ endif }", vars{}, "nope"},
+		{"a bare if directive", "%{ if x }a%{ endif }", vars{}, ""},
+		{"a for directive", "%{ for x in y }a%{ endfor }", vars{"domain": "x"}, ""},
+		{"an equality condition", "%{ if domain == \"prod\" }a%{ endif }", vars{"domain": "x"}, ""},
+		{"a whitespace-stripping directive", "%{~ if domain != \"\" ~}a%{ endif }", vars{"domain": "x"}, ""},
 	}
-	if got != "default_sni ${PUBLIC_IP}" {
-		t.Fatalf("got %q, want the shell expansion preserved verbatim", got)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tftpl.Render(tc.tmpl, tc.vars)
 
-func TestRender_EscapedAndInterpolatedTogether(t *testing.T) {
-	got, err := tftpl.Render(
-		"https://$${PUBLIC_IP} {\n  reverse_proxy ${app_name}-app:8080\n}",
-		map[string]string{"app_name": "checkout"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := "https://${PUBLIC_IP} {\n  reverse_proxy checkout-app:8080\n}"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
-
-// A value containing `${...}` must not be interpolated a second time.
-func TestRender_SubstitutedValueIsNotRescanned(t *testing.T) {
-	got, err := tftpl.Render("name=${app_name}", map[string]string{"app_name": "${domain}"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "name=${domain}" {
-		t.Fatalf("got %q — a substituted value must be inserted verbatim, never re-interpolated", got)
-	}
-}
-
-func TestRender_MissingValueIsAnErrorNotAnEmptyString(t *testing.T) {
-	_, err := tftpl.Render("reverse_proxy ${app_name}-app:8080", map[string]string{})
-	if err == nil {
-		t.Fatal("a missing value must be an error")
-	}
-	if !strings.Contains(err.Error(), "app_name") {
-		t.Fatalf("the error must name the placeholder, got %v", err)
-	}
-}
-
-func TestRender_UnusedVariableIsAnError(t *testing.T) {
-	_, err := tftpl.Render("hello", map[string]string{"region": "eu-central-1"})
-	if err == nil {
-		t.Fatal("a supplied-but-unused variable must be an error")
-	}
-	if !strings.Contains(err.Error(), "region") {
-		t.Fatalf("the error must name the variable, got %v", err)
-	}
-}
-
-func TestRender_UnsupportedDirectiveIsRefused(t *testing.T) {
-	_, err := tftpl.Render("%{ if x }a%{ endif }", map[string]string{})
-	if err == nil {
-		t.Fatal("an unimplemented directive must be refused, not passed through")
+			if err == nil {
+				t.Fatalf("Render(%q, %v) = %q; want a refusal", tc.tmpl, tc.vars, got)
+			}
+			if !strings.Contains(err.Error(), tc.wantNamed) {
+				t.Errorf("Render(%q) error = %v; want it to name %q", tc.tmpl, err, tc.wantNamed)
+			}
+		})
 	}
 }
 
 func TestLines_MatchesTheOpenTofuSplit(t *testing.T) {
-	got, err := tftpl.Lines("a\nb ${x}\nc", map[string]string{"x": "1"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := []string{"a", "b 1", "c"}
-	if len(got) != len(want) {
-		t.Fatalf("got %d lines %q, want %d", len(got), got, len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("line %d = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
+	got, err := tftpl.Lines("a\nb ${x}\nc", vars{"x": "1"})
 
-func TestRender_LeavesEverythingElseByteIdentical(t *testing.T) {
-	src := "#!/bin/bash\nset -euxo pipefail\n\n# a comment with $ and % and {braces}\nexit 0\n"
-	got, err := tftpl.Render(src, map[string]string{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != src {
-		t.Fatalf("renderer altered non-placeholder text:\n got %q\nwant %q", got, src)
-	}
-}
-
-func TestRender_ConditionalIncludesTheBodyWhenSet(t *testing.T) {
-	got, err := tftpl.Render(
-		"a\n%{ if domain != \"\" }\n${domain} {\n}\n%{ endif }\nb",
-		map[string]string{"domain": "app.example.com"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := "a\n\napp.example.com {\n}\n\nb"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
-
-func TestRender_ConditionalDropsTheBodyWhenEmpty(t *testing.T) {
-	got, err := tftpl.Render(
-		"a\n%{ if domain != \"\" }\n${domain} {\n}\n%{ endif }\nb",
-		map[string]string{"domain": ""})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := "a\n\nb"
-	if got != want {
-		t.Fatalf("got %q, want %q — the markers and the guarded body go, the surrounding newlines stay", got, want)
-	}
-}
-
-// The no-domain path is the default, so a variable consumed only by a condition must not read as unused.
-func TestRender_ConditionOnlyVariableIsNotReportedUnused(t *testing.T) {
-	_, err := tftpl.Render(
-		"a\n%{ if domain != \"\" }\n${domain}\n%{ endif }\nb",
-		map[string]string{"domain": ""})
-	if err != nil {
-		t.Fatalf("a variable consumed only by a condition must count as used: %v", err)
-	}
-}
-
-func TestRender_UnknownConditionVariableIsAnError(t *testing.T) {
-	_, err := tftpl.Render("%{ if nope != \"\" }x%{ endif }", map[string]string{})
-	if err == nil {
-		t.Fatal("an unknown condition variable must be an error, not false")
-	}
-	if !strings.Contains(err.Error(), "nope") {
-		t.Fatalf("the error must name it, got %v", err)
-	}
-}
-
-func TestRender_TwoConditionalsDoNotMerge(t *testing.T) {
-	got, err := tftpl.Render(
-		"%{ if a != \"\" }A%{ endif }MIDDLE%{ if b != \"\" }B%{ endif }",
-		map[string]string{"a": "", "b": "yes"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "MIDDLEB" {
-		t.Fatalf("got %q, want %q — a greedy match would have eaten MIDDLE", got, "MIDDLEB")
-	}
-}
-
-func TestRender_UnimplementedDirectiveFormIsRefused(t *testing.T) {
-	for _, src := range []string{
-		"%{ for x in y }a%{ endfor }",
-		"%{ if domain == \"prod\" }a%{ endif }",
-		"%{~ if domain != \"\" ~}a%{ endif }",
-	} {
-		if _, err := tftpl.Render(src, map[string]string{"domain": "x"}); err == nil {
-			t.Errorf("must refuse unimplemented form: %q", src)
-		}
+	if want := []string{"a", "b 1", "c"}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("Lines = %q, %v; want %q", got, err, want)
 	}
 }

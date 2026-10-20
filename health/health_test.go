@@ -8,169 +8,84 @@ import (
 	"github.com/mitstack-eu/operator-kit/v2/health"
 )
 
-func check(s health.Status) health.Check {
-	return func(context.Context) (health.Status, error) { return s, nil }
-}
-
 func TestStatus_ZeroValueIsConverging(t *testing.T) {
 	var s health.Status
+
 	if s != health.Converging {
 		t.Errorf("the zero Status = %v, want Converging", s)
 	}
 }
 
-func TestRun_HealthyIsNotRemediated(t *testing.T) {
-	var remediated bool
-	h := &health.Healer{Check: check(health.Healthy), Remediate: func(context.Context) error {
-		remediated = true
-		return nil
-	}}
+func TestHealer_Run(t *testing.T) {
+	probe := func(s health.Status, err error) health.Check {
+		return func(context.Context) (health.Status, error) { return s, err }
+	}
+	cases := []struct {
+		name      string
+		check     health.Check
+		max, runs int
+		wantSt    health.Status
+		wantDid   bool
+		wantErr   bool
+		wantCalls int
+		lastErrIs error
+	}{
+		{"a healthy resource is not remediated", probe(health.Healthy, nil), 0, 1, health.Healthy, false, false, 0, nil},
+		{"a converging resource is never remediated", probe(health.Converging, nil), 0, 1, health.Converging, false, false, 0, nil},
+		{"a dead resource is remediated and reported as observed before remediation", probe(health.Dead, nil), 2, 1, health.Dead, true, false, 1, nil},
+		{"remediation stops at MaxAttempts and then says why", probe(health.Dead, nil), 2, 6, health.Dead, true, false, 2, health.ErrRemediationExhausted},
+		{"zero MaxAttempts means one attempt, not unlimited", probe(health.Dead, nil), 0, 4, health.Dead, true, false, 1, nil},
+		{"a probe failure surfaces as converging, never as dead", probe(health.Dead, errors.New("api timeout")), 0, 1, health.Converging, false, true, 0, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			h := &health.Healer{Check: tc.check, MaxAttempts: tc.max, Remediate: func(context.Context) error {
+				calls++
+				return nil
+			}}
 
-	st, did, err := h.Run(context.Background())
-	if err != nil || st != health.Healthy || did || remediated {
-		t.Errorf("st=%v did=%v remediated=%v err=%v", st, did, remediated, err)
+			st, did, err := h.Run(context.Background())
+			var lastErr error
+			for range tc.runs - 1 {
+				_, _, lastErr = h.Run(context.Background())
+			}
+
+			if st != tc.wantSt || did != tc.wantDid || (err != nil) != tc.wantErr {
+				t.Errorf("first Run = %v, %v, %v; want %v, %v, error %v", st, did, err, tc.wantSt, tc.wantDid, tc.wantErr)
+			}
+			if calls != tc.wantCalls {
+				t.Errorf("remediated %d times over %d runs (MaxAttempts %d), want %d", calls, tc.runs, tc.max, tc.wantCalls)
+			}
+			if tc.lastErrIs != nil && !errors.Is(lastErr, tc.lastErrIs) {
+				t.Errorf("last Run error = %v, want %v so the caller can report why it stopped", lastErr, tc.lastErrIs)
+			}
+		})
 	}
 }
 
-func TestRun_ConvergingIsNotRemediated(t *testing.T) {
-	var remediated bool
-	h := &health.Healer{Check: check(health.Converging), Remediate: func(context.Context) error {
-		remediated = true
-		return nil
-	}}
+func TestPromote(t *testing.T) {
+	placeholder := health.Content{Ref: "placeholder", IsPlaceholder: true}
+	cases := []struct {
+		name                         string
+		current, lastGood, candidate health.Content
+		wantRef                      string
+		wantErr                      error
+	}{
+		{"a placeholder never replaces serving content", health.Content{Ref: "sha-real", Serving: true}, health.Content{}, placeholder, "", health.ErrWouldReplaceServingContent},
+		{"a recreated resource comes back at last-good", health.Content{}, health.Content{Ref: "sha-lastgood"}, placeholder, "sha-lastgood", nil},
+		{"the placeholder is fine on a genuinely new resource", health.Content{}, health.Content{}, placeholder, "placeholder", nil},
+		{"real content always wins", health.Content{Ref: "sha-old", Serving: true}, health.Content{Ref: "sha-lastgood"}, health.Content{Ref: "sha-new"}, "sha-new", nil},
+		{"a placeholder may replace a placeholder", health.Content{Ref: "placeholder", IsPlaceholder: true, Serving: true}, health.Content{},
+			health.Content{Ref: "placeholder-v2", IsPlaceholder: true}, "placeholder-v2", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := health.Promote(tc.current, tc.lastGood, tc.candidate)
 
-	_, did, err := h.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if did || remediated {
-		t.Error("a converging resource must never be remediated")
-	}
-}
-
-func TestRun_DeadIsRemediated(t *testing.T) {
-	var remediated bool
-	h := &health.Healer{Check: check(health.Dead), MaxAttempts: 2, Remediate: func(context.Context) error {
-		remediated = true
-		return nil
-	}}
-
-	st, did, err := h.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if st != health.Dead {
-		t.Errorf("Run must report the status observed BEFORE remediation, got %v", st)
-	}
-	if !did || !remediated {
-		t.Error("a dead resource should be remediated")
-	}
-}
-
-func TestRun_RemediationIsBounded(t *testing.T) {
-	var calls int
-	h := &health.Healer{Check: check(health.Dead), MaxAttempts: 2, Remediate: func(context.Context) error {
-		calls++
-		return nil
-	}}
-
-	for range 5 {
-		_, _, _ = h.Run(context.Background())
-	}
-
-	if calls != 2 {
-		t.Errorf("remediated %d times, want the 2-attempt cap honoured", calls)
-	}
-	if _, _, err := h.Run(context.Background()); !errors.Is(err, health.ErrRemediationExhausted) {
-		t.Errorf("err = %v, want ErrRemediationExhausted so the caller can report why it stopped", err)
-	}
-}
-
-func TestRun_ZeroMaxAttemptsMeansOneNotUnlimited(t *testing.T) {
-	var calls int
-	h := &health.Healer{Check: check(health.Dead), Remediate: func(context.Context) error {
-		calls++
-		return nil
-	}}
-
-	for range 4 {
-		_, _, _ = h.Run(context.Background())
-	}
-	if calls != 1 {
-		t.Errorf("remediated %d times with MaxAttempts=0, want exactly 1", calls)
-	}
-}
-
-func TestRun_AProbeFailureIsConvergingNotDead(t *testing.T) {
-	// Not determining health must not be concluded as death, which triggers a destructive action.
-	h := &health.Healer{
-		Check:     func(context.Context) (health.Status, error) { return health.Dead, errors.New("api timeout") },
-		Remediate: func(context.Context) error { t.Fatal("must not remediate on an unreadable probe"); return nil },
-	}
-
-	st, did, err := h.Run(context.Background())
-	if err == nil {
-		t.Fatal("a probe failure must surface")
-	}
-	if st != health.Converging || did {
-		t.Errorf("st=%v did=%v — an unreadable probe must not be treated as dead", st, did)
-	}
-}
-
-func TestPromote_APlaceholderNeverReplacesServingContent(t *testing.T) {
-	current := health.Content{Ref: "sha-real", Serving: true}
-	candidate := health.Content{Ref: "placeholder", IsPlaceholder: true}
-
-	_, err := health.Promote(current, health.Content{}, candidate)
-	if !errors.Is(err, health.ErrWouldReplaceServingContent) {
-		t.Fatalf("err = %v, want ErrWouldReplaceServingContent", err)
-	}
-}
-
-func TestPromote_ARecreatedResourceComesBackAtLastGood(t *testing.T) {
-	current := health.Content{} // freshly recreated, serving nothing
-	lastGood := health.Content{Ref: "sha-lastgood"}
-	candidate := health.Content{Ref: "placeholder", IsPlaceholder: true}
-
-	got, err := health.Promote(current, lastGood, candidate)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Ref != "sha-lastgood" {
-		t.Errorf("promoted %q, want the last-good content", got.Ref)
-	}
-}
-
-func TestPromote_ThePlaceholderIsFineOnAGenuinelyNewResource(t *testing.T) {
-	got, err := health.Promote(health.Content{}, health.Content{}, health.Content{Ref: "placeholder", IsPlaceholder: true})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Ref != "placeholder" {
-		t.Errorf("promoted %q, want the placeholder on a genuinely new resource", got.Ref)
-	}
-}
-
-func TestPromote_RealContentAlwaysWins(t *testing.T) {
-	current := health.Content{Ref: "sha-old", Serving: true}
-	candidate := health.Content{Ref: "sha-new"}
-
-	got, err := health.Promote(current, health.Content{Ref: "sha-lastgood"}, candidate)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Ref != "sha-new" {
-		t.Errorf("promoted %q, want the real new content", got.Ref)
-	}
-}
-
-func TestPromote_APlaceholderMayReplaceAPlaceholder(t *testing.T) {
-	current := health.Content{Ref: "placeholder", IsPlaceholder: true, Serving: true}
-	got, err := health.Promote(current, health.Content{}, health.Content{Ref: "placeholder-v2", IsPlaceholder: true})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Ref != "placeholder-v2" {
-		t.Errorf("promoted %q", got.Ref)
+			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && got.Ref != tc.wantRef) {
+				t.Errorf("Promote(%+v, %+v, %+v) = %+v, %v; want ref %q, error %v", tc.current, tc.lastGood, tc.candidate, got, err, tc.wantRef, tc.wantErr)
+			}
+		})
 	}
 }

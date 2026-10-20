@@ -5,115 +5,111 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"reflect"
 	"testing"
 
 	"github.com/mitstack-eu/operator-kit/v2/events"
 )
 
-func TestEmit_NoOpsWithoutACallback(t *testing.T) {
-	// An older engine sends no callback, and that must be silence rather than an error.
-	ctx := events.WithEnvelope(context.Background(), events.Envelope{SubscriptionID: "sub-1"})
-
-	if err := events.EmitProgress(ctx, "half way"); err != nil {
-		t.Errorf("EmitProgress with no callback returned %v, want nil", err)
+func TestEmit(t *testing.T) {
+	progress := func(ctx context.Context) error { return events.EmitProgress(ctx, "creating instance") }
+	completed := events.EmitCompleted
+	failed := func(ctx context.Context) error { return events.EmitFailed(ctx, "it broke") }
+	cases := []struct {
+		name  string
+		env   *events.Envelope
+		emits []func(context.Context) error
+		want  []map[string]string
+	}{
+		{"every emit is silent rather than an error when an older engine sends no callback", &events.Envelope{SubscriptionID: "sub-1"},
+			[]func(context.Context) error{progress, completed, failed}, nil},
+		{"an emit on a context with no envelope is silent", nil, []func(context.Context) error{progress}, nil},
+		{"a progress event posts the whole envelope with its detail", &events.Envelope{SubscriptionID: "sub-1", Operation: "subscribe", IdempotencyKey: "idem-1", Callback: &events.Callback{Token: "tok-abc"}},
+			[]func(context.Context) error{progress},
+			[]map[string]string{{"subscriptionId": "sub-1", "operation": "subscribe", "status": "progress", "detail": "creating instance", "idempotencyKey": "idem-1", "token": "tok-abc"}}},
+		{"completed and failed carry their status", &events.Envelope{SubscriptionID: "sub-1", Callback: &events.Callback{}},
+			[]func(context.Context) error{completed, failed},
+			[]map[string]string{
+				{"subscriptionId": "sub-1", "operation": "", "status": "completed", "detail": "", "idempotencyKey": "", "token": ""},
+				{"subscriptionId": "sub-1", "operation": "", "status": "failed", "detail": "it broke", "idempotencyKey": "", "token": ""},
+			}},
+		{"a secret in the detail is scrubbed before it leaves the process", &events.Envelope{SubscriptionID: "sub-1", Callback: &events.Callback{}},
+			[]func(context.Context) error{func(ctx context.Context) error {
+				return events.EmitFailed(ctx, "auth failed: token=ghp_supersecretvalue while calling API")
+			}},
+			[]map[string]string{{"subscriptionId": "sub-1", "operation": "", "status": "failed", "detail": "auth failed: token= [REDACTED] while calling API", "idempotencyKey": "", "token": ""}}},
 	}
-	if err := events.EmitCompleted(ctx); err != nil {
-		t.Errorf("EmitCompleted with no callback returned %v, want nil", err)
-	}
-	if err := events.EmitFailed(ctx, "boom"); err != nil {
-		t.Errorf("EmitFailed with no callback returned %v, want nil", err)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []map[string]string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var ev map[string]string
+				_ = json.NewDecoder(r.Body).Decode(&ev)
+				got = append(got, ev)
+			}))
+			defer srv.Close()
+			ctx := context.Background()
+			if tc.env != nil {
+				env := *tc.env
+				if env.Callback != nil {
+					env.Callback = &events.Callback{URL: srv.URL, Token: env.Callback.Token}
+				}
+				ctx = events.WithEnvelope(ctx, env)
+			}
 
-func TestEmit_NoOpsWithoutAnEnvelope(t *testing.T) {
-	if err := events.EmitProgress(context.Background(), "detail"); err != nil {
-		t.Errorf("emit on a bare context returned %v, want nil", err)
-	}
-}
+			for i, emit := range tc.emits {
+				if err := emit(ctx); err != nil {
+					t.Errorf("emit #%d returned %v, want nil", i+1, err)
+				}
+			}
 
-func TestEmitProgress_PostsTheEventToTheCallback(t *testing.T) {
-	var got map[string]string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&got)
-	}))
-	defer srv.Close()
-
-	ctx := events.WithEnvelope(context.Background(), events.Envelope{
-		SubscriptionID: "sub-1",
-		Operation:      "subscribe",
-		IdempotencyKey: "idem-1",
-		Callback:       &events.Callback{URL: srv.URL, Token: "tok-abc"},
-	})
-
-	if err := events.EmitProgress(ctx, "creating instance"); err != nil {
-		t.Fatalf("emit: %v", err)
-	}
-	if got["subscriptionId"] != "sub-1" || got["operation"] != "subscribe" ||
-		got["status"] != "progress" || got["detail"] != "creating instance" ||
-		got["idempotencyKey"] != "idem-1" || got["token"] != "tok-abc" {
-		t.Errorf("posted event = %v", got)
-	}
-}
-
-func TestEmitCompletedAndFailed_CarryTheRightStatus(t *testing.T) {
-	var statuses []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var ev map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&ev)
-		statuses = append(statuses, ev["status"])
-	}))
-	defer srv.Close()
-
-	ctx := events.WithEnvelope(context.Background(), events.Envelope{
-		SubscriptionID: "sub-1",
-		Callback:       &events.Callback{URL: srv.URL},
-	})
-	_ = events.EmitCompleted(ctx)
-	_ = events.EmitFailed(ctx, "it broke")
-
-	if len(statuses) != 2 || statuses[0] != "completed" || statuses[1] != "failed" {
-		t.Errorf("statuses = %v, want [completed failed]", statuses)
-	}
-}
-
-func TestEmit_ScrubsSecretsBeforeSendingOffProcess(t *testing.T) {
-	var detail string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var ev map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&ev)
-		detail = ev["detail"]
-	}))
-	defer srv.Close()
-
-	ctx := events.WithEnvelope(context.Background(), events.Envelope{
-		SubscriptionID: "sub-1",
-		Callback:       &events.Callback{URL: srv.URL},
-	})
-	_ = events.EmitFailed(ctx, "auth failed: token=ghp_supersecretvalue while calling API")
-
-	if strings.Contains(detail, "ghp_supersecretvalue") {
-		t.Errorf("event detail leaked a secret off-process: %q", detail)
-	}
-	if !strings.Contains(detail, "[REDACTED]") {
-		t.Errorf("detail = %q, want the secret replaced by [REDACTED]", detail)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("posted events = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
 func TestScrubDetail(t *testing.T) {
-	cases := []struct{ in, wantAbsent string }{
-		{"password=hunter2", "hunter2"},
-		{"api_key: AKIAEXAMPLE", "AKIAEXAMPLE"},
-		{"Secret = s3cr3t", "s3cr3t"},
-		{"private_key=-----BEGIN", "-----BEGIN"},
-		{"credential:abc123", "abc123"},
-	}
-	for _, c := range cases {
-		if got := events.ScrubDetail(c.in); strings.Contains(got, c.wantAbsent) {
-			t.Errorf("ScrubDetail(%q) = %q, still contains %q", c.in, got, c.wantAbsent)
+	for _, tc := range []struct{ in, want string }{
+		{"password=hunter2", "password= [REDACTED]"},
+		{"api_key: AKIAEXAMPLE", "api_key: [REDACTED]"},
+		{"Secret = s3cr3t", "Secret = [REDACTED]"},
+		{"private_key=-----BEGIN", "private_key= [REDACTED]"},
+		{"credential:abc123", "credential: [REDACTED]"},
+		{"instance i-abc123 is running", "instance i-abc123 is running"},
+	} {
+		if got := events.ScrubDetail(tc.in); got != tc.want {
+			t.Errorf("ScrubDetail(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
-	if got := events.ScrubDetail("instance i-abc123 is running"); got != "instance i-abc123 is running" {
-		t.Errorf("ScrubDetail must leave non-secret detail intact, got %q", got)
+}
+
+func TestEnvelopeFrom(t *testing.T) {
+	full := events.Envelope{
+		SubscriptionID: "sub-1",
+		Operation:      "subscribe",
+		IdempotencyKey: "key-1",
+		Callback:       &events.Callback{URL: "https://api.mitstack.dev/v1/webhooks/operator-events", Token: "evt-token"},
+	}
+	cases := []struct {
+		name   string
+		ctx    context.Context
+		want   events.Envelope
+		wantOK bool
+	}{
+		{"it returns the envelope WithEnvelope stashed", events.WithEnvelope(context.Background(), full), full, true},
+		{"an envelope with no callback is found, with a nil callback", events.WithEnvelope(context.Background(), events.Envelope{SubscriptionID: "sub-1"}),
+			events.Envelope{SubscriptionID: "sub-1"}, true},
+		{"a context with no envelope reports not found", context.Background(), events.Envelope{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := events.EnvelopeFrom(tc.ctx)
+
+			if ok != tc.wantOK || !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("EnvelopeFrom = %+v, %v; want %+v, %v", got, ok, tc.want, tc.wantOK)
+			}
+		})
 	}
 }

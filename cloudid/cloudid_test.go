@@ -1,367 +1,318 @@
+// Package cloudid_test pins how an identity becomes AWS credentials, how a Refresher renews them, and how an AWS failure is classified.
 package cloudid_test
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mitstack-eu/operator-kit/v2/cloudid"
+	"github.com/mitstack-eu/operator-kit/v2/kittest"
 )
 
-func TestProviderARN_IsConstructedNotDiscovered(t *testing.T) {
-	got, err := cloudid.ProviderARN("123456789012", "https://api.mitstack.dev")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := "arn:aws:iam::123456789012:oidc-provider/api.mitstack.dev"
-	if got != want {
-		t.Errorf("ProviderARN = %q, want %q", got, want)
-	}
-}
-
-func TestProviderARN_AcceptsIssuerWithoutScheme(t *testing.T) {
-	got, err := cloudid.ProviderARN("123456789012", "api.mitstack.dev")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.HasSuffix(got, "oidc-provider/api.mitstack.dev") {
-		t.Errorf("ProviderARN = %q", got)
-	}
-}
-
-func TestProviderARN_StripsTrailingSlashAndPreservesPath(t *testing.T) {
-	got, err := cloudid.ProviderARN("123456789012", "https://issuer.example.com/tenant/")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "arn:aws:iam::123456789012:oidc-provider/issuer.example.com/tenant" {
-		t.Errorf("ProviderARN = %q", got)
-	}
-}
-
-func TestProviderARN_RejectsIncompleteInput(t *testing.T) {
-	for _, c := range []struct{ account, issuer string }{
-		{"", "https://api.mitstack.dev"},
-		{"123456789012", ""},
-		{"not-an-account", "https://api.mitstack.dev"},
-	} {
-		if _, err := cloudid.ProviderARN(c.account, c.issuer); err == nil {
-			t.Errorf("ProviderARN(%q, %q) succeeded; want an error rather than a malformed ARN", c.account, c.issuer)
-		}
-	}
-}
-
-// fakeAWS stubs the aws CLI and records its argv and env, to prove the token never reaches a command line.
-func fakeAWS(t *testing.T, script string) (bin string, record string) {
-	t.Helper()
-	dir := t.TempDir()
-	record = filepath.Join(dir, "record")
-	full := "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> " + record + "\nprintf 'ROLE=%s TOKENFILE=%s SESSION=%s REGION=%s\\n' \"$AWS_ROLE_ARN\" \"$AWS_WEB_IDENTITY_TOKEN_FILE\" \"$AWS_ROLE_SESSION_NAME\" \"$AWS_REGION\" >> " + record + "\n" + script + "\n"
-	bin = filepath.Join(dir, "aws")
-	if err := os.WriteFile(bin, []byte(full), 0o755); err != nil {
-		t.Fatalf("write fake aws: %v", err)
-	}
-	return dir, record
-}
+const (
+	webToken  = "SUPER-SECRET-WEB-IDENTITY-TOKEN"
+	awsSecret = "AWS-SECRET-ACCESS-KEY-THAT-MUST-NEVER-SURFACE"
+	exportOK  = `echo '{"AccessKeyId":"AKIATEST","SecretAccessKey":"shh","SessionToken":"tok","Expiration":"2099-01-01T00:00:00Z"}'`
+)
 
 func identity() cloudid.Identity {
 	return cloudid.Identity{
 		RoleARN:          "arn:aws:iam::123456789012:role/mitstack-app",
-		WebIdentityToken: "SUPER-SECRET-WEB-IDENTITY-TOKEN",
+		WebIdentityToken: webToken,
 		Region:           "eu-central-1",
 		SessionSuffix:    "app-42",
 	}
 }
 
-func TestResolve_ReturnsTemporaryCredentials(t *testing.T) {
-	dir, _ := fakeAWS(t, `echo '{"AccessKeyId":"AKIATEST","SecretAccessKey":"shh","SessionToken":"tok","Expiration":"2099-01-01T00:00:00Z"}'`)
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-
-	creds, err := cloudid.Resolve(context.Background(), identity())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if creds.AccessKeyID != "AKIATEST" || creds.SecretAccessKey != "shh" || creds.SessionToken != "tok" {
-		t.Errorf("credentials = %+v", creds)
-	}
-	if creds.Region != "eu-central-1" {
-		t.Errorf("Region = %q, want the identity's region", creds.Region)
-	}
-	if creds.Expires.IsZero() {
-		t.Error("Expires must be populated — the Refresher cannot renew ahead of an unknown expiry")
-	}
+// awsCall is what the stub aws CLI saw: its argv and the identity variables Resolve set, plus the raw record.
+type awsCall struct {
+	vars map[string]string
+	raw  string
 }
 
-func TestResolve_NeverPutsTheTokenOnACommandLine(t *testing.T) {
-	// The token travels by file so it stays invisible in process listings.
-	dir, record := fakeAWS(t, `echo '{"AccessKeyId":"A","SecretAccessKey":"B","SessionToken":"C","Expiration":"2099-01-01T00:00:00Z"}'`)
+// resolve runs Resolve against a stub aws CLI on PATH that records its call and then runs script.
+func resolve(t *testing.T, script string, id cloudid.Identity) (cloudid.Credentials, error, awsCall) {
+	t.Helper()
+	dir := t.TempDir()
+	record := filepath.Join(dir, "record")
+	stub := "#!/usr/bin/env bash\n" +
+		"printf 'ARGV=%s\\nROLE=%s\\nTOKENFILE=%s\\nSESSION=%s\\nREGION=%s\\n' \"$*\" \"$AWS_ROLE_ARN\" \"$AWS_WEB_IDENTITY_TOKEN_FILE\" \"$AWS_ROLE_SESSION_NAME\" \"$AWS_REGION\" >> " + record + "\n" +
+		script + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "aws"), []byte(stub), 0o755); err != nil {
+		t.Fatalf("write stub aws: %v", err)
+	}
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 
-	if _, err := cloudid.Resolve(context.Background(), identity()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	creds, err := cloudid.Resolve(context.Background(), id)
 
-	rec, err := os.ReadFile(record)
-	if err != nil {
-		t.Fatalf("reading fake aws record: %v", err)
-	}
-	if strings.Contains(string(rec), "SUPER-SECRET-WEB-IDENTITY-TOKEN") {
-		t.Errorf("the web-identity token reached the aws argv/env directly:\n%s", rec)
-	}
-	if !strings.Contains(string(rec), "TOKENFILE=/") {
-		t.Errorf("expected AWS_WEB_IDENTITY_TOKEN_FILE to be set to a path, got:\n%s", rec)
-	}
-}
-
-func TestResolve_RemovesTheTokenFileAfterwards(t *testing.T) {
-	dir, record := fakeAWS(t, `echo '{"AccessKeyId":"A","SecretAccessKey":"B","SessionToken":"C","Expiration":"2099-01-01T00:00:00Z"}'`)
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-
-	if _, err := cloudid.Resolve(context.Background(), identity()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	rec, _ := os.ReadFile(record)
-	var tokenFile string
-	for _, line := range strings.Split(string(rec), "\n") {
-		if i := strings.Index(line, "TOKENFILE="); i >= 0 {
-			tokenFile = strings.Fields(line[i+len("TOKENFILE="):])[0]
+	raw, _ := os.ReadFile(record)
+	call := awsCall{vars: map[string]string{}, raw: string(raw)}
+	sc := bufio.NewScanner(strings.NewReader(call.raw))
+	for sc.Scan() {
+		if k, v, ok := strings.Cut(sc.Text(), "="); ok {
+			call.vars[k] = v
 		}
 	}
-	if tokenFile == "" {
-		t.Fatal("could not determine the token file path from the fake aws record")
-	}
-	if _, err := os.Stat(tokenFile); !os.IsNotExist(err) {
-		t.Errorf("token file %s still exists after Resolve — a credential left on disk", tokenFile)
-	}
+	return creds, err, call
 }
 
-func TestResolve_SessionNameCarriesTheSuffix(t *testing.T) {
-	dir, record := fakeAWS(t, `echo '{"AccessKeyId":"A","SecretAccessKey":"B","SessionToken":"C","Expiration":"2099-01-01T00:00:00Z"}'`)
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-
-	if _, err := cloudid.Resolve(context.Background(), identity()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	rec, _ := os.ReadFile(record)
-	if !strings.Contains(string(rec), "SESSION=mitstack-app-42") {
-		t.Errorf("session name should identify the subscription for CloudTrail attribution, got:\n%s", rec)
-	}
-}
-
-func TestResolve_SurfacesTheAWSErrorNotABareFailure(t *testing.T) {
-	// The CLI's stderr carries the error code and role ARN and never the token, so it is safe to propagate.
-	dir, _ := fakeAWS(t, `echo "An error occurred (AccessDenied) when calling AssumeRoleWithWebIdentity" >&2; exit 254`)
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-
-	_, err := cloudid.Resolve(context.Background(), identity())
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	if !strings.Contains(err.Error(), "AccessDenied") {
-		t.Errorf("error = %v, want the real AWS failure surfaced", err)
-	}
-	if strings.Contains(err.Error(), "SUPER-SECRET-WEB-IDENTITY-TOKEN") {
-		t.Error("the error leaked the web-identity token")
-	}
-}
-
-func TestResolve_RequiresARegion(t *testing.T) {
-	// A package default could shift under an existing app, so the caller must pass the pinned region.
-	id := identity()
-	id.Region = ""
-	if _, err := cloudid.Resolve(context.Background(), id); err == nil {
-		t.Error("Resolve with no region must fail rather than guess a default")
-	}
-}
-
-func TestEnv_CarriesCredentialsAndRegion(t *testing.T) {
-	creds := cloudid.Credentials{AccessKeyID: "A", SecretAccessKey: "B", SessionToken: "C", Region: "eu-central-1"}
-	env := strings.Join(cloudid.Env(creds), "\n")
-
-	for _, want := range []string{
-		"AWS_ACCESS_KEY_ID=A", "AWS_SECRET_ACCESS_KEY=B", "AWS_SESSION_TOKEN=C",
-		"AWS_REGION=eu-central-1", "AWS_DEFAULT_REGION=eu-central-1",
-	} {
-		if !strings.Contains(env, want) {
-			t.Errorf("Env() missing %q", want)
-		}
-	}
-}
-
-func TestRefresher_ReusesCredentialsUntilTheyNearExpiry(t *testing.T) {
-	var calls int
-	now := time.Now()
-	r := cloudid.NewRefresher(func(context.Context) (cloudid.Credentials, error) {
-		calls++
-		return cloudid.Credentials{AccessKeyID: "A", Expires: now.Add(time.Hour)}, nil
-	})
-	r.Now = func() time.Time { return now }
-
-	for range 3 {
-		if _, err := r.Get(context.Background()); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-	if calls != 1 {
-		t.Errorf("resolved %d times, want 1 — a valid credential must not be re-minted per call", calls)
-	}
-}
-
-func TestRefresher_RenewsBeforeExpiry(t *testing.T) {
-	var calls int
-	now := time.Now()
-	r := cloudid.NewRefresher(func(context.Context) (cloudid.Credentials, error) {
-		calls++
-		return cloudid.Credentials{AccessKeyID: "A", Expires: now.Add(time.Hour)}, nil
-	})
-	r.Now = func() time.Time { return now }
-
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// Inside the renewal margin but not expired, it renews rather than hand out a credential about to die.
-	r.Now = func() time.Time { return now.Add(time.Hour - cloudid.RenewMargin/2) }
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if calls != 2 {
-		t.Errorf("resolved %d times, want 2 — a credential inside the renewal margin must be renewed", calls)
-	}
-}
-
-func TestRefresher_FailsClosedWhenRenewalFails(t *testing.T) {
-	// An expired credential must yield an error and no usable client, never the last known good one.
-	now := time.Now()
-	var fail bool
-	r := cloudid.NewRefresher(func(context.Context) (cloudid.Credentials, error) {
-		if fail {
-			return cloudid.Credentials{}, errors.New("network down")
-		}
-		return cloudid.Credentials{AccessKeyID: "A", Expires: now.Add(time.Hour)}, nil
-	})
-	r.Now = func() time.Time { return now }
-
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	fail = true
-	r.Now = func() time.Time { return now.Add(2 * time.Hour) } // past expiry
-
-	got, err := r.Get(context.Background())
-	if err == nil {
-		t.Fatal("an expired credential that cannot be renewed MUST fail, never fall back to the stale one")
-	}
-	if got.AccessKeyID != "" {
-		t.Errorf("returned credentials %+v alongside the error — the caller must get nothing usable", got)
-	}
-}
-
-func TestRefresher_NeverReturnsAnAlreadyExpiredCredential(t *testing.T) {
-	// A cached STS response or clock skew can keep handing back a dead credential, and failing closed must cover it.
-	now := time.Now()
-	r := cloudid.NewRefresher(func(context.Context) (cloudid.Credentials, error) {
-		return cloudid.Credentials{AccessKeyID: "A", Expires: now.Add(time.Hour)}, nil
-	})
-	r.Now = func() time.Time { return now }
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	r.Now = func() time.Time { return now.Add(2 * time.Hour) }
-	got, err := r.Get(context.Background())
-	if err == nil {
-		t.Fatal("a resolver returning an already-expired credential must fail closed, not pass it through")
-	}
-	if got.AccessKeyID != "" {
-		t.Errorf("returned credentials %+v alongside the error — the caller must get nothing usable", got)
-	}
-}
-
-func TestRefresher_RenewalYieldsAUsableCredential(t *testing.T) {
-	now := time.Now()
-	r := cloudid.NewRefresher(func(context.Context) (cloudid.Credentials, error) {
-		return cloudid.Credentials{AccessKeyID: "A", Expires: now.Add(3 * time.Hour)}, nil
-	})
-	r.Now = func() time.Time { return now }
-	if _, err := r.Get(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	r.Now = func() time.Time { return now.Add(2 * time.Hour) }
-	got, err := r.Get(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !got.Expires.After(r.Now()) {
-		t.Errorf("Get returned an already-expired credential: expires %v, now %v", got.Expires, r.Now())
-	}
-}
-
-func TestRefresher_ZeroExpiryIsTreatedAsUnusable(t *testing.T) {
-	// An unknown expiry must not be read as never expiring, which would let a dead credential through.
-	var calls int
-	r := cloudid.NewRefresher(func(context.Context) (cloudid.Credentials, error) {
-		calls++
-		return cloudid.Credentials{AccessKeyID: "A"}, nil
-	})
-	for range 2 {
-		_, _ = r.Get(context.Background())
-	}
-	if calls != 2 {
-		t.Errorf("resolved %d times, want 2 — a credential with no known expiry must never be cached", calls)
-	}
-}
-
-func TestClassify_NamesTheFailuresAnOperatorMustAct_On(t *testing.T) {
+func TestProviderARN(t *testing.T) {
 	cases := []struct {
-		name string
-		in   string
-		want error
+		name, account, issuer, want string
 	}{
-		{"EIP quota", "AddressLimitExceeded: The maximum number of addresses has been reached", cloudid.ErrQuotaExceeded},
-		{"generic quota", "LimitExceeded: you have requested more instances", cloudid.ErrQuotaExceeded},
-		{"no default VPC", "VPCIdNotSpecified: No default VPC for this user", cloudid.ErrNoDefaultVPC},
-		{"instance type not in AZ", "Unsupported: Your requested instance type (t3.small) is not supported in your requested Availability Zone (eu-central-1a)", cloudid.ErrInstanceTypeUnavailable},
-		{"no subnet", "InvalidSubnetID.NotFound: The subnet ID 'subnet-x' does not exist", cloudid.ErrNoSubnet},
+		{"an issuer URL becomes the provider ARN without a discovery call", "123456789012", "https://api.mitstack.dev", "arn:aws:iam::123456789012:oidc-provider/api.mitstack.dev"},
+		{"an issuer without a scheme is taken as the host", "123456789012", "api.mitstack.dev", "arn:aws:iam::123456789012:oidc-provider/api.mitstack.dev"},
+		{"a trailing slash is stripped and the path kept", "123456789012", "https://issuer.example.com/tenant/", "arn:aws:iam::123456789012:oidc-provider/issuer.example.com/tenant"},
+		{"an empty account is refused", "", "https://api.mitstack.dev", ""},
+		{"an empty issuer is refused", "123456789012", "", ""},
+		{"an account that is not 12 digits is refused", "not-an-account", "https://api.mitstack.dev", ""},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := cloudid.Classify(errors.New(c.in)); !errors.Is(got, c.want) {
-				t.Errorf("Classify(%q) = %v, want %v", c.in, got, c.want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := cloudid.ProviderARN(tc.account, tc.issuer)
+
+			if tc.want == "" {
+				if err == nil {
+					t.Errorf("ProviderARN(%q, %q) = %q; want an error rather than a malformed ARN", tc.account, tc.issuer, got)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("ProviderARN(%q, %q) = %q, %v; want %q", tc.account, tc.issuer, got, err, tc.want)
 			}
 		})
 	}
 }
 
-func TestClassify_PreservesTheOriginalMessage(t *testing.T) {
-	// Naming the class must not throw away the detail the operator puts in statusDetail.
-	err := cloudid.Classify(errors.New("AddressLimitExceeded: maximum number of addresses reached in eu-central-1"))
-	if !strings.Contains(err.Error(), "eu-central-1") {
-		t.Errorf("classified error %v dropped the original detail", err)
+func TestResolve_Succeeds(t *testing.T) {
+	cases := []struct {
+		name  string
+		check func(t *testing.T, creds cloudid.Credentials, call awsCall)
+	}{
+		{"it returns the exported credentials in the identity's region with their expiry", func(t *testing.T, creds cloudid.Credentials, _ awsCall) {
+			want := cloudid.Credentials{AccessKeyID: "AKIATEST", SecretAccessKey: "shh", SessionToken: "tok", Region: "eu-central-1",
+				Expires: time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)}
+			if !creds.Expires.Equal(want.Expires) {
+				t.Errorf("Expires = %v, want %v: a Refresher cannot renew ahead of an unknown expiry", creds.Expires, want.Expires)
+			}
+			creds.Expires = want.Expires
+			if creds != want {
+				t.Errorf("credentials = %+v, want %+v", creds, want)
+			}
+		}},
+		{"the token reaches the CLI only as a path to a file", func(t *testing.T, _ cloudid.Credentials, call awsCall) {
+			kittest.AssertNoSecret(t, "the aws argv and env", call.raw, webToken)
+			if path := call.vars["TOKENFILE"]; !filepath.IsAbs(path) {
+				t.Errorf("AWS_WEB_IDENTITY_TOKEN_FILE = %q, want an absolute path", path)
+			}
+		}},
+		{"the token file is removed once Resolve returns", func(t *testing.T, _ cloudid.Credentials, call awsCall) {
+			path := call.vars["TOKENFILE"]
+			if path == "" {
+				t.Fatalf("the stub recorded no token file path:\n%s", call.raw)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Errorf("os.Stat(%s) = %v; want not-exist, since a token left on disk is a leaked credential", path, err)
+			}
+		}},
+		{"the session name carries the suffix for CloudTrail attribution", func(t *testing.T, _ cloudid.Credentials, call awsCall) {
+			if got, want := call.vars["SESSION"], "mitstack-app-42"; got != want {
+				t.Errorf("AWS_ROLE_SESSION_NAME = %q, want %q", got, want)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			creds, err, call := resolve(t, exportOK, identity())
+
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			tc.check(t, creds, call)
+		})
 	}
 }
 
-func TestClassify_LeavesAnUnknownErrorAlone(t *testing.T) {
-	orig := errors.New("something nobody predicted")
-	got := cloudid.Classify(orig)
-	if !errors.Is(got, orig) {
-		t.Errorf("an unrecognised error must pass through unchanged, got %v", got)
+func TestResolve_FailsWithoutLeakingTheToken(t *testing.T) {
+	cases := []struct {
+		name      string
+		script    string
+		mutate    func(*cloudid.Identity)
+		wantInErr string
+	}{
+		{"the AWS error is surfaced, not a bare failure", `echo "An error occurred (AccessDenied) when calling AssumeRoleWithWebIdentity" >&2; exit 254`, nil, "AccessDenied"},
+		{"a CLI failure naming the token's rejection", `echo "An error occurred (InvalidIdentityToken)" >&2; exit 254`, nil, "InvalidIdentityToken"},
+		{"stdout that is not JSON", `echo 'not json at all'`, nil, ""},
+		{"empty stdout", `echo -n ''`, nil, ""},
+		{"no role", exportOK, func(id *cloudid.Identity) { id.RoleARN = "" }, ""},
+		{"no region, rather than a default that could shift under a live app", exportOK, func(id *cloudid.Identity) { id.Region = "" }, ""},
+		{"no token", exportOK, func(id *cloudid.Identity) { id.WebIdentityToken = "" }, ""},
 	}
-	for _, sentinel := range []error{cloudid.ErrQuotaExceeded, cloudid.ErrNoDefaultVPC, cloudid.ErrInstanceTypeUnavailable, cloudid.ErrNoSubnet} {
-		if errors.Is(got, sentinel) {
-			t.Errorf("unrecognised error was misclassified as %v", sentinel)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := identity()
+			if tc.mutate != nil {
+				tc.mutate(&id)
+			}
+
+			_, err, _ := resolve(t, tc.script, id)
+
+			if err == nil {
+				t.Fatal("Resolve succeeded; want an error")
+			}
+			kittest.AssertNoSecret(t, "the Resolve error", err.Error(), webToken)
+			if !strings.Contains(err.Error(), tc.wantInErr) {
+				t.Errorf("Resolve error = %v; want it to carry %q", err, tc.wantInErr)
+			}
+		})
+	}
+}
+
+func TestEnv_CarriesCredentialsAndRegion(t *testing.T) {
+	creds := cloudid.Credentials{AccessKeyID: "A", SecretAccessKey: "B", SessionToken: "C", Region: "eu-central-1"}
+
+	env := cloudid.Env(creds)
+
+	for _, want := range []string{
+		"AWS_ACCESS_KEY_ID=A", "AWS_SECRET_ACCESS_KEY=B", "AWS_SESSION_TOKEN=C",
+		"AWS_REGION=eu-central-1", "AWS_DEFAULT_REGION=eu-central-1",
+	} {
+		if !slices.Contains(env, want) {
+			t.Errorf("Env(%+v) lacks %q", creds, want)
 		}
 	}
 }
 
-func TestClassify_NilIsNil(t *testing.T) {
-	if got := cloudid.Classify(nil); got != nil {
-		t.Errorf("Classify(nil) = %v, want nil", got)
+type outcome int
+
+const (
+	usable outcome = iota
+	refused
+	either
+)
+
+// get is one Refresher.Get at an offset from the start, with the outcome it must have.
+type get struct {
+	at   time.Duration
+	want outcome
+}
+
+func TestRefresher(t *testing.T) {
+	start := time.Now()
+	expiresIn := func(d time.Duration) func(int) (cloudid.Credentials, error) {
+		return func(int) (cloudid.Credentials, error) {
+			return cloudid.Credentials{AccessKeyID: "A", Expires: start.Add(d)}, nil
+		}
+	}
+	cases := []struct {
+		name      string
+		resolve   func(call int) (cloudid.Credentials, error)
+		gets      []get
+		wantCalls int
+		realClock bool
+	}{
+		{"a valid credential is reused rather than re-minted per call", expiresIn(time.Hour),
+			[]get{{0, usable}, {0, usable}, {0, usable}}, 1, false},
+		{"a credential inside the renewal margin is renewed", expiresIn(time.Hour),
+			[]get{{0, usable}, {time.Hour - cloudid.RenewMargin/2, usable}}, 2, false},
+		{"a renewal that fails past expiry fails closed instead of returning the stale credential", func(call int) (cloudid.Credentials, error) {
+			if call > 1 {
+				return cloudid.Credentials{}, errors.New("network down")
+			}
+			return cloudid.Credentials{AccessKeyID: "A", Expires: start.Add(time.Hour)}, nil
+		}, []get{{0, usable}, {2 * time.Hour, refused}}, 0, false},
+		{"a resolver handing back an already expired credential fails closed", expiresIn(time.Hour),
+			[]get{{0, usable}, {2 * time.Hour, refused}}, 0, false},
+		{"a renewal yields a credential that is not yet expired", expiresIn(3 * time.Hour),
+			[]get{{0, usable}, {2 * time.Hour, usable}}, 0, false},
+		{"a credential with no known expiry is never cached", func(int) (cloudid.Credentials, error) {
+			return cloudid.Credentials{AccessKeyID: "A"}, nil
+		}, []get{{0, either}, {0, either}}, 2, true},
+		{"the fail-closed error carries no credential material", func(int) (cloudid.Credentials, error) {
+			return cloudid.Credentials{AccessKeyID: "AKIA", SecretAccessKey: awsSecret, Expires: start.Add(-time.Hour)}, nil
+		}, []get{{0, refused}}, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			r := cloudid.NewRefresher(func(context.Context) (cloudid.Credentials, error) {
+				calls++
+				return tc.resolve(calls)
+			})
+
+			for i, g := range tc.gets {
+				now := start.Add(g.at)
+				if !tc.realClock {
+					r.Now = func() time.Time { return now }
+				}
+
+				got, err := r.Get(context.Background())
+
+				switch {
+				case g.want == usable && err != nil:
+					t.Fatalf("Get #%d at +%v: %v; want a usable credential", i+1, g.at, err)
+				case g.want == usable && !got.Expires.After(now):
+					t.Errorf("Get #%d at +%v returned a credential expiring %v; want one still valid", i+1, g.at, got.Expires)
+				case g.want == refused && err == nil:
+					t.Fatalf("Get #%d at +%v = %+v; want an error, never a stale credential", i+1, g.at, got)
+				case g.want == refused:
+					if got != (cloudid.Credentials{}) {
+						t.Errorf("Get #%d returned %+v alongside its error; want nothing usable", i+1, got)
+					}
+					kittest.AssertNoSecret(t, "the Refresher error", err.Error(), awsSecret)
+				}
+			}
+			if tc.wantCalls != 0 && calls != tc.wantCalls {
+				t.Errorf("resolved %d times, want %d", calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
+func TestClassify(t *testing.T) {
+	unknown := errors.New("something nobody predicted")
+	sentinels := []error{cloudid.ErrQuotaExceeded, cloudid.ErrNoDefaultVPC, cloudid.ErrInstanceTypeUnavailable, cloudid.ErrNoSubnet}
+	cases := []struct {
+		name string
+		in   error
+		want error
+	}{
+		{"an EIP quota is a quota failure, keeping the detail", errors.New("AddressLimitExceeded: maximum number of addresses reached in eu-central-1"), cloudid.ErrQuotaExceeded},
+		{"a generic limit is a quota failure", errors.New("LimitExceeded: you have requested more instances"), cloudid.ErrQuotaExceeded},
+		{"a missing default VPC", errors.New("VPCIdNotSpecified: No default VPC for this user"), cloudid.ErrNoDefaultVPC},
+		{"an instance type the zone does not offer", errors.New("Unsupported: Your requested instance type (t3.small) is not supported in your requested Availability Zone (eu-central-1a)"), cloudid.ErrInstanceTypeUnavailable},
+		{"a subnet that does not exist", errors.New("InvalidSubnetID.NotFound: The subnet ID 'subnet-x' does not exist"), cloudid.ErrNoSubnet},
+		{"an unrecognised error passes through unchanged", unknown, unknown},
+		{"nil stays nil", nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cloudid.Classify(tc.in)
+
+			if tc.in == nil {
+				if got != nil {
+					t.Errorf("Classify(nil) = %v, want nil", got)
+				}
+				return
+			}
+			if !errors.Is(got, tc.want) {
+				t.Errorf("Classify(%q) = %v, want it to wrap %v", tc.in, got, tc.want)
+			}
+			if !strings.Contains(got.Error(), tc.in.Error()) {
+				t.Errorf("Classify(%q) = %q; want the original message kept for statusDetail", tc.in, got)
+			}
+			for _, s := range sentinels {
+				if s != tc.want && errors.Is(got, s) {
+					t.Errorf("Classify(%q) = %v, also classified as %v", tc.in, got, s)
+				}
+			}
+		})
 	}
 }
