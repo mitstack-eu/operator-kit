@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mitstack-eu/operator-kit/v2/kittest"
@@ -172,15 +173,34 @@ type scriptResult struct {
 	exitCode                 int
 }
 
+// lockedBuilder serialises writes, since exec copies stdout and stderr from two goroutines into the one combined buffer.
+type lockedBuilder struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuilder) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuilder) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
 // runBash runs the script at scriptPath in dir under the runner's bash flags, with env added to the process environment.
 func runBash(t *testing.T, scriptPath, dir string, env ...string) scriptResult {
 	t.Helper()
 	cmd := exec.Command("bash", "--noprofile", "--norc", "-e", "-o", "pipefail", scriptPath)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), env...)
-	var stdout, stderr, combined strings.Builder
-	cmd.Stdout = io.MultiWriter(&stdout, &combined)
-	cmd.Stderr = io.MultiWriter(&stderr, &combined)
+	var stdout, stderr strings.Builder
+	combined := &lockedBuilder{}
+	cmd.Stdout = io.MultiWriter(&stdout, combined)
+	cmd.Stderr = io.MultiWriter(&stderr, combined)
 	exitCode := 0
 	if err := cmd.Run(); err != nil {
 		exitErr, ok := err.(*exec.ExitError)
