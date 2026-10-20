@@ -141,13 +141,22 @@ func TestWorkflow_PRKeyGate(t *testing.T) {
 		})
 	}
 
-	t.Run("it needs no secrets, reads no commit and never continues on error", func(t *testing.T) {
+	for _, tc := range []struct{ name, forbidden string }{
+		{"it needs no secrets at all", "secrets."},
+		{"it reads nothing from a commit, since a branch name in a commit is no delivery intent", "head_commit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for path, v := range gate {
+				if strings.Contains(v, tc.forbidden) {
+					t.Errorf("pr-key-gate %s = %q references %s", path, v, tc.forbidden)
+				}
+			}
+		})
+	}
+	t.Run("it never continues on error, so a missing key is a red check", func(t *testing.T) {
 		for path, v := range gate {
 			if strings.HasSuffix(path, "continue-on-error") {
-				t.Errorf("pr-key-gate sets %s = %s; a missing key must be a red check", path, v)
-			}
-			if strings.Contains(v, "secrets.") || strings.Contains(v, "head_commit") {
-				t.Errorf("pr-key-gate %s = %q references secrets or head_commit", path, v)
+				t.Errorf("pr-key-gate sets %s = %s", path, v)
 			}
 		}
 	})

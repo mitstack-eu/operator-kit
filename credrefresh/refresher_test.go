@@ -67,7 +67,7 @@ func TestRefresher_Get(t *testing.T) {
 		}, []get{{0, usable, "A"}, {2 * time.Hour, refused, ""}, {2 * time.Hour, usable, "A"}}, 3, false},
 		{"a fresh credential already expired on arrival fails closed", 0, mint(a, -time.Minute), []get{{0, refused, ""}}, 1, false},
 		{"a fresh credential expiring exactly now has no usable life left", 0, mint(a, 0), []get{{0, refused, ""}}, 1, false},
-		{"a renewal past the first credential's renewal point yields a usable one", 0, mint(a, 3*time.Hour),
+		{"a credential read hours later, still outside its renewal margin, is served usable", 0, mint(a, 3*time.Hour),
 			[]get{{0, usable, "A"}, {2 * time.Hour, usable, "A"}}, 0, false},
 		{"a credential of unknown expiry is never served from cache", 0, func(int, time.Time, time.Time) (cred, time.Time, error) {
 			return a, time.Time{}, nil

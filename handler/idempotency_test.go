@@ -40,6 +40,7 @@ func TestServe_IdempotencyCache(t *testing.T) {
 	key := func(op, k, sub string) map[string]any {
 		return map[string]any{"operation": op, "idempotencyKey": k, "subscriptionId": sub, "secrets": guardSecrets()}
 	}
+	inOrg := func(fields map[string]any, org string) map[string]any { fields["orgId"] = org; return fields }
 	settled := func(t *testing.T, resp contract.Response) {
 		if resp.Pending || resp.Outputs["endpoint"] != "https://ready" {
 			t.Errorf("pending, outputs = %v, %v; want the settled observation's outputs", resp.Pending, resp.Outputs)
@@ -66,11 +67,11 @@ func TestServe_IdempotencyCache(t *testing.T) {
 				{fields: key("subscribe", "", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{1, 1, 0}},
 				{fields: key("subscribe", "", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{2, 2, 0}},
 			}},
-		{name: "a key is cached per subscription, and each subscription still replays its own", f: &kittest.FakeResource{},
+		{name: "a key is cached per subscription across tenants, and each subscription still replays its own", f: &kittest.FakeResource{},
 			deliveries: []delivery{
-				{fields: key("subscribe", "idem-shared", "sub-A"), replays: -1, status: http.StatusOK, calls: [3]int{1, 1, 0}},
-				{fields: key("subscribe", "idem-shared", "sub-B"), replays: -1, status: http.StatusOK, calls: [3]int{2, 2, 0}},
-				{fields: key("subscribe", "idem-shared", "sub-A"), replays: 0, status: http.StatusOK, calls: [3]int{2, 2, 0}},
+				{fields: inOrg(key("subscribe", "idem-shared", "sub-A"), "org-A"), replays: -1, status: http.StatusOK, calls: [3]int{1, 1, 0}},
+				{fields: inOrg(key("subscribe", "idem-shared", "sub-B"), "org-B"), replays: -1, status: http.StatusOK, calls: [3]int{2, 2, 0}},
+				{fields: inOrg(key("subscribe", "idem-shared", "sub-A"), "org-A"), replays: 0, status: http.StatusOK, calls: [3]int{2, 2, 0}},
 			}},
 		{name: "a 500 is never cached, so the retry reaches the Resource and answers its own success", f: &kittest.FakeResource{EnsureErr: errors.New("transient backend error")},
 			deliveries: []delivery{

@@ -147,10 +147,17 @@ func TestWorkflow_RecordDelivery(t *testing.T) {
 		})
 	}
 
-	t.Run("it never continues on error and records a push that cut no tag", func(t *testing.T) {
+	t.Run("it never continues on error, so a failed board write is a red run", func(t *testing.T) {
 		for path, v := range job {
-			if strings.HasSuffix(path, "continue-on-error") || strings.Contains(v, "outputs.released") {
-				t.Errorf("record-delivery %s = %q; a failed write must be red, and a docs-only push still delivers", path, v)
+			if strings.HasSuffix(path, "continue-on-error") {
+				t.Errorf("record-delivery sets %s = %q", path, v)
+			}
+		}
+	})
+	t.Run("it never reads release's outputs.released, so a push that cut no tag still delivers its keys", func(t *testing.T) {
+		for path, v := range job {
+			if strings.Contains(v, "outputs.released") {
+				t.Errorf("record-delivery %s = %q reads outputs.released", path, v)
 			}
 		}
 	})
