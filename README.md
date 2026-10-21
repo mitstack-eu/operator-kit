@@ -932,6 +932,58 @@ if res.ExitCode != 0 {
 }
 ```
 
+### Proving teardown after a broken setup
+
+A subscribe can fail part-way, after it has already written something to the
+provider, and the engine then sends an unsubscribe that may reach a restarted
+operator with no record of what that subscribe did. The block's own
+`TestUnsubscribeDeletes*` tests, which the `teardown` block check runs, call
+`kittest.AssertTeardownAfterBrokenSetup` to prove such a teardown still finds
+everything.
+
+The helper serves the block through `handler.New`, as the engine reaches it.
+It first runs one subscribe with nothing broken and counts the side effects
+the block's fakes report. It then runs one subscribe per side effect, breaking
+the first, then the second, and so on through the last. After each broken
+subscribe it starts a fresh process of the block and sends an unsubscribe
+carrying no recorded resources and no prior outputs. It fails the test when
+the fake provider still holds anything for the subscription, naming the
+broken side effect and what was left.
+
+A block passes it a `kittest.BrokenSetup`:
+
+| Field | What the block supplies |
+|---|---|
+| `Manifest` and `Types` | The block's manifest and the type snapshot it is checked against |
+| `Desired` | The subscribe request, with a `SubscriptionID`, a `BlockID` and an `OrgID` |
+| `NewProvider` | A function returning an empty fake provider for each run, given that run's `*kittest.Faults` |
+
+The fake provider is a `kittest.FaultProvider`, with two methods.
+`Process` returns the block's `handler.Resource` and observers as a newly
+started operator builds them over this provider. `Holds` names everything the
+provider holds for a subscription. Each fake calls `faults.SideEffect` with a
+short name before every change it makes to the provider, and returns the error
+it gets back. A fake that makes several changes in one call, such as writing a
+credential and then starting a container, reports each one, so the helper can
+break the call between them. A fake that reports no side effect fails the
+helper, since no setup would be broken.
+
+```go
+func TestUnsubscribeDeletes_AfterASetupBrokenAtAnySideEffect(t *testing.T) {
+	kittest.AssertTeardownAfterBrokenSetup(t, kittest.BrokenSetup{
+		Manifest: manifestYAML,
+		Types:    typeSnapshot(t),
+		Desired:  subscribeRequest("sub-broken"),
+		NewProvider: func(faults *kittest.Faults) kittest.FaultProvider {
+			return &fakeBox{faults: faults}
+		},
+	})
+}
+```
+
+`kittest.CheckTeardownAfterBrokenSetup` does the same work and returns the
+problems as strings.
+
 ### Proving no secret leaks
 
 `kittest.AssertNoSecretLeak` drives an operator's own handler with signed
