@@ -429,6 +429,38 @@ func TestBlockLevel_UnsubscribeRunsOneDeleteThenProvesEachResourceAbsentWithItsR
 	}
 }
 
+func TestBlockLevel_UnsubscribeLeavesAResourceRecordedAbsentUnobservedAndHandsTheBlockItsState(t *testing.T) {
+	cloud := newFakeCloud()
+	cloud.createAll()
+	obs := blockObservers(cloud)
+	obs["aws.ec2-instance"] = &observer{err: errors.New("the instance does not answer")}
+	block := &blockResource{cloud: cloud}
+	fields := recordedAll()
+	fields["recordedResources"].(map[string]any)["aws.ec2-instance"] = map[string]any{
+		"type": "aws.ec2-instance", "identity": map[string]any{"instanceId": "i-0abc"}, "state": "absent"}
+
+	status, resp := serveBlock(t, blockCall{r: block, obs: asObservers(obs), op: "unsubscribe", fields: fields})
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; response %+v", status, resp)
+	}
+	wantAbsent(t, resp, true)
+	if calls := obs["aws.ec2-instance"].calls(); len(calls) != 0 {
+		t.Errorf("the observer of the resource recorded absent was called %d times, want none", len(calls))
+	}
+	if o, ok := resp.Resources["aws.ec2-instance"]; ok {
+		t.Errorf("resource \"aws.ec2-instance\" outcome = %+v, want none for a resource recorded absent", o)
+	}
+	for _, name := range []string{"aws.vpc", "a", "b"} {
+		if o := resp.Resources[name].Observe; o == nil || o.State != contract.Absent {
+			t.Errorf("resource %q observe = %+v, want it still observed absent", name, o)
+		}
+	}
+	if len(block.deleted) != 1 || block.deleted[0].RecordedResources["aws.ec2-instance"].State != contract.Absent {
+		t.Errorf("the block's Delete was handed %+v, want the record of \"aws.ec2-instance\" reading state absent", block.deleted)
+	}
+}
+
 func TestBlockLevel_AnUnsubscribeLeavingAResourceStandingAnswersAbsentFalse(t *testing.T) {
 	cases := []struct {
 		label         string

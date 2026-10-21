@@ -233,6 +233,7 @@ func TestDecodeRequest_CarriesWhatTheRequestNamesOntoDesired(t *testing.T) {
 	recorded := map[string]contract.RecordedResource{
 		"aws.ec2-instance": {Type: "aws.ec2-instance", Identity: map[string]string{"instanceId": "i-0abc"}},
 		"app-container":    {Type: "hetzner.server-container", Identity: map[string]string{"serverId": "4711", "container": "app"}},
+		"database":         {Type: "aws.ec2-postgres-database", Identity: map[string]string{"instanceId": "i-0abc"}, State: contract.Absent},
 	}
 	requirementTypes := map[string]string{"host": "hetzner.server", "github.repository": "github.repository"}
 	cases := []struct {
@@ -421,6 +422,9 @@ func TestRequestMarshal_EncodesEachResourceFieldUnderItsWireNameOnlyWhenSet(t *t
 		{"recorded resources", blockLevel, "recordedResources",
 			map[string]any{"aws.vpc": map[string]any{"type": "aws.vpc", "identity": map[string]any{"vpcId": "vpc-0abc"}}}},
 		{"requirement types", blockLevel, "requirementTypes", map[string]any{"host": "aws.ec2-instance"}},
+		{"a recorded resource's state, when the engine recorded it absent", contract.Request{RecordedResources: map[string]contract.RecordedResource{
+			"database": {Type: "aws.ec2-postgres-database", State: contract.Absent}}}, "recordedResources",
+			map[string]any{"database": map[string]any{"type": "aws.ec2-postgres-database", "state": "absent"}}},
 		{"no resource type when unset", contract.Request{}, "resourceType", nil},
 		{"no recorded resources when unset", contract.Request{}, "recordedResources", nil},
 		{"no requirement types when unset", contract.Request{}, "requirementTypes", nil},
@@ -492,6 +496,10 @@ func TestEnvelopeSchema_DeclaresEachOptionalRequestFieldByItsShape(t *testing.T)
 			}
 			identity, _ := entry["identity"].(map[string]any)
 			objectOfStrings(t, doc, identity, "a recorded resource's identity")
+			state, _ := entry["state"].(map[string]any)
+			if !hasType(state, "string") || !reflect.DeepEqual(state["enum"], []any{"absent"}) {
+				t.Errorf("a recorded resource's state = %v, want a string whose one value is absent", entry["state"])
+			}
 		}},
 		{"requirementTypes", func(t *testing.T, prop map[string]any) {
 			objectOfStrings(t, doc, prop, "properties.requirementTypes")
@@ -514,10 +522,10 @@ func TestEnvelopeSchema_DeclaresEachOptionalRequestFieldByItsShape(t *testing.T)
 	}
 }
 
-func TestEnvelopeSchema_IsVersion1_5_0(t *testing.T) {
+func TestEnvelopeSchema_IsVersion1_6_0(t *testing.T) {
 	doc := jsonObject(t, contract.EnvelopeSchema)
 
-	if doc["version"] != "1.5.0" {
-		t.Errorf("envelope.schema.json version = %v, want 1.5.0: it adds the issue operation and its issueAppId, a minor change from 1.4.0", doc["version"])
+	if doc["version"] != "1.6.0" {
+		t.Errorf("envelope.schema.json version = %v, want 1.6.0: it adds a recorded resource's state, a minor change from 1.5.0", doc["version"])
 	}
 }
