@@ -182,10 +182,10 @@ func (r *declaredRun) endedWithSubscription(nr namedResource) (*contract.CallOut
 	}, true
 }
 
-// validateEach never polls, and an Observe error is classified, never folded into pending, and stops the probe there.
+// validateEach never polls, answers redrive when any resource observed Unknown reports its work finished, and an Observe error is classified, never folded into pending, and stops the probe there.
 func (r *declaredRun) validateEach(ctx context.Context) (int, contract.Response) {
 	var outputs, secretOutputs map[string]string
-	present, absent := 0, 0
+	present, absent, finished := 0, 0, false
 	states := make([]string, 0, len(r.resources))
 	for _, nr := range r.resources {
 		if ctx.Err() != nil {
@@ -213,6 +213,8 @@ func (r *declaredRun) validateEach(ctx context.Context) (int, contract.Response)
 			}
 		case contract.Absent:
 			absent++
+		case contract.Unknown:
+			finished = finished || obs.Redrive
 		}
 		states = append(states, fmt.Sprintf("%q %s", nr.name, obs.State))
 	}
@@ -226,6 +228,7 @@ func (r *declaredRun) validateEach(ctx context.Context) (int, contract.Response)
 	default:
 		resp = contract.Response{
 			Pending:       true,
+			Redrive:       finished,
 			StatusDetail:  safe.Scrub("resources observed "+strings.Join(states, ", "), r.secrets...),
 			SecretOutputs: secretOutputs,
 		}

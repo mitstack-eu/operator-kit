@@ -17,6 +17,7 @@ type FakeResource struct {
 	ObserveState *contract.State
 	Outputs      map[string]string
 	StatusDetail string
+	Redrive      bool
 
 	EnsureErr, ObserveErr, DeleteErr error
 
@@ -74,7 +75,7 @@ func (f *FakeResource) Observe(ctx context.Context, d contract.Desired) (contrac
 	if f.ObserveState != nil {
 		state = *f.ObserveState
 	}
-	return contract.Observation{State: state, Outputs: f.Outputs, StatusDetail: f.StatusDetail}, nil
+	return contract.Observation{State: state, Outputs: f.Outputs, StatusDetail: f.StatusDetail, Redrive: f.Redrive}, nil
 }
 
 func (f *FakeResource) Delete(ctx context.Context, d contract.Desired) (map[string]string, error) {

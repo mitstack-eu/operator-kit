@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// VerbSeams is what an operator supplies to have its verb semantics checked, and a nil seam fails rather than skipping.
+// VerbSeams is what an operator supplies to have its verb semantics checked, and a nil seam fails rather than skipping, Redrive alone excepted.
 type VerbSeams struct {
 	// Subscribe is called twice by the idempotency check.
 	Subscribe func() (resourceCount int, err error)
@@ -23,6 +23,15 @@ type VerbSeams struct {
 
 	// ValidateWhenDead must not be pending.
 	ValidateWhenDead func() (pending bool, isError bool)
+
+	// Redrive is left nil by a block with no step that outlasts one subscribe.
+	Redrive func() (RedriveRun, error)
+}
+
+// RedriveRun is what a block answered across a long step, its first subscribe, the validate once the step finished and the re-driven subscribe, with Changed counting the resources the first subscribe made that the re-drive changed.
+type RedriveRun struct {
+	FirstPending, Redrive, Settled bool
+	Changed                        int
 }
 
 // CheckVerbSemantics returns one problem per violation and takes no *testing.T, because t.Run on a bare testing.T never executes and would make its self-tests vacuous.
@@ -88,7 +97,31 @@ func CheckVerbSemantics(s VerbSeams) []string {
 	if deadPending, _ := s.ValidateWhenDead(); deadPending {
 		add("a resource that will not recover was reported PENDING — it would wait forever instead of failing (MIT-1291)")
 	}
+	if s.Redrive != nil {
+		problems = append(problems, checkRedrive(s.Redrive)...)
+	}
 
+	return problems
+}
+
+func checkRedrive(redrive func() (RedriveRun, error)) []string {
+	run, err := redrive()
+	switch {
+	case err != nil:
+		return []string{sprintf("the long step failed: %v", err)}
+	case !run.FirstPending:
+		return []string{"the first subscribe settled, so the long step it was given never outlasted one call"}
+	}
+	var problems []string
+	if !run.Redrive {
+		problems = append(problems, "the validate after the long step finished did not answer redrive beside pending — the engine never re-drives subscribe, and the subscription waits out its settle budget")
+	}
+	if run.Changed > 0 {
+		problems = append(problems, sprintf("the re-driven subscribe changed %d resource(s) the first subscribe made — it must resume from what it observes, not redo a step", run.Changed))
+	}
+	if !run.Settled {
+		problems = append(problems, "the re-driven subscribe left the step pending — it did not take the step the finished one made possible")
+	}
 	return problems
 }
 

@@ -117,6 +117,7 @@ type Response struct {
 	StatusDetail  string            `json:"statusDetail,omitempty"`
 	LastError     string            `json:"lastError,omitempty"`
 	Absent        *bool             `json:"absent,omitempty"`
+	Redrive       bool              `json:"redrive,omitempty"`
 	// Resources has no entry for a resource the verb never reached.
 	Resources map[string]ResourceOutcome `json:"resources,omitempty"`
 	// Replaces names, on a validate, the resources an upgrade would replace rather than change in place.
@@ -182,6 +183,8 @@ type Observation struct {
 	Outputs       map[string]string
 	SecretOutputs map[string]string
 	StatusDetail  string
+	// Redrive, read beside State Unknown alone, reports from what the provider holds, never a clock, that the work the last Ensure left in flight has finished, so a validate asks the engine to re-drive subscribe.
+	Redrive bool
 }
 
 type requiredField struct {

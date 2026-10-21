@@ -19,42 +19,7 @@ var verbSeamRequestSeq int64
 // VerbSeamsOverHandler drives h as an http.Handler to avoid depending on the package it tests, with a fresh nonce and idempotency key per request so the idempotency cache cannot make a property pass.
 func VerbSeamsOverHandler(t *testing.T, h http.Handler, s *Signer, f *FakeResource) VerbSeams {
 	t.Helper()
-
-	post := func(operation string) (int, map[string]any) {
-		t.Helper()
-		n := atomic.AddInt64(&verbSeamRequestSeq, 1)
-		tok, err := webhook.MintOBO(s.Private, s.Kid, webhook.OBOClaims{
-			OrgID:          "org-verbseam",
-			SubscriptionID: "sub-verbseam",
-		}, time.Hour, time.Now())
-		if err != nil {
-			t.Fatalf("minting an OBO token for a verb seam request: %v", err)
-		}
-		body := Envelope(fmt.Sprintf("verbseam-nonce-%d", n), time.Now(), map[string]any{
-			"operation":      operation,
-			"subscriptionId": "sub-verbseam",
-			"blockId":        "block-verbseam",
-			"orgId":          "org-verbseam",
-			"idempotencyKey": fmt.Sprintf("verbseam-idem-%d", n),
-			"obo":            tok,
-		})
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, s.HookRequest(t, "/hook", body))
-		var doc map[string]any
-		_ = json.Unmarshal(w.Body.Bytes(), &doc)
-		return w.Code, doc
-	}
-
-	errFromStatus := func(status int, doc map[string]any) error {
-		if status < http.StatusBadRequest {
-			return nil
-		}
-		msg, _ := doc["error"].(string)
-		if msg == "" {
-			msg = fmt.Sprintf("status %d", status)
-		}
-		return fmt.Errorf("verb seam: %s", msg)
-	}
+	post := func(operation string) (int, map[string]any) { return postVerb(t, h, s, operation) }
 
 	return VerbSeams{
 		Subscribe: func() (int, error) {
@@ -120,4 +85,71 @@ func VerbSeamsOverHandler(t *testing.T, h http.Handler, s *Signer, f *FakeResour
 			return pending, status >= http.StatusBadRequest
 		},
 	}
+}
+
+// RedriveOverHandler drives f's long step through h: a subscribe, FinishBuild, a validate, and the subscribe the engine re-drives.
+func RedriveOverHandler(t *testing.T, h http.Handler, s *Signer, f *FakeBuilder) func() (RedriveRun, error) {
+	t.Helper()
+	return func() (RedriveRun, error) {
+		var run RedriveRun
+		status, doc := postVerb(t, h, s, "subscribe")
+		if err := errFromStatus(status, doc); err != nil {
+			return run, err
+		}
+		run.FirstPending, _ = doc["pending"].(bool)
+		f.FinishBuild()
+
+		status, doc = postVerb(t, h, s, "validate")
+		if err := errFromStatus(status, doc); err != nil {
+			return run, err
+		}
+		pending, _ := doc["pending"].(bool)
+		finished, _ := doc["redrive"].(bool)
+		run.Redrive = pending && finished
+
+		builds := f.Builds
+		status, doc = postVerb(t, h, s, "subscribe")
+		if err := errFromStatus(status, doc); err != nil {
+			return run, err
+		}
+		pending, _ = doc["pending"].(bool)
+		run.Settled, run.Changed = !pending, f.Builds-builds
+		return run, nil
+	}
+}
+
+func postVerb(t *testing.T, h http.Handler, s *Signer, operation string) (int, map[string]any) {
+	t.Helper()
+	n := atomic.AddInt64(&verbSeamRequestSeq, 1)
+	tok, err := webhook.MintOBO(s.Private, s.Kid, webhook.OBOClaims{
+		OrgID:          "org-verbseam",
+		SubscriptionID: "sub-verbseam",
+	}, time.Hour, time.Now())
+	if err != nil {
+		t.Fatalf("minting an OBO token for a verb seam request: %v", err)
+	}
+	body := Envelope(fmt.Sprintf("verbseam-nonce-%d", n), time.Now(), map[string]any{
+		"operation":      operation,
+		"subscriptionId": "sub-verbseam",
+		"blockId":        "block-verbseam",
+		"orgId":          "org-verbseam",
+		"idempotencyKey": fmt.Sprintf("verbseam-idem-%d", n),
+		"obo":            tok,
+	})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, s.HookRequest(t, "/hook", body))
+	var doc map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &doc)
+	return w.Code, doc
+}
+
+func errFromStatus(status int, doc map[string]any) error {
+	if status < http.StatusBadRequest {
+		return nil
+	}
+	msg, _ := doc["error"].(string)
+	if msg == "" {
+		msg = fmt.Sprintf("status %d", status)
+	}
+	return fmt.Errorf("verb seam: %s", msg)
 }

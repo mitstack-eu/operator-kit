@@ -3,7 +3,7 @@
   "$id": "https://mitstack.dev/schemas/lifecycle/response.schema.json",
   "title": "mitstack lifecycle webhook response",
   "description": "Versioned wire-shape contract for the JSON body a block owner's registered webhook endpoint returns to mitstack's lifecycle engine for a subscribe/unsubscribe/upgrade/validate call (MIT-1136, the response half of the bidirectional contract envelope.schema.json pins on the request side). Mirrors api/internal/lifecycle.webhookResponse byte-for-byte for every property but resources, which reports the outcome of each declared resource's ensure, observe and delete calls by name. Additive-friendly: additionalProperties is true at every level so a new optional response field never breaks an existing operator or this contract test. Nothing is required: a verb with nothing to report legitimately answers {}.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "object",
   "additionalProperties": true,
   "properties": {
@@ -37,6 +37,10 @@
     },
     "pending": {
       "description": "True when an async operator's resource is still converging (T-473 finalize) — the engine keeps polling validate instead of settling active with possibly-incomplete outputs.",
+      "type": "boolean"
+    },
+    "redrive": {
+      "description": "Meaningful beside pending:true on a validate alone: the work the last ensure left in flight has finished and another ensure has more to do, so the engine re-drives subscribe (ADR 0097). Omitted or false changes nothing.",
       "type": "boolean"
     },
     "statusDetail": {

@@ -259,7 +259,7 @@ func mergeOutputs(base, overlay map[string]string) map[string]string {
 	return merged
 }
 
-// validate calls Observe once and layers "pending":true on Unknown, which Response() cannot carry; an Observe error is classified, never folded into pending.
+// validate calls Observe once and layers "pending":true and the observed redrive on Unknown, which Response() cannot carry; an Observe error is classified, never folded into pending.
 func (h *Handler) validate(ctx context.Context, d contract.Desired, secrets []string) (int, contract.Response) {
 	obs, err := h.observe(ctx, d)
 	if err != nil {
@@ -271,6 +271,7 @@ func (h *Handler) validate(ctx context.Context, d contract.Desired, secrets []st
 	resp := obs.Response()
 	if obs.State == contract.Unknown {
 		resp.Pending = true
+		resp.Redrive = obs.Redrive
 	}
 	return http.StatusOK, scrubResponse(resp, secrets)
 }
