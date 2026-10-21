@@ -90,32 +90,37 @@ func VerbSeamsOverHandler(t *testing.T, h http.Handler, s *Signer, f *FakeResour
 // RedriveOverHandler drives f's long step through h: a subscribe, FinishBuild, a validate, and the subscribe the engine re-drives.
 func RedriveOverHandler(t *testing.T, h http.Handler, s *Signer, f *FakeBuilder) func() (RedriveRun, error) {
 	t.Helper()
-	return func() (RedriveRun, error) {
-		var run RedriveRun
-		status, doc := postVerb(t, h, s, "subscribe")
-		if err := errFromStatus(status, doc); err != nil {
-			return run, err
-		}
-		run.FirstPending, _ = doc["pending"].(bool)
-		f.FinishBuild()
-
-		status, doc = postVerb(t, h, s, "validate")
-		if err := errFromStatus(status, doc); err != nil {
-			return run, err
-		}
-		pending, _ := doc["pending"].(bool)
-		finished, _ := doc["redrive"].(bool)
-		run.Redrive = pending && finished
-
-		builds := f.Builds
-		status, doc = postVerb(t, h, s, "subscribe")
-		if err := errFromStatus(status, doc); err != nil {
-			return run, err
-		}
-		pending, _ = doc["pending"].(bool)
-		run.Settled, run.Changed = !pending, f.Builds-builds
-		return run, nil
+	post := func(operation string) (map[string]any, error) {
+		status, doc := postVerb(t, h, s, operation)
+		return doc, errFromStatus(status, doc)
 	}
+	return func() (RedriveRun, error) {
+		first, err := post("subscribe")
+		if err != nil {
+			return RedriveRun{}, err
+		}
+		f.FinishBuild()
+		validate, err := post("validate")
+		if err != nil {
+			return RedriveRun{}, err
+		}
+		builds := f.Builds
+		redriven, err := post("subscribe")
+		if err != nil {
+			return RedriveRun{}, err
+		}
+		return RedriveRun{
+			FirstPending: answered(first, "pending"),
+			Redrive:      answered(validate, "pending") && answered(validate, "redrive"),
+			Settled:      !answered(redriven, "pending"),
+			Changed:      f.Builds - builds,
+		}, nil
+	}
+}
+
+func answered(doc map[string]any, flag string) bool {
+	set, _ := doc[flag].(bool)
+	return set
 }
 
 func postVerb(t *testing.T, h http.Handler, s *Signer, operation string) (int, map[string]any) {

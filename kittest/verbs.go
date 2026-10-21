@@ -125,7 +125,7 @@ func checkRedrive(redrive func() (RedriveRun, error)) []string {
 	return problems
 }
 
-// AssertVerbSemantics runs the four properties and fails t with one error per violation.
+// AssertVerbSemantics runs every property and fails t with one error per violation.
 func AssertVerbSemantics(t *testing.T, s VerbSeams) {
 	t.Helper()
 	for _, p := range CheckVerbSemantics(s) {

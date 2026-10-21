@@ -259,7 +259,9 @@ and status detail it gathered along the way. `Observation.Response()` turns
 that into the `contract.Response` the webhook handler returns, mapping
 `State` onto the response's `absent` pointer: `Present` sets it to `false`,
 `Absent` sets it to `true`, and `Unknown` leaves it `nil` so the engine
-fails open exactly as an operator that never implements the marker does.
+fails open exactly as an operator that never implements the marker does. An
+observation in `Unknown` can also set `Redrive`, which "Work that
+outlasts one subscribe" below explains.
 
 ## The Handler and Resource
 
@@ -350,6 +352,41 @@ earlier call already destroyed the resource; a second call must find the
 snapshot (or other handover artifact) it already made, or report the
 resource gone, rather than fail. Its outputs also reach the wire unscrubbed,
 the same way Observe's do, so they must never carry secret material.
+
+### Work that outlasts one subscribe
+
+Some provider work runs longer than one subscribe call can wait, such as a
+builder that images a disk for half an hour. The block's `Ensure` starts that
+work and returns, and the subscribe answers `pending:true`. The engine then
+polls the subscription with validate until it settles or the block's settle
+budget runs out.
+
+While the work runs, `Observe`, or a declared resource's `ObserveResource`,
+reports `contract.Unknown`. Once what the provider holds shows the work done,
+such as the builder having powered itself off, the observation also sets
+`Redrive`. The Handler's validate then answers `redrive` beside
+`pending`:
+
+```json
+{"outputs": null, "pending": true, "redrive": true}
+```
+
+That answer asks the engine to re-drive subscribe, meaning it sends a fresh
+subscribe for the subscription. The re-driven subscribe reaches `Ensure`
+again, because the idempotency cache never stores a pending answer. `Ensure`
+takes the next piece of work from what it observes on the provider, since the
+Handler carries nothing from the earlier call. Running `Ensure` against work
+it already finished must change nothing.
+
+The Handler reads `Redrive` only beside `Unknown`, in `validate` in
+`handler/dispatch.go` and in `validateEach` in `handler/declared.go`. On a
+block that declares its resources, a validate answers `redrive` when any
+resource observed `Unknown` reports its work finished. A subscribe's own
+pending answer never carries it.
+
+Report `Redrive` from the provider's state alone, never from a clock or a
+count of calls. Work that never reports finished still fails once the block's
+settle budget runs out.
 
 ### The output-secret gate
 
@@ -911,6 +948,53 @@ if res.ExitCode != 0 {
 	t.Fatalf("script exited %d: %s", res.ExitCode, res.Stderr)
 }
 ```
+
+### Proving a re-driven subscribe resumes the work
+
+`kittest.CheckVerbSemantics` judges a block's verbs through the
+`kittest.VerbSeams` it is handed, and `kittest.AssertVerbSemantics` reports
+the same problems through `t`. A seam is a function the block supplies to
+run one property against its own handler. A block
+with work that outlasts one subscribe also sets `VerbSeams.Redrive`. A block
+without such work leaves it nil, and every other seam is required.
+
+`Redrive` runs the work through the engine's re-drive and returns a
+`kittest.RedriveRun`:
+
+| Field | What the run reports |
+|---|---|
+| `FirstPending` | The first subscribe answered `pending:true`, leaving the work in flight |
+| `Redrive` | The validate after the work finished answered `redrive` beside `pending` |
+| `Settled` | The re-driven subscribe answered without `pending` |
+| `Changed` | How many resources the first subscribe made that the re-driven one changed |
+
+The check fails a run that misses any of the first three. It also fails a run
+whose `Changed` is above zero, since a re-drive must resume from what it
+observes rather than redo work.
+
+A block writes the seam over its own handler and fake provider. In this
+sketch, `subscribe` and `validate` post signed requests to the block's
+handler, and `provider` is the block's fake provider:
+
+```go
+seams.Redrive = func() (kittest.RedriveRun, error) {
+	var run kittest.RedriveRun
+	run.FirstPending = subscribe(t, h).Pending
+	provider.FinishBuild()
+	v := validate(t, h)
+	run.Redrive = v.Pending && v.Redrive
+	before := provider.Writes()
+	run.Settled = !subscribe(t, h).Pending
+	run.Changed = provider.Writes() - before
+	return run, nil
+}
+```
+
+The kit proves the check over its own fakes. `kittest.FakeBuilder`'s first
+`Ensure` starts a builder that runs until the test calls `FinishBuild`, and
+its next `Ensure` turns the finished build into the image.
+`kittest.RedriveOverHandler` drives it through a real handler and returns the
+seam. Its `HideFinish` and `RebuildOnRedrive` switches each fail one property.
 
 ### Proving teardown after a broken setup
 
