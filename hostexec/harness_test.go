@@ -86,10 +86,6 @@ func newFakes(t *testing.T, aws awsFake, sshBody string) fakes {
 		return ""
 	}
 	failure, _ := json.Marshal(map[string]any{"ResponseCode": aws.exitCode, "StandardErrorContent": aws.stderr + "\n", "StandardOutputContent": aws.stdout + "\n"})
-	failureAnswer := "printf '%s\\n' " + shQuote(string(failure)) + "; exit 0"
-	if aws.failureUnreadable {
-		failureAnswer = `echo "fake ssm: invocation unreadable" >&2; exit 1`
-	}
 	d := shQuote(f.dir)
 	awsScript := "#!/usr/bin/env bash\nset -u\n" + fmt.Sprintf(record, d+"/aws") +
 		optional(aws.leakGrandchild, "( sleep 3 & )\n") + fmt.Sprintf(`case "${2:-}" in
@@ -101,7 +97,7 @@ get-command-invocation)
   query=""; output=""; prev=""
   for a in "$@"; do [ "$prev" = "--query" ] && query="$a"; [ "$prev" = "--output" ] && output="$a"; prev="$a"; done
   if [ "$query" = "StandardOutputContent" ]; then printf '%%s\n' %[4]s; exit 0; fi
-  if [ "$query" = %[8]s ] && [ "$output" = json ]; then %[9]s; fi
+  if [ "$query" = %[8]s ] && [ "$output" = json ]; then %[9]s printf '%%s\n' %[10]s; exit 0; fi
   %[5]s
   if [ -f %[3]s/hold ]; then echo InProgress; exit 0; fi
   n=0; [ -f %[3]s/count ] && n=$(cat %[3]s/count); echo $((n+1)) > %[3]s/count
@@ -112,7 +108,7 @@ get-command-invocation)
 esac
 echo "fake aws: unrecognised subcommand: $*" >&2
 exit 2
-`, optional(aws.sendHangs, "sleep 5"), shQuote(commandID), d, shQuote(aws.stdout), optional(aws.hang, "exec sleep 10"), aws.pollFailures, strings.Join(quoted, " "), shQuote(failureQuery), failureAnswer)
+`, optional(aws.sendHangs, "sleep 5"), shQuote(commandID), d, shQuote(aws.stdout), optional(aws.hang, "exec sleep 10"), aws.pollFailures, strings.Join(quoted, " "), shQuote(failureQuery), optional(aws.failureUnreadable, `echo "fake ssm: invocation unreadable" >&2; exit 1;`), shQuote(string(failure)))
 	sshScript := "#!/usr/bin/env bash\nset -u\n" + fmt.Sprintf(record, d+"/ssh") + fmt.Sprintf(`prev=""
 for a in "$@"; do
   if [ "$prev" = "-i" ]; then stat -c '%%a' "$a" > %[1]s/perm 2>/dev/null; printf '%%s' "$a" > %[1]s/idpath; fi

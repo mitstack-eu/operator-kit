@@ -160,14 +160,11 @@ func TestSSM_ATerminalFailureIsACommandFailedCarryingWhatTheBoxReported(t *testi
 	}
 }
 
-// An unreadable failure still names the command and its status, and says why its output is missing.
 func TestSSM_AFailureWhoseDetailsCannotBeReadStillNamesItsStatus(t *testing.T) {
 	newFakes(t, awsFake{statuses: []string{"Failed"}, failureUnreadable: true}, "")
-
-	err := hostexec.Run(context.Background(), ssmHost(), "true")
-
 	var failed *hostexec.CommandFailed
-	if !errors.As(err, &failed) || failed.Status != "Failed" || failed.ReadErr == nil || !strings.Contains(err.Error(), "invocation unreadable") {
+
+	if err := hostexec.Run(context.Background(), ssmHost(), "true"); !errors.As(err, &failed) || failed.Status != "Failed" || failed.ReadErr == nil || !strings.Contains(err.Error(), "invocation unreadable") {
 		t.Errorf("Run() = %v; want a CommandFailed naming Failed whose ReadErr carries the read failure", err)
 	}
 }
