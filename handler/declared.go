@@ -119,7 +119,7 @@ func (r *declaredRun) ensureEach(ctx context.Context) (int, contract.Response) {
 	return http.StatusOK, resp
 }
 
-// deleteEach settles each resource absent in reverse creation order, once the block-level handler has deleted the whole block, observes none whose type ends with its subscription, and merges the delete's outputs over the observed ones on absent:true.
+// deleteEach settles each resource absent in reverse creation order, once the block-level handler has deleted the whole block, observes none whose type ends with its subscription, skips one the engine recorded absent, and merges the delete's outputs over the observed ones on absent:true.
 func (r *declaredRun) deleteEach(ctx context.Context) (int, contract.Response) {
 	var outputs map[string]string
 	for i := len(r.resources) - 1; i >= 0; i-- {
@@ -127,6 +127,10 @@ func (r *declaredRun) deleteEach(ctx context.Context) (int, contract.Response) {
 		if ctx.Err() != nil {
 			absent := false
 			return http.StatusOK, contract.Response{Absent: &absent, StatusDetail: r.notReached(nr.name), Resources: r.outcomes}
+		}
+		// The engine's record already proves it absent, often through a host that is gone, so observing it could only fail.
+		if r.d.RecordedResources[nr.name].State == contract.Absent {
+			continue
 		}
 		var entry contract.ResourceOutcome
 		if ended, ok := r.endedWithSubscription(nr); ok {

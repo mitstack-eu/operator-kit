@@ -431,7 +431,7 @@ is known, and the verb's `Desired`.
 | Verb | What the Handler does |
 |---|---|
 | subscribe, upgrade | Runs one `Ensure`, then observes each declared resource in manifest order until it reports `Present` |
-| unsubscribe | Runs one `Delete`, then observes each declared resource in reverse order until it reports `Absent`, skipping one whose type `Config.Types` marks `endsWithSubscription`, and merges the outputs `Delete` returned into the `absent:true` answer |
+| unsubscribe | Runs one `Delete`, then observes each declared resource in reverse order until it reports `Absent`, skipping one whose type `Config.Types` marks `endsWithSubscription` and one the engine recorded absent, and merges the outputs `Delete` returned into the `absent:true` answer |
 | validate | Observes each declared resource once, and names the resources an upgrade would replace |
 
 A block-level handler that implements `handler.ResourceReporter` reports
@@ -460,6 +460,22 @@ reported resource the manifest does not declare, or of a type its entry does
 not list, answers 400 quoting it. A handler that implements
 `handler.ReplacementPlanner` names on validate the resources an upgrade would
 replace, and the answer carries them under `replaces`.
+
+An unsubscribe's `recordedResources` entry reads `"state": "absent"` when the
+engine has already recorded that resource absent, as it does for a database
+whose host's own teardown was verified. The Handler then neither observes it
+nor reports an outcome for it, and your `Delete` reads the same record from
+`Desired.RecordedResources` to leave that resource alone. Such a request
+carries, in part:
+
+```json
+{"operation": "unsubscribe",
+ "recordedResources": {
+   "aws.ec2-postgres-database": {"type": "aws.ec2-postgres-database",
+     "identity": {"instanceId": "i-0abc"}, "state": "absent"},
+   "credential": {"type": "aws.ssm-parameter",
+     "identity": {"name": "/mitstack-app/shop/postgres-db/sub_0abc/password"}}}}
+```
 
 Every observe is handed `Desired.VerbAt`, the time of the verb it settles,
 and reads only what was made after it. After `Ensure` or `Delete` that is

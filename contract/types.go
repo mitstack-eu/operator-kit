@@ -92,6 +92,7 @@ type Credential struct {
 type RecordedResource struct {
 	Type     string            `json:"type"`
 	Identity map[string]string `json:"identity,omitempty"`
+	State    State             `json:"state,omitempty"`
 }
 
 type ResourceRef struct {
