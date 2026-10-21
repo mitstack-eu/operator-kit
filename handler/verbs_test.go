@@ -331,7 +331,8 @@ func TestServe_OneVerbsSecretsNeverReachALaterRequest(t *testing.T) {
 
 func TestRefusedClass(t *testing.T) {
 	cases := map[string]string{
-		"refused:dependents-remain: two apps still bind this database": "dependents-remain",
+		"refused:dependents-remain: two apps still bind this database":               "dependents-remain",
+		handler.Refuse(handler.ClassHostCannotRun, "Docker does not answer").Error(): "host-cannot-run",
 		"":                   "",
 		"some other detail":  "",
 		"refusedwithnocolon": "",
