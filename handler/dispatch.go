@@ -57,9 +57,7 @@ func (h *Handler) dispatchRequest(w http.ResponseWriter, r *http.Request, req co
 	_, _ = w.Write(raw)
 }
 
-// dispatchVerbRecovering recovers inside the single-flight call because a recover further out would leave a waiter on the same key holding a zero status.
-//
-// The response error is a fixed message that carries nothing from the panic value, since the platform stores the response body.
+// dispatchVerbRecovering recovers inside the single-flight call because a recover further out would leave a waiter on the same key holding a zero status, and its fixed error carries nothing from the panic value since the platform stores the response body.
 func (h *Handler) dispatchVerbRecovering(ctx context.Context, req contract.Request, secrets []string) (status int, resp contract.Response) {
 	defer func() {
 		p := recover()
@@ -247,7 +245,6 @@ func (h *Handler) settleAbsent(ctx context.Context, d contract.Desired, secrets 
 	}
 }
 
-// mergeOutputs lets overlay win on a key both carry.
 func mergeOutputs(base, overlay map[string]string) map[string]string {
 	if len(overlay) == 0 {
 		return base
