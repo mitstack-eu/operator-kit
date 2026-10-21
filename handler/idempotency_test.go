@@ -99,17 +99,17 @@ func TestServe_IdempotencyCache(t *testing.T) {
 				{fields: key("validate", "idem-validate", "sub-1"), between: func(f *kittest.FakeResource) { f.Count = 0 }, replays: -1,
 					status: http.StatusOK, calls: [3]int{0, 2, 0}, check: wantAbsentAnswer(true)},
 			}},
-		{name: "a pending subscribe is never cached, so the subscribe re-driven once validate reports the work finished runs Ensure once and answers the converged resource",
-			f: &kittest.FakeResource{ObserveState: stateOf(contract.Absent), Outputs: map[string]string{"endpoint": "https://ready"}},
+		{name: "a pending subscribe is never cached, so the subscribe re-driven once validate reports the work finished runs Ensure once and answers the converged resource", f: &kittest.FakeResource{ObserveState: stateOf(contract.Absent), Outputs: map[string]string{"endpoint": "https://ready"}},
 			deliveries: []delivery{
 				{fields: key("subscribe", "idem-pending-subscribe", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{1, 3, 0}, check: wantPending(true)},
-				{fields: key("validate", "idem-settle-validate", "sub-1"), between: func(f *kittest.FakeResource) { f.ObserveState, f.Redrive = stateOf(contract.Unknown), true },
-					replays: -1, status: http.StatusOK, calls: [3]int{1, 4, 0}, check: wantPending(true)},
-				{fields: key("subscribe", "idem-pending-subscribe", "sub-1"), between: func(f *kittest.FakeResource) { f.ObserveState = nil }, replays: -1, differs: true,
-					status: http.StatusOK, calls: [3]int{2, 5, 0}, check: settled},
+				{fields: key("validate", "idem-settle-validate", "sub-1"), between: func(f *kittest.FakeResource) { f.ObserveState, f.Redrive = stateOf(contract.Unknown), true }, replays: -1, status: http.StatusOK, calls: [3]int{1, 4, 0}, check: func(t *testing.T, r contract.Response) {
+					if !r.Pending || !r.Redrive {
+						t.Errorf("pending, redrive = %v, %v; want both, since the observed work finished", r.Pending, r.Redrive)
+					}
+				}},
+				{fields: key("subscribe", "idem-pending-subscribe", "sub-1"), between: func(f *kittest.FakeResource) { f.ObserveState = nil }, replays: -1, differs: true, status: http.StatusOK, calls: [3]int{2, 5, 0}, check: settled},
 			}},
-		{name: "a pending upgrade is never cached, so the re-delivery answers the converged resource",
-			f: &kittest.FakeResource{ObserveState: stateOf(contract.Absent), Outputs: map[string]string{"endpoint": "https://ready"}},
+		{name: "a pending upgrade is never cached, so the re-delivery answers the converged resource", f: &kittest.FakeResource{ObserveState: stateOf(contract.Absent), Outputs: map[string]string{"endpoint": "https://ready"}},
 			deliveries: []delivery{
 				{fields: key("upgrade", "idem-pending-upgrade", "sub-1"), replays: -1, status: http.StatusOK, calls: [3]int{1, 3, 0}, check: wantPending(true)},
 				{fields: key("upgrade", "idem-pending-upgrade", "sub-1"), between: func(f *kittest.FakeResource) { f.ObserveState = nil }, replays: -1, differs: true,
