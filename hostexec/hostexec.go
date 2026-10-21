@@ -54,7 +54,7 @@ func Run(ctx context.Context, h Host, script string, opts ...SendOption) error {
 	}
 }
 
-// CommandFailed is the error Run and RunOutput return for an ssm command ending Failed, Cancelled, TimedOut or Delivery Timed Out: ExitCode is the invocation's ResponseCode, which SSM sets to -1 for a command that never ran, Stderr and Stdout are trimmed and never scrubbed, and ReadErr says why those three could not be read when it leaves them zero.
+// CommandFailed is what Run and RunOutput return when an ssm command ends Failed, Cancelled, TimedOut or Delivery Timed Out, carrying the invocation's ResponseCode and its trimmed, unscrubbed output, or in ReadErr why those could not be read.
 type CommandFailed struct {
 	CommandID, Status string
 	ExitCode          int
@@ -76,7 +76,7 @@ func (e *CommandFailed) Error() string {
 
 func (e *CommandFailed) Unwrap() error { return e.ReadErr }
 
-// RunOutput runs script as Run does, under the same CloudTrail constraint on secrets, and returns its stdout trimmed of outer whitespace, never beside an error, because a failed ssm command's output arrives in a *CommandFailed, which a caller matches with errors.As before scrubbing secrets from the error's text; a detached poll's output read outlives ctx's cancellation by up to the same bound.
+// RunOutput runs script as Run does, under the same CloudTrail constraint on secrets, and returns its trimmed stdout, never beside an error: a failed ssm command's output arrives in a *CommandFailed, which a caller matches with errors.As before scrubbing, and a detached poll's read outlives ctx's cancellation by up to the same bound.
 func RunOutput(ctx context.Context, h Host, script string, opts ...SendOption) (string, error) {
 	if err := validateHost(h); err != nil {
 		return "", err
