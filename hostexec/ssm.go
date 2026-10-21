@@ -34,7 +34,7 @@ func runSSMOutput(ctx context.Context, h Host, script string, o sendOptions) (st
 	if err := waitForSSMPoll(pollCtx, o, bound, h, commandID); err != nil {
 		return "", err
 	}
-	return ssmCommandOutput(pollCtx, h, commandID)
+	return readInvocation(pollCtx, h, commandID, "output", "StandardOutputContent", "text")
 }
 
 // ssmPollBound outlasts the time SSM itself may take to deliver and run the command, an unset timeout counting as zero, and reads the package variables at call time.
@@ -156,7 +156,7 @@ func waitForSSMTerminalStatus(ctx context.Context, h Host, commandID string, bou
 			case "Success":
 				return nil
 			case "Failed", "Cancelled", "TimedOut", "Delivery Timed Out":
-				return fmt.Errorf("hostexec: ssm command %s reached terminal state %s", commandID, status)
+				return commandFailed(ctx, h, commandID, status)
 			}
 		} else {
 			lastPollErr = pollErr
@@ -204,15 +204,39 @@ func ssmCommandStatus(ctx context.Context, h Host, commandID string) (string, er
 	return strings.TrimSpace(string(out)), nil
 }
 
-// ssmCommandOutput is issued only once the command is found Success, never before or interleaved with the status polls.
-func ssmCommandOutput(ctx context.Context, h Host, commandID string) (string, error) {
+// failureQuery reads the exit code and both streams in one call, since each read of the invocation is another aws subprocess.
+const failureQuery = "{ResponseCode: ResponseCode, StandardErrorContent: StandardErrorContent, StandardOutputContent: StandardOutputContent}"
+
+// commandFailed reads what the box reported for a command that ended in a terminal failure, keeping the status even when that read fails.
+func commandFailed(ctx context.Context, h Host, commandID, status string) error {
+	failed := &CommandFailed{CommandID: commandID, Status: status}
+	out, err := readInvocation(ctx, h, commandID, "failure", failureQuery, "json")
+	var got struct {
+		ResponseCode                                int
+		StandardErrorContent, StandardOutputContent string
+	}
+	if err == nil {
+		err = json.Unmarshal([]byte(out), &got)
+	}
+	if err != nil {
+		failed.ReadErr = err
+		return failed
+	}
+	failed.ExitCode = got.ResponseCode
+	failed.Stderr = strings.TrimSpace(got.StandardErrorContent)
+	failed.Stdout = strings.TrimSpace(got.StandardOutputContent)
+	return failed
+}
+
+// readInvocation is issued only once the command reached a terminal status, never before or interleaved with the status polls.
+func readInvocation(ctx context.Context, h Host, commandID, label, query, format string) (string, error) {
 	cmd := exec.CommandContext(ctx, "aws",
 		"ssm", "get-command-invocation",
 		"--command-id", commandID,
 		"--instance-id", h.Target,
 		"--region", h.Region,
-		"--query", "StandardOutputContent",
-		"--output", "text",
+		"--query", query,
+		"--output", format,
 	)
 	setCmdEnv(cmd, h.Env)
 	cmd.WaitDelay = subprocessWaitDelay
@@ -225,15 +249,15 @@ func ssmCommandOutput(ctx context.Context, h Host, commandID string) (string, er
 		}
 		// A cancelled context killed the subprocess, which is why it failed.
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", fmt.Errorf("hostexec: ssm get-command-invocation (output): %w", ctxErr)
+			return "", fmt.Errorf("hostexec: ssm get-command-invocation (%s): %w", label, ctxErr)
 		}
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
-				return "", fmt.Errorf("hostexec: ssm get-command-invocation (output): %w: %s", err, msg)
+				return "", fmt.Errorf("hostexec: ssm get-command-invocation (%s): %w: %s", label, err, msg)
 			}
 		}
-		return "", fmt.Errorf("hostexec: ssm get-command-invocation (output): %w", err)
+		return "", fmt.Errorf("hostexec: ssm get-command-invocation (%s): %w", label, err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

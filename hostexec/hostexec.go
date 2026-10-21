@@ -40,7 +40,7 @@ var SSMPollTimeout = 10 * time.Minute
 
 // Run executes script on h, and an ssm caller must never embed a secret in script because AWS records it in CloudTrail; pass a reference the host resolves itself, while the ssh driver carries the script on stdin only.
 //
-// Host and opts are validated before anything is spawned, and any option on the ssh driver is rejected rather than ignored. With WithDetachedPoll the call can outlive ctx's cancellation by up to the poll bound, SSMPollTimeout or the delivery plus execution timeouts plus one SSMPollInterval if longer.
+// A failed ssm command answers a *CommandFailed. Host and opts are validated before anything is spawned, and any option on the ssh driver is rejected rather than ignored. With WithDetachedPoll the call can outlive ctx's cancellation by up to the poll bound, SSMPollTimeout or the delivery plus execution timeouts plus one SSMPollInterval if longer.
 func Run(ctx context.Context, h Host, script string, opts ...SendOption) error {
 	if err := validateHost(h); err != nil {
 		return err
@@ -62,7 +62,34 @@ func Run(ctx context.Context, h Host, script string, opts ...SendOption) error {
 	}
 }
 
+// CommandFailed is the error Run and RunOutput return when an ssm command ends Failed, Cancelled, TimedOut or Delivery Timed Out, carrying what the box reported.
+type CommandFailed struct {
+	CommandID, Status string
+	// ExitCode is the invocation's ResponseCode, which SSM sets to -1 for a command that never ran.
+	ExitCode int
+	// Stderr and Stdout are trimmed of outer whitespace, and the kit scrubs nothing from them.
+	Stderr, Stdout string
+	// ReadErr is why the exit code and output could not be read, which leaves them zero.
+	ReadErr error
+}
+
+func (e *CommandFailed) Error() string {
+	msg := fmt.Sprintf("hostexec: ssm command %s reached terminal state %s", e.CommandID, e.Status)
+	if e.ReadErr != nil {
+		return msg + ", and its output could not be read: " + e.ReadErr.Error()
+	}
+	msg += fmt.Sprintf(" with exit code %d", e.ExitCode)
+	if e.Stderr != "" {
+		msg += ": " + e.Stderr
+	}
+	return msg
+}
+
+func (e *CommandFailed) Unwrap() error { return e.ReadErr }
+
 // RunOutput runs script as Run does, with the same CloudTrail constraint on secrets, and returns its stdout with only the outer whitespace trimmed, never partial output alongside an error.
+//
+// A failed ssm command's output arrives in a *CommandFailed instead, so a caller that rebuilds errors from scrubbed text matches it with errors.As before scrubbing.
 //
 // With WithDetachedPoll the output read runs on the detached context too, so it can outlive ctx's cancellation by up to the same poll bound.
 func RunOutput(ctx context.Context, h Host, script string, opts ...SendOption) (string, error) {
