@@ -10,6 +10,7 @@ func key(n int) string { return fmt.Sprintf("MIT-%d", n) }
 
 func TestCheck(t *testing.T) {
 	keyed := key(12) + ": fix the thing"
+	referenced := "operator-kit exports the host-cannot-run refusal class (refs " + key(5141) + ")"
 	cases := []struct {
 		name    string
 		title   string
@@ -18,6 +19,8 @@ func TestCheck(t *testing.T) {
 	}{
 		{"a keyed leading subject and a keyed title pass", keyed, []commit{{Subject: keyed}}, ""},
 		{"a Jira trailer and a keyed title pass", keyed, []commit{{Subject: "fix the thing", Body: "Jira: " + key(12)}}, ""},
+		{"a reference title and a commit ending in the same refs group pass", referenced, []commit{{Subject: referenced}}, ""},
+		{"a reference title and a Jira-refs trailer pass", referenced, []commit{{Subject: "export the refusal class", Body: "Jira-refs: " + key(5141)}}, ""},
 		{"a leading list of several keys passes", key(12) + ", " + key(13) + ": fix two things", []commit{{Subject: key(12) + ", " + key(13) + ": fix two things"}}, ""},
 		{"a key only inside a merge subject's branch name is no delivery intent", key(3149) + ": delete gets instance config", []commit{
 			{Subject: "delete gets instance config"},

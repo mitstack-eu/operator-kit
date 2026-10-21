@@ -126,12 +126,8 @@ func TestRun(t *testing.T) {
 					t.Errorf("Authorization = %v, want no header when the token is empty", vals)
 				}
 			}},
-		{"a push delivering no key records nothing and succeeds", []string{"chore: bump platform submodule to abc (#1092 automation)"}, 0, nil, 200, "ok", "", 0, nil, "recorded nothing",
-			func(t *testing.T, o outcome) {
-				if len(o.reqs) != 0 {
-					t.Errorf("server received %d requests, want none when no key is delivered", len(o.reqs))
-				}
-			}},
+		{"a push delivering no key records nothing and succeeds", []string{"chore: bump platform submodule to abc (#1092 automation)"}, 0, nil, 200, "ok", "", 0, nil, "recorded nothing", nil},
+		{"a subject naming a key only in a refs group records nothing", []string{"operator-kit exports the host-cannot-run refusal class (refs #5141)"}, 0, nil, 200, "ok", "", 0, nil, "recorded nothing", nil},
 		{"an unset TRACKER_BASE_URL never silently skips a real delivery", []string{"#1: fix"}, 0, nil, noBoard, "", "", 1, nil, "no board to record on", nil},
 		{"an unset TRACKER_BASE_URL is moot when nothing would be recorded", []string{"chore: bump platform submodule to abc (#1092 automation)"}, 0, nil, noBoard, "", "", 0, nil, "recorded nothing", nil},
 		{"a rejected record fails carrying the status and the body", []string{"#1: fix"}, 0, nil, 500, "boom-details", "", 1, keys(1), "board returned 500: boom-details", nil},
@@ -210,10 +206,14 @@ func TestRun(t *testing.T) {
 			if code != tc.wantCode || !strings.Contains(o.out, tc.wantInOut) {
 				t.Fatalf("Run(%q) = %d, output %q; want %d, output carrying %q", args, code, o.out, tc.wantCode, tc.wantInOut)
 			}
+			wantReqs := 0
 			if tc.wantKeys != nil {
-				if len(o.reqs) != 1 {
-					t.Fatalf("server received %d requests, want exactly 1", len(o.reqs))
-				}
+				wantReqs = 1
+			}
+			if len(o.reqs) != wantReqs {
+				t.Fatalf("server received %d requests, want %d", len(o.reqs), wantReqs)
+			}
+			if tc.wantKeys != nil {
 				if got := delivered(t, o.reqs[0].body).Keys; !slices.Equal(got, tc.wantKeys) {
 					t.Errorf("delivered keys = %v, want %v", got, tc.wantKeys)
 				}
