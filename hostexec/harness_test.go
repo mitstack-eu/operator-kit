@@ -4,6 +4,7 @@ package hostexec_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ const (
 	fixtureComment  = "mitstack app-runner install lane-a on i-0fixture"
 	fixtureScript   = "echo hi"
 	fixtureCommands = `commands=["echo hi"]`
+	failureQuery    = "{ResponseCode: ResponseCode, StandardErrorContent: StandardErrorContent, StandardOutputContent: StandardOutputContent}"
 )
 
 func ssmHost() hostexec.Host {
@@ -42,12 +44,12 @@ var entryPoints = []entryPoint{
 	{"RunOutput", hostexec.RunOutput},
 }
 
-// awsFake configures the aws stub: each Status poll fails pollFailures times, then serves statuses holding the last, or InProgress while held; hang and sendHangs sleep until killed, and leakGrandchild holds stderr open past WaitDelay.
+// awsFake configures the aws stub: each Status poll fails pollFailures times, then serves statuses holding the last, or InProgress while held; hang and sendHangs sleep until killed, leakGrandchild holds stderr open past WaitDelay, and failureUnreadable fails the read of a failed command's details.
 type awsFake struct {
-	noCommandID, held, hang, sendHangs, leakGrandchild bool
-	statuses                                           []string
-	pollFailures                                       int
-	stdout                                             string
+	noCommandID, held, hang, sendHangs, leakGrandchild, failureUnreadable bool
+	statuses                                                              []string
+	pollFailures, exitCode                                                int
+	stdout, stderr                                                        string
 }
 
 type fakes struct{ dir string }
@@ -83,6 +85,11 @@ func newFakes(t *testing.T, aws awsFake, sshBody string) fakes {
 		}
 		return ""
 	}
+	failure, _ := json.Marshal(map[string]any{"ResponseCode": aws.exitCode, "StandardErrorContent": aws.stderr + "\n", "StandardOutputContent": aws.stdout + "\n"})
+	failureAnswer := "printf '%s\\n' " + shQuote(string(failure)) + "; exit 0"
+	if aws.failureUnreadable {
+		failureAnswer = `echo "fake ssm: invocation unreadable" >&2; exit 1`
+	}
 	d := shQuote(f.dir)
 	awsScript := "#!/usr/bin/env bash\nset -u\n" + fmt.Sprintf(record, d+"/aws") +
 		optional(aws.leakGrandchild, "( sleep 3 & )\n") + fmt.Sprintf(`case "${2:-}" in
@@ -91,9 +98,10 @@ send-command)
   printf '%%s\n' %[2]s; exit 0;;
 get-command-invocation)
   : > %[3]s/poll-started
-  query=""; prev=""
-  for a in "$@"; do [ "$prev" = "--query" ] && query="$a"; prev="$a"; done
+  query=""; output=""; prev=""
+  for a in "$@"; do [ "$prev" = "--query" ] && query="$a"; [ "$prev" = "--output" ] && output="$a"; prev="$a"; done
   if [ "$query" = "StandardOutputContent" ]; then printf '%%s\n' %[4]s; exit 0; fi
+  if [ "$query" = %[8]s ] && [ "$output" = json ]; then %[9]s; fi
   %[5]s
   if [ -f %[3]s/hold ]; then echo InProgress; exit 0; fi
   n=0; [ -f %[3]s/count ] && n=$(cat %[3]s/count); echo $((n+1)) > %[3]s/count
@@ -104,7 +112,7 @@ get-command-invocation)
 esac
 echo "fake aws: unrecognised subcommand: $*" >&2
 exit 2
-`, optional(aws.sendHangs, "sleep 5"), shQuote(commandID), d, shQuote(aws.stdout), optional(aws.hang, "exec sleep 10"), aws.pollFailures, strings.Join(quoted, " "))
+`, optional(aws.sendHangs, "sleep 5"), shQuote(commandID), d, shQuote(aws.stdout), optional(aws.hang, "exec sleep 10"), aws.pollFailures, strings.Join(quoted, " "), shQuote(failureQuery), failureAnswer)
 	sshScript := "#!/usr/bin/env bash\nset -u\n" + fmt.Sprintf(record, d+"/ssh") + fmt.Sprintf(`prev=""
 for a in "$@"; do
   if [ "$prev" = "-i" ]; then stat -c '%%a' "$a" > %[1]s/perm 2>/dev/null; printf '%%s' "$a" > %[1]s/idpath; fi

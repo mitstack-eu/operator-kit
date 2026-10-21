@@ -104,7 +104,7 @@ func TestSSM_PollOutcome(t *testing.T) {
 	}
 	for _, status := range []string{"Failed", "Cancelled", "TimedOut", "Delivery Timed Out"} {
 		for _, entry := range []string{"Run", "RunOutput"} {
-			cases = append(cases, outcome{entry + " names the terminal status " + status + " with no output", entry, awsFake{statuses: []string{status}, stdout: "should never be read"}, 0, "", status, []string{"Status"}})
+			cases = append(cases, outcome{entry + " names the terminal status " + status + " with no output", entry, awsFake{statuses: []string{status}, stdout: "should never be read"}, 0, "", status, []string{"Status", failureQuery}})
 		}
 	}
 	for _, tc := range cases {
@@ -124,6 +124,51 @@ func TestSSM_PollOutcome(t *testing.T) {
 				t.Errorf("get-command-invocation queries = %q, want %q", got, tc.wantQueries)
 			}
 		})
+	}
+}
+
+func TestSSM_ATerminalFailureIsACommandFailedCarryingWhatTheBoxReported(t *testing.T) {
+	const daemonDown = "docker: Cannot connect to the Docker daemon at unix:///var/run/docker.sock"
+	cases := []struct {
+		fake awsFake
+		want hostexec.CommandFailed
+	}{
+		{awsFake{statuses: []string{"Failed"}, exitCode: 125, stderr: daemonDown, stdout: "pulling"},
+			hostexec.CommandFailed{CommandID: "cmd-1", Status: "Failed", ExitCode: 125, Stderr: daemonDown, Stdout: "pulling"}},
+		{awsFake{statuses: []string{"Cancelled"}, exitCode: -1}, hostexec.CommandFailed{CommandID: "cmd-1", Status: "Cancelled", ExitCode: -1}},
+		{awsFake{statuses: []string{"TimedOut"}, exitCode: 124, stderr: "slow"}, hostexec.CommandFailed{CommandID: "cmd-1", Status: "TimedOut", ExitCode: 124, Stderr: "slow"}},
+		{awsFake{statuses: []string{"Delivery Timed Out"}, exitCode: -1}, hostexec.CommandFailed{CommandID: "cmd-1", Status: "Delivery Timed Out", ExitCode: -1}},
+	}
+	for _, ep := range entryPoints {
+		for _, tc := range cases {
+			t.Run(ep.name+"/"+tc.want.Status, func(t *testing.T) {
+				newFakes(t, tc.fake, "")
+
+				out, err := ep.call(context.Background(), ssmHost(), "true")
+
+				var failed *hostexec.CommandFailed
+				if out != "" || !errors.As(err, &failed) || *failed != tc.want {
+					t.Fatalf("%s() = %q, %#v; want no output and the error %#v", ep.name, out, err, tc.want)
+				}
+				for _, part := range []string{"cmd-1", tc.want.Status, tc.want.Stderr} {
+					if !strings.Contains(err.Error(), part) {
+						t.Errorf("Error() = %q, want it to carry %q", err.Error(), part)
+					}
+				}
+			})
+		}
+	}
+}
+
+// An unreadable failure still names the command and its status, and says why its output is missing.
+func TestSSM_AFailureWhoseDetailsCannotBeReadStillNamesItsStatus(t *testing.T) {
+	newFakes(t, awsFake{statuses: []string{"Failed"}, failureUnreadable: true}, "")
+
+	err := hostexec.Run(context.Background(), ssmHost(), "true")
+
+	var failed *hostexec.CommandFailed
+	if !errors.As(err, &failed) || failed.Status != "Failed" || failed.ReadErr == nil || !strings.Contains(err.Error(), "invocation unreadable") {
+		t.Errorf("Run() = %v; want a CommandFailed naming Failed whose ReadErr carries the read failure", err)
 	}
 }
 
