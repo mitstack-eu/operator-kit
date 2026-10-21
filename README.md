@@ -968,6 +968,12 @@ credential and then starting a container, reports each one, so the helper can
 break the call between them. A fake that reports no side effect fails the
 helper, since no setup would be broken.
 
+The helper counts side effects by their position, so it needs the block to
+make them in the same order on every run. A run that never reaches the side
+effect it breaks fails the helper. A block that recovers from the broken side
+effect, say by retrying it, may answer the subscribe with 200, and the helper
+still checks the teardown that follows.
+
 ```go
 func TestUnsubscribeDeletes_AfterASetupBrokenAtAnySideEffect(t *testing.T) {
 	kittest.AssertTeardownAfterBrokenSetup(t, kittest.BrokenSetup{

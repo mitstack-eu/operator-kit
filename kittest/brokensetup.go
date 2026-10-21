@@ -23,7 +23,7 @@ type BrokenSetup struct {
 
 // FaultProvider is a fake provider that keeps its state across the block processes it serves.
 type FaultProvider interface {
-	// Process returns the block as a newly started operator over this provider, remembering no earlier request.
+	// Process returns the block as a newly started operator over this provider, holding none of an earlier process's own state.
 	Process() (handler.Resource, map[string]handler.Observer)
 	Holds(subscriptionID string) []string
 }
