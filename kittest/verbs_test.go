@@ -18,6 +18,17 @@ func conforming() kittest.VerbSeams {
 		Upgrade:                 func() (bool, error) { return true, nil },
 		ValidateWhileConverging: func() (bool, bool) { return true, false },
 		ValidateWhenDead:        func() (bool, bool) { return false, true },
+		Redrive:                 func() (kittest.RedriveRun, error) { return completedRedrive, nil },
+	}
+}
+
+var completedRedrive = kittest.RedriveRun{FirstPending: true, Redrive: true, Settled: true}
+
+func redrive(edit func(*kittest.RedriveRun)) func(s *kittest.VerbSeams) {
+	return func(s *kittest.VerbSeams) {
+		run := completedRedrive
+		edit(&run)
+		s.Redrive = func() (kittest.RedriveRun, error) { return run, nil }
 	}
 }
 
@@ -43,6 +54,11 @@ func TestCheckVerbSemantics(t *testing.T) {
 		{"an upgrade that clobbers existing state fails", func(s *kittest.VerbSeams) { s.Upgrade = func() (bool, error) { return false, nil } }, 1, ""},
 		{"converging reported as an error fails", func(s *kittest.VerbSeams) { s.ValidateWhileConverging = func() (bool, bool) { return false, true } }, 1, ""},
 		{"a dead resource reported pending fails, since it would wait forever", func(s *kittest.VerbSeams) { s.ValidateWhenDead = func() (bool, bool) { return true, false } }, 1, ""},
+		{"a block with no long step leaves Redrive nil and passes", func(s *kittest.VerbSeams) { s.Redrive = nil }, 0, ""},
+		{"a long step that never outlasts the first subscribe fails", redrive(func(r *kittest.RedriveRun) { r.FirstPending = false }), 1, "never outlasted"},
+		{"a finished step the validate does not report fails, since the engine never re-drives", redrive(func(r *kittest.RedriveRun) { r.Redrive = false }), 1, "redrive"},
+		{"a re-drive that changes a resource the first subscribe made fails", redrive(func(r *kittest.RedriveRun) { r.Changed = 1 }), 1, "changed 1 resource"},
+		{"a re-drive that leaves the step pending fails", redrive(func(r *kittest.RedriveRun) { r.Settled = false }), 1, "left the step pending"},
 		{"a nil seam fails rather than skipping, since a skipped check looks like a pass", func(s *kittest.VerbSeams) { s.Upgrade = nil }, 1, ""},
 		{"a nil seam's problem names the seam", func(s *kittest.VerbSeams) { s.ValidateWhenDead = nil }, 1, "ValidateWhenDead"},
 		{"every violation is reported, not just the first", func(s *kittest.VerbSeams) {

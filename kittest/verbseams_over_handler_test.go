@@ -29,20 +29,52 @@ func TestVerbSeamsOverHandler(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := kittest.NewSigner(t, "kid-1", 7)
-			h, err := handler.New(handler.Config{Resource: tc.fake, JWKSURL: s.JWKSServer(t), VerbBudget: 2, PollInterval: time.Millisecond, Sleep: func(context.Context, time.Duration) {}})
-			if err != nil {
-				t.Fatalf("handler.New: %v", err)
-			}
 
-			problems := kittest.CheckVerbSemantics(kittest.VerbSeamsOverHandler(t, h, s, tc.fake))
+			problems := kittest.CheckVerbSemantics(kittest.VerbSeamsOverHandler(t, newHandler(t, s, tc.fake), s, tc.fake))
 
-			found := false
-			for _, p := range problems {
-				found = found || strings.Contains(p, tc.wantNamed)
-			}
-			if (tc.wantNamed == "" && len(problems) != 0) || (tc.wantNamed != "" && !found) {
-				t.Errorf("CheckVerbSemantics = %q, want a problem carrying %q (none when empty)", problems, tc.wantNamed)
-			}
+			wantProblem(t, problems, tc.wantNamed)
 		})
+	}
+}
+
+func TestRedriveOverHandler(t *testing.T) {
+	cases := []struct {
+		name      string
+		fake      *kittest.FakeBuilder
+		wantNamed string
+	}{
+		{"a conforming FakeBuilder passes cleanly through a real handler", &kittest.FakeBuilder{}, ""},
+		{"HideFinish fails the step signal", &kittest.FakeBuilder{HideFinish: true}, "redrive"},
+		{"RebuildOnRedrive fails the resumed re-drive", &kittest.FakeBuilder{RebuildOnRedrive: true}, "changed 1 resource"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := kittest.NewSigner(t, "kid-1", 7)
+			plain := &kittest.FakeResource{}
+			seams := kittest.VerbSeamsOverHandler(t, newHandler(t, s, plain), s, plain)
+			seams.Redrive = kittest.RedriveOverHandler(t, newHandler(t, s, tc.fake), s, tc.fake)
+
+			wantProblem(t, kittest.CheckVerbSemantics(seams), tc.wantNamed)
+		})
+	}
+}
+
+func newHandler(t *testing.T, s *kittest.Signer, r handler.Resource) *handler.Handler {
+	t.Helper()
+	h, err := handler.New(handler.Config{Resource: r, JWKSURL: s.JWKSServer(t), VerbBudget: 2, PollInterval: time.Millisecond, Sleep: func(context.Context, time.Duration) {}})
+	if err != nil {
+		t.Fatalf("handler.New: %v", err)
+	}
+	return h
+}
+
+func wantProblem(t *testing.T, problems []string, wantNamed string) {
+	t.Helper()
+	found := false
+	for _, p := range problems {
+		found = found || strings.Contains(p, wantNamed)
+	}
+	if (wantNamed == "" && len(problems) != 0) || (wantNamed != "" && !found) {
+		t.Errorf("CheckVerbSemantics = %q, want a problem carrying %q (none when empty)", problems, wantNamed)
 	}
 }

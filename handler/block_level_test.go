@@ -816,7 +816,7 @@ func (o cancellingObserver) ObserveResource(ctx context.Context, r contract.Reso
 	return obs, err
 }
 
-func TestBlockLevel_APendingAnswerCarriesTheSecretOutputsOfEachProvidedResourceAlreadyObservedPresent(t *testing.T) {
+func TestBlockLevel_APendingAnswerCarriesTheSecretOutputsAlreadyObservedPresentAndAValidateTheFinishedWorkOfAnUnknownResource(t *testing.T) {
 	const deployArn = "arn:aws:iam::1:role/deploy"
 	for _, tc := range []struct {
 		name, op string
@@ -835,7 +835,7 @@ func TestBlockLevel_APendingAnswerCarriesTheSecretOutputsOfEachProvidedResourceA
 				deploy = cancellingObserver{Observer: deploy, settledOn: contract.Present, cancel: cancel}
 			}
 			obs := roleObservers(map[string]string{"audit-role": "arn:aws:iam::1:role/audit"})
-			obs["deploy-role"], obs["ecr-push-role"] = deploy, fixed(contract.Observation{State: contract.Unknown})
+			obs["deploy-role"], obs["ecr-push-role"] = deploy, fixed(contract.Observation{State: contract.Unknown, Redrive: true})
 
 			status, resp := serveRoleBlock(t, ctx, tc.op, obs)
 
@@ -847,6 +847,9 @@ func TestBlockLevel_APendingAnswerCarriesTheSecretOutputsOfEachProvidedResourceA
 			}
 			if want := map[string]string{"roleArn": deployArn}; !reflect.DeepEqual(resp.SecretOutputs, want) {
 				t.Errorf("SecretOutputs = %v, want %v: the merged map the platform judges and stores by name", resp.SecretOutputs, want)
+			}
+			if want := tc.op == "validate" && !tc.ended; resp.Redrive != want {
+				t.Errorf("redrive = %v, want %v: only a validate that observed the unknown resource reports its finished work", resp.Redrive, want)
 			}
 		})
 	}

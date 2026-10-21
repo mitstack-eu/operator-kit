@@ -24,8 +24,8 @@ var goldenSets = []goldenSet{
 		[]string{"subscribe", "unsubscribe", "upgrade", "validate"},
 		[]string{"invalid-missing-nonce", "invalid-unknown-verb"}},
 	{"response goldens", contract.ResponseGoldens, contract.ResponseGoldensDir, contract.ValidResponseGoldens, contract.InvalidResponseGoldens,
-		[]string{"absent", "error", "last-error", "null-outputs", "outputs", "pending", "secret-outputs", "still-present"},
-		[]string{"invalid-absent-not-bool", "invalid-outputs-not-object", "invalid-outputs-not-strings", "invalid-pending-not-bool",
+		[]string{"absent", "error", "last-error", "null-outputs", "outputs", "pending", "pending-redrive", "secret-outputs", "still-present"},
+		[]string{"invalid-absent-not-bool", "invalid-outputs-not-object", "invalid-outputs-not-strings", "invalid-pending-not-bool", "invalid-pending-redrive-not-bool",
 			"invalid-resource-secret-outputs-entry-not-object", "invalid-resource-secret-outputs-not-object",
 			"invalid-resource-secret-outputs-value-not-string", "invalid-secret-outputs-not-strings"}},
 }

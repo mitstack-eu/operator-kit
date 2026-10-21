@@ -36,6 +36,7 @@ func TestDecodeResponse_CarriesEveryGoldenFieldOntoTheResponse(t *testing.T) {
 			want := contract.Response{Outputs: strMap(m["outputs"]), SecretOutputs: strMap(m["secretOutputs"]), Error: strOf(m, "error"),
 				StatusDetail: strOf(m, "statusDetail"), LastError: strOf(m, "lastError")}
 			want.Pending, _ = m["pending"].(bool)
+			want.Redrive, _ = m["redrive"].(bool)
 			if absent, ok := m["absent"].(bool); ok {
 				want.Absent = &absent
 			}
@@ -50,14 +51,15 @@ func TestDecodeResponse_CarriesEveryGoldenFieldOntoTheResponse(t *testing.T) {
 func TestDecodeResponse_EveryResponseGoldenDecodesAsBefore(t *testing.T) {
 	f, tr := false, true
 	want := map[string]contract.Response{
-		"absent":         {Absent: &tr},
-		"error":          {Error: "subscription quota exceeded for this org"},
-		"last-error":     {LastError: "timed out waiting for the load balancer to become healthy"},
-		"null-outputs":   {},
-		"outputs":        {Outputs: map[string]string{"instanceId": "i-0123456789abcdef0", "endpoint": "https://example.apps.mitstack.dev"}},
-		"pending":        {Pending: true, StatusDetail: "waiting for the VPC to finish provisioning"},
-		"secret-outputs": {SecretOutputs: map[string]string{"apiKey": "sk-example-not-a-real-secret"}},
-		"still-present":  {Absent: &f},
+		"absent":          {Absent: &tr},
+		"error":           {Error: "subscription quota exceeded for this org"},
+		"last-error":      {LastError: "timed out waiting for the load balancer to become healthy"},
+		"null-outputs":    {},
+		"outputs":         {Outputs: map[string]string{"instanceId": "i-0123456789abcdef0", "endpoint": "https://example.apps.mitstack.dev"}},
+		"pending":         {Pending: true, StatusDetail: "waiting for the VPC to finish provisioning"},
+		"pending-redrive": {Pending: true, Redrive: true, StatusDetail: "the builder powered off; the snapshot comes next"},
+		"secret-outputs":  {SecretOutputs: map[string]string{"apiKey": "sk-example-not-a-real-secret"}},
+		"still-present":   {Absent: &f},
 	}
 	valid := validResponseGoldens(t)
 	for name := range valid {
@@ -98,6 +100,7 @@ func TestDecodeResponse_RejectsInvalidGoldensNamingField(t *testing.T) {
 		"invalid-outputs-not-object":                       "outputs",
 		"invalid-outputs-not-strings":                      "outputs",
 		"invalid-pending-not-bool":                         "pending",
+		"invalid-pending-redrive-not-bool":                 "redrive",
 		"invalid-secret-outputs-not-strings":               "secretOutputs",
 		"invalid-resource-secret-outputs-not-object":       "resourceSecretOutputs",
 		"invalid-resource-secret-outputs-entry-not-object": "resourceSecretOutputs",
@@ -307,6 +310,11 @@ func TestResponseSchema_DeclaresEachFieldTheResponseTypesEncode(t *testing.T) {
 			replaces := schemaAt(t, doc, props, "replaces")
 			if !hasType(replaces, "array") || !hasType(schemaAt(t, doc, replaces, "items"), "string") {
 				t.Errorf("properties.replaces = %v, want an array of strings", replaces)
+			}
+		}},
+		{"redrive is a boolean", func(t *testing.T) {
+			if f := schemaAt(t, doc, props, "redrive"); !hasType(f, "boolean") {
+				t.Errorf("properties.redrive type = %v, want boolean", schemaTypes(f))
 			}
 		}},
 		{"resources is an optional object of outcomes by name", func(t *testing.T) {

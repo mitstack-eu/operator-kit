@@ -114,6 +114,8 @@ func TestServe_AnswersEachVerbOverOneResource(t *testing.T) {
 			r:      fake(&kittest.FakeResource{ObserveState: stateOf(contract.Unknown), Outputs: map[string]string{"k": "v"}, StatusDetail: "converging"}),
 			status: http.StatusOK, calls: [3]int{0, 1, 0},
 			body: `{"outputs":{"k":"v"},"pending":true,"statusDetail":"converging"}`},
+		{name: "a validate observed unknown with its work finished adds redrive beside pending", op: "validate", r: fake(&kittest.FakeResource{ObserveState: stateOf(contract.Unknown), Redrive: true}),
+			status: http.StatusOK, calls: [3]int{0, 1, 0}, body: `{"outputs":null,"pending":true,"redrive":true}`},
 		{name: "a validate observe error is classified, never pending", op: "validate",
 			r:      fake(&kittest.FakeResource{ObserveErr: errors.New("describe call failed")}),
 			status: http.StatusInternalServerError, calls: [3]int{0, 1, 0},

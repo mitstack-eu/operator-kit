@@ -12,6 +12,7 @@ var invalidGoldenField = map[string]string{
 	"invalid-outputs-not-strings":        "outputs",
 	"invalid-outputs-not-object":         "outputs",
 	"invalid-pending-not-bool":           "pending",
+	"invalid-pending-redrive-not-bool":   "redrive",
 	"invalid-absent-not-bool":            "absent",
 	"invalid-secret-outputs-not-strings": "secretOutputs",
 
