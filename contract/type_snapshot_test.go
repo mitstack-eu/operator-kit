@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 func TestParseTypeSnapshot_ReadsThePlatformsSnapshot(t *testing.T) {

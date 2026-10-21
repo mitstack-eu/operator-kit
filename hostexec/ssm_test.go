@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/hostexec"
+	"github.com/mitstack-eu/operator-kit/v3/hostexec"
 )
 
 // The aws CLI shorthand parser decodes only \" and \\, so the commands JSON carries <, > and & literally, one array element per script line; the whole script reaches argv and CloudTrail, so it never carries a secret.

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 const v1betaManifest = `apiVersion: mitstack/v1beta
@@ -18,6 +18,7 @@ metadata:
   name: Sample Block
 spec:
   version: 1.2.0
+  receivesAppSecrets: true
   description: >
     Creates the sample's network
     in the consumer's account.
@@ -48,24 +49,6 @@ spec:
     endpoint: https://example.test/hook
     operations: [subscribe]
     contract: kit/v1
-`
-
-const v1alphaManifest = `apiVersion: mitstack/v1alpha
-kind: Block
-metadata:
-  id: alpha-block
-  name: Alpha Block
-spec:
-  version: 0.3.0
-  receivesAppSecrets: true
-  lifecycle:
-    endpoint: https://example.test/hook
-    operations: [subscribe]
-    verbBudgets:
-      subscribe: 30s
-  naming:
-    appName:
-      maxLength: 40
 `
 
 func writeManifest(t *testing.T, raw string) string {
@@ -129,11 +112,8 @@ func TestManifest_ReadsSectionsAndScalarsByKeyPath(t *testing.T) {
 		{"spec scalar releaseNote absent", v1betaManifest, specScalar("releaseNote"), "", false, nil},
 		{"spec scalar on a section fails", v1betaManifest, specScalar("lifecycle"), nil, false, []string{"spec.lifecycle", "not a scalar"}},
 		{"spec scalar on an unknown key fails naming the path", v1betaManifest, specScalar("nosuch"), nil, false, []string{"spec.nosuch"}},
-		{"v1alpha root kind by its yaml path", v1alphaManifest, section("kind"), "Block", true, nil},
-		{"v1alpha map key under a pointer section", v1alphaManifest, section("spec.lifecycle.verbBudgets.subscribe"), "30s", true, nil},
-		{"v1alpha map key the manifest does not set", v1alphaManifest, section("spec.lifecycle.verbBudgets.upgrade"), nil, false, nil},
-		{"v1alpha integer through two pointers", v1alphaManifest, section("spec.naming.appName.maxLength"), 40, true, nil},
-		{"v1alpha boolean spec scalar", v1alphaManifest, specScalar("receivesAppSecrets"), "true", true, nil},
+		{"boolean spec scalar", v1betaManifest, specScalar("receivesAppSecrets"), "true", true, nil},
+		{"boolean spec scalar left false reads absent", blankNoteManifest, specScalar("receivesAppSecrets"), "", false, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

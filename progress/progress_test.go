@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/progress"
+	"github.com/mitstack-eu/operator-kit/v3/progress"
 )
 
 func TestObserve(t *testing.T) {

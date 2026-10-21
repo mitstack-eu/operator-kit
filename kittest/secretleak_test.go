@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
-	"github.com/mitstack-eu/operator-kit/v2/webhook"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/webhook"
 )
 
 const leakSecret = "sk-live-leak-canary-0f9e8d7c6b5a"

@@ -11,29 +11,25 @@ ENTRYPOINT ["/usr/local/bin/fixture"]
 -- main.go --
 package main
 
-import "github.com/mitstack-eu/operator-kit/v2/handler"
+import "github.com/mitstack-eu/operator-kit/v3/handler"
 
 var _ = handler.New
 
 func main() {}
 -- manifest.yaml --
-apiVersion: mitstack/v1alpha
-kind: Block
+apiVersion: mitstack/v1beta
+type: block
 metadata:
   id: blockverify-kitv1-fixture
   name: blockverify kit/v1 fixture block
   owner: blockverify-tests
 spec:
-  layer: backend
   version: 1.0.0
   description: >
     A minimal fixture block on the kit/v1 lifecycle contract, used only to
     prove blockverify judges it by the kit/v1 rule.
-  provides:
-    - blockverify-kitv1-capability
-  requires: []
+  resources: [aws.s3-bucket]
   lifecycle:
-    # kit/v1: the operator serves its verbs through the kit's handler.
-    contract: kit/v1
     endpoint: https://api.mitstack.dev/operators/blockverify-kitv1-fixture/hook
     operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1

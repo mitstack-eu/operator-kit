@@ -2,17 +2,16 @@
 package handler_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/handler"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
-	"github.com/mitstack-eu/operator-kit/v2/webhook"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/handler"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/webhook"
 )
 
 // guardSecret is a request secret every row sends, so the scrub and the output refusal are part of what the bytes pin.
@@ -23,14 +22,6 @@ func guardSecrets() map[string]any {
 }
 
 func stateOf(s contract.State) *contract.State { return &s }
-
-const retainedDetail = `"statusDetail":"the block declares it retains its resource on unsubscribe, so absence was not observed"`
-
-func failingHook(point string, err error) func(*handler.Config) {
-	return func(c *handler.Config) {
-		c.Hooks = map[string]handler.Hook{point: func(context.Context, contract.Desired) error { return err }}
-	}
-}
 
 func wantEach(t *testing.T, what string, calls []contract.Desired, check func(contract.Desired) (got, want any)) {
 	t.Helper()
@@ -107,11 +98,6 @@ func TestServe_AnswersEachVerbOverOneResource(t *testing.T) {
 			r:      fake(&kittest.FakeResource{EnsureErr: handler.Refuse("", "no class given")}),
 			status: http.StatusBadRequest, calls: [3]int{1, 0, 0}, class: "unclassified",
 			body: `{"outputs":null,"error":"refused:unclassified: no class given","statusDetail":"refused:unclassified: no class given"}`},
-		{name: "a refusing beforeEnsure hook is classified and Ensure never runs", op: "subscribe", r: fake(&kittest.FakeResource{}),
-			config: []func(*handler.Config){withManifest(manifestDeclaring(handler.HookBeforeEnsure)),
-				failingHook(handler.HookBeforeEnsure, handler.Refuse("policy-blocked", "org policy forbids this block"))},
-			status: http.StatusBadRequest, calls: [3]int{0, 0, 0}, class: "policy-blocked",
-			body: `{"outputs":null,"error":"refused:policy-blocked: org policy forbids this block","statusDetail":"refused:policy-blocked: org policy forbids this block"}`},
 		{name: "a settled output carrying a request secret is refused naming its key", op: "subscribe",
 			r:      fake(&kittest.FakeResource{Outputs: map[string]string{"token": guardSecret}}),
 			status: http.StatusBadRequest, calls: [3]int{1, 1, 0}, class: "secret-in-output",
@@ -157,36 +143,6 @@ func TestServe_AnswersEachVerbOverOneResource(t *testing.T) {
 			r:      fake(&kittest.FakeResource{Count: 1, DeleteErr: handler.Refuse("dependents-remain", "two apps still bind this database")}),
 			status: http.StatusBadRequest, calls: [3]int{0, 0, 1}, class: "dependents-remain",
 			body: `{"outputs":null,"error":"refused:dependents-remain: two apps still bind this database","statusDetail":"refused:dependents-remain: two apps still bind this database"}`},
-		{name: "a block declaring retainsOnUnsubscribe answers absent after one delete and no observe", op: "unsubscribe",
-			r:      fake(&kittest.FakeResource{Count: 1, ObserveState: stateOf(contract.Present)}),
-			config: []func(*handler.Config){withManifest(manifestWithRetains("true"))},
-			status: http.StatusOK, calls: [3]int{0, 0, 1},
-			body: `{"outputs":null,` + retainedDetail + `,"absent":true}`},
-		{name: "retainsOnUnsubscribe false behaves as no declaration", op: "unsubscribe",
-			r:      fake(&kittest.FakeResource{Count: 1, ObserveState: stateOf(contract.Present)}),
-			config: []func(*handler.Config){withManifest(manifestWithRetains("false"))},
-			status: http.StatusOK, calls: [3]int{0, 3, 1},
-			body: `{"outputs":null,"statusDetail":"observed present after 3 attempts","absent":false}`},
-		{name: "a failed delete is never answered absent though the block retains its resource", op: "unsubscribe",
-			r:      fake(&kittest.FakeResource{Count: 1, DeleteErr: errors.New("delete backend unavailable")}),
-			config: []func(*handler.Config){withManifest(manifestWithRetains("true"))},
-			status: http.StatusInternalServerError, calls: [3]int{0, 0, 1},
-			body: `{"outputs":null,"error":"delete backend unavailable"}`},
-		{name: "a failed afterDelete hook is never answered absent though the block retains its resource", op: "unsubscribe",
-			r: fake(&kittest.FakeResource{Count: 1}),
-			config: []func(*handler.Config){withManifest(manifestWithRetains("true", handler.HookAfterDelete)),
-				failingHook(handler.HookAfterDelete, errors.New("afterDelete hook failed"))},
-			status: http.StatusInternalServerError, calls: [3]int{0, 0, 1},
-			body: `{"outputs":null,"error":"afterDelete hook failed"}`},
-		{name: "a retaining block's delete outputs land beside absent true with no observe", op: "unsubscribe",
-			r:      &resource{FakeResource: &kittest.FakeResource{Count: 1, ObserveState: stateOf(contract.Present)}, deleteOutputs: map[string]string{"dataSnapshotId": "snap-789"}},
-			config: []func(*handler.Config){withManifest(manifestWithRetains("true"))},
-			status: http.StatusOK, calls: [3]int{0, 0, 1},
-			body: `{"outputs":{"dataSnapshotId":"snap-789"},` + retainedDetail + `,"absent":true}`},
-		{name: "a validate still observes once though the block retains its resource", op: "validate",
-			r:      fake(&kittest.FakeResource{Count: 1}),
-			config: []func(*handler.Config){withManifest(manifestWithRetains("true"))},
-			status: http.StatusOK, calls: [3]int{0, 1, 0}, body: present},
 		{name: "an unsubscribe hands Delete the request's params", op: "unsubscribe", r: fake(&kittest.FakeResource{Count: 1}),
 			fields: map[string]any{"params": map[string]string{"dataHandover": "snapshot"}},
 			status: http.StatusOK, calls: [3]int{0, 1, 1}, body: absent,
@@ -272,16 +228,6 @@ func TestServe_AnswersEachVerbOverOneResource(t *testing.T) {
 					return []any{d.PriorOutputs["region"], d.Instances == nil}, []any{"eu-west-1", true}
 				})
 			}},
-		{name: "an unsubscribe under the kind: Block hooks golden answers absent false after the budget", op: "unsubscribe",
-			r:      fake(&kittest.FakeResource{Count: 1, ObserveState: stateOf(contract.Present)}),
-			config: []func(*handler.Config){declaring(contract.HooksManifestGolden(), contract.HooksManifestGoldenDeclares()...)},
-			status: http.StatusOK, calls: [3]int{0, 3, 1},
-			body: `{"outputs":null,"statusDetail":"observed present after 3 attempts","absent":false}`},
-		{name: "an unsubscribe under the type: block twin answers as the kind: Block golden does", op: "unsubscribe",
-			r:      fake(&kittest.FakeResource{Count: 1, ObserveState: stateOf(contract.Present)}),
-			config: []func(*handler.Config){declaring(contract.TypeBlockHooksManifestGolden(), contract.HooksManifestGoldenDeclares()...)},
-			status: http.StatusOK, calls: [3]int{0, 3, 1},
-			body: `{"outputs":null,"statusDetail":"observed present after 3 attempts","absent":false}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

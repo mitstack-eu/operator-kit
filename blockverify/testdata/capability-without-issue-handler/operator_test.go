@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
-	"github.com/mitstack-eu/operator-kit/v2/webhook"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/webhook"
 )
 
 var desired = contract.Desired{Identity: contract.Identity{SubscriptionID: "sub-cluster", BlockID: "hcloud-k3s-cluster", OrgID: "org-fixture"}}

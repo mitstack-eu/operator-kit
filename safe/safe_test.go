@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/safe"
+	"github.com/mitstack-eu/operator-kit/v3/safe"
 )
 
 func allow() safe.Allowlist { return safe.NewAllowlist("api.github.com", "ghe.corp.example") }

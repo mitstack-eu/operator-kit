@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
-	"github.com/mitstack-eu/operator-kit/v2/webhook"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/webhook"
 )
 
 func depsFor(s *kittest.Signer, jwksURL string) webhook.Deps {

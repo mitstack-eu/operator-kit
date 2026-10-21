@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 const ciWorkflowPath = "../../.github/workflows/ci.yml"

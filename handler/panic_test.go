@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/handler"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/handler"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 const panicSecret = "top-secret-panic-db-password"
@@ -147,7 +147,7 @@ func waitForSingleFlightWaiters(t *testing.T, want int, timeout time.Duration) {
 		n := runtime.Stack(buf, true)
 		got := 0
 		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
-			if strings.Contains(g, "operator-kit/v2/handler.(*idempotencyCache).") && strings.Contains(g, "sync.(*WaitGroup).Wait") &&
+			if strings.Contains(g, "operator-kit/v3/handler.(*idempotencyCache).") && strings.Contains(g, "sync.(*WaitGroup).Wait") &&
 				!strings.Contains(g, "(*panickingResource).Ensure") {
 				got++
 			}

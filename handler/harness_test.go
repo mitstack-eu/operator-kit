@@ -14,15 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/handler"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
-	"github.com/mitstack-eu/operator-kit/v2/webhook"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/handler"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/webhook"
 )
 
 func noopSleep(context.Context, time.Duration) {}
-
-func noopHook(context.Context, contract.Desired) error { return nil }
 
 func baseConfig(t *testing.T, r handler.Resource, s *kittest.Signer) handler.Config {
 	t.Helper()
@@ -137,42 +135,11 @@ func withManifest[M string | []byte](manifest M) func(*handler.Config) {
 	return func(c *handler.Config) { c.Manifest = []byte(manifest) }
 }
 
-// declaring sets the manifest and registers noopHook under each named hook point.
-func declaring[M string | []byte](manifest M, hooks ...string) func(*handler.Config) {
-	return func(c *handler.Config) {
-		c.Manifest = []byte(manifest)
-		c.Hooks = map[string]handler.Hook{}
-		for _, name := range hooks {
-			c.Hooks[name] = noopHook
-		}
-	}
-}
-
 func withBudget(n int) func(*handler.Config) {
 	return func(c *handler.Config) { c.VerbBudget = n }
 }
 
-const v1alphaHead = "apiVersion: mitstack/v1alpha\nkind: Block\nmetadata:\n  id: test-block\n  name: Test Block\nspec:\n  layer: infra\n"
-
-// manifestWithLifecycle writes lines verbatim under spec.lifecycle.
-func manifestWithLifecycle(lines string) string {
-	return v1alphaHead + "  lifecycle:\n" + lines
-}
-
-func manifestDeclaring(hooks ...string) string {
-	if len(hooks) == 0 {
-		return manifestWithLifecycle("    hooks: []\n")
-	}
-	return manifestWithLifecycle("    hooks:\n      - " + strings.Join(hooks, "\n      - ") + "\n")
-}
-
-func manifestWithRetains(value string, hooks ...string) string {
-	lines := "    retainsOnUnsubscribe: " + value + "\n"
-	if len(hooks) > 0 {
-		lines += "    hooks:\n      - " + strings.Join(hooks, "\n      - ") + "\n"
-	}
-	return manifestWithLifecycle(lines)
-}
+const oldVersionManifest = "apiVersion: mitstack/v1alpha\nkind: Block\nmetadata:\n  id: test-block\n  name: Test Block\nspec:\n  layer: infra\n"
 
 func plainV1Beta(t *testing.T) []byte {
 	t.Helper()

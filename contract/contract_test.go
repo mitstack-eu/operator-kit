@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 type goldenSet struct {
@@ -164,10 +164,7 @@ func TestWireSchemas_AreDraft2020_12DocumentsWithAVersion(t *testing.T) {
 func TestContract_NamesItsConstantsAsThePlatformDoes(t *testing.T) {
 	cases := []struct{ name, got, want string }{
 		{"InvalidPrefix", contract.InvalidPrefix, "invalid-"},
-		{"ManifestAPIVersionV1Alpha", contract.ManifestAPIVersionV1Alpha, "mitstack/v1alpha"},
 		{"ManifestAPIVersion", contract.ManifestAPIVersion, "mitstack/v1beta"},
-		{"LifecycleHooksField", contract.LifecycleHooksField, "spec.lifecycle.hooks"},
-		{"AppNameNamingField", contract.AppNameNamingField, "spec.naming.appName"},
 		{"ManifestGoldensDir", contract.ManifestGoldensDir, "manifest-goldens"},
 	}
 	for _, tc := range cases {

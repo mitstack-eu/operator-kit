@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 const workflowPath = "../.github/workflows/publish-block.yml"

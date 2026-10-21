@@ -5,7 +5,7 @@ package kittest_test
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 const declaringManifest = `apiVersion: mitstack/v1alpha

@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
-	"github.com/mitstack-eu/operator-kit/v2/webhook"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/webhook"
 )
 
 const apiToken = "sample-api-token-5e4d3c2b1a"

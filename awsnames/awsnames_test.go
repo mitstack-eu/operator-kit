@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/awsnames"
+	"github.com/mitstack-eu/operator-kit/v3/awsnames"
 )
 
 func TestNames_MatchWhatTheEnginesActuallyCreate(t *testing.T) {

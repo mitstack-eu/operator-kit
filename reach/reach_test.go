@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/reach"
+	"github.com/mitstack-eu/operator-kit/v3/reach"
 )
 
 const (

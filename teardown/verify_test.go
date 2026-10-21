@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/teardown"
+	"github.com/mitstack-eu/operator-kit/v3/teardown"
 )
 
 const credentialText = "not-a-real-token"

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/hostexec"
+	"github.com/mitstack-eu/operator-kit/v3/hostexec"
 )
 
 // Target values come from manifests and subscription inputs, and neither ssh nor the aws CLI has an end-of-options marker, so validation before any spawn is the only defence.

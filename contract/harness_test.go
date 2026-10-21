@@ -1,4 +1,4 @@
-// Package contract_test pins the wire contract, the manifest parser and the registries the contract package owns.
+// Package contract_test pins the wire contract and the manifest parser the contract package owns.
 package contract_test
 
 import (
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 func readManifestGolden(t *testing.T, name string) []byte {
@@ -44,23 +44,6 @@ func parseBeta(t *testing.T, raw []byte) *contract.BlockManifest {
 		t.Fatalf("ParseManifest gave no Block for a %s manifest: %+v", contract.ManifestAPIVersion, m)
 	}
 	return m.Block
-}
-
-func parseAlpha(t *testing.T, raw string) *contract.V1AlphaManifest {
-	t.Helper()
-	m, err := contract.ParseManifest([]byte(raw))
-	if err != nil {
-		t.Fatalf("ParseManifest: %v\n%s", err, raw)
-	}
-	if m.V1Alpha == nil {
-		t.Fatalf("ParseManifest gave no V1Alpha for a %s manifest: %+v", contract.ManifestAPIVersionV1Alpha, m)
-	}
-	return m.V1Alpha
-}
-
-func alphaSpec(t *testing.T, specLines string) *contract.V1AlphaManifest {
-	t.Helper()
-	return parseAlpha(t, alphaHead+specLines)
 }
 
 func requireErrorNaming(t *testing.T, what string, err error, wants ...string) {
@@ -235,14 +218,4 @@ func platformSnapshot(t *testing.T) contract.TypeSnapshot {
 		t.Fatalf("ParseTypeSnapshot(testdata/type-snapshot.json): %v", err)
 	}
 	return snap
-}
-
-// registry fails on an empty registry, so a check over every entry cannot pass by having none to check.
-func registry(t *testing.T) []contract.ResourceEntry {
-	t.Helper()
-	rs := contract.Resources()
-	if len(rs) == 0 {
-		t.Fatal("contract.Resources() is empty")
-	}
-	return rs
 }

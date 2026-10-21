@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kitbinding"
+	"github.com/mitstack-eu/operator-kit/v3/kitbinding"
 )
 
 const fixtureDir = "testdata/handler-import"
@@ -108,8 +108,8 @@ func materialise(t *testing.T, c fixtureCase) string {
 }
 
 func TestHandlerPackage_IsTheKitsHandlerImportPath(t *testing.T) {
-	if kitbinding.HandlerPackage != "github.com/mitstack-eu/operator-kit/v2/handler" {
-		t.Errorf("HandlerPackage = %q, want %q", kitbinding.HandlerPackage, "github.com/mitstack-eu/operator-kit/v2/handler")
+	if kitbinding.HandlerPackage != "github.com/mitstack-eu/operator-kit/v3/handler" {
+		t.Errorf("HandlerPackage = %q, want %q", kitbinding.HandlerPackage, "github.com/mitstack-eu/operator-kit/v3/handler")
 	}
 }
 
@@ -129,6 +129,8 @@ func TestFixtureSet_HoldsEveryRequiredCase(t *testing.T) {
 		"import-satisfied-constraint": "pass",
 		"import-aliased":              "pass",
 		"import-subpackage":           "pass",
+		"import-major-v2":             "pass",
+		"import-major-v3":             "pass",
 		"unparsable-only":             "tooling",
 		"unparsable-beside-import":    "tooling",
 		"malformed-constraint":        "tooling",
@@ -180,14 +182,14 @@ func TestHandlerImportFiles_AnswersEveryFixtureWithItsVerdict(t *testing.T) {
 }
 
 func TestHandlerImportFiles_ReportsEveryImportingFileSorted(t *testing.T) {
-	const imp = "package main\n\nimport \"github.com/mitstack-eu/operator-kit/v2/handler\"\n\nvar _ = handler.New\n"
+	const imp = "package main\n\nimport \"github.com/mitstack-eu/operator-kit/v3/handler\"\n\nvar _ = handler.New\n"
 	dir := materialise(t, fixtureCase{files: map[string]string{
 		"z.go":         imp,
 		"a.go":         imp,
 		"cmd/x/x.go":   strings.Replace(imp, "package main", "package x", 1),
 		"a_test.go":    imp,
 		"plain.go":     "package main\n",
-		"docs/note.md": "\"github.com/mitstack-eu/operator-kit/v2/handler\"\n",
+		"docs/note.md": "\"github.com/mitstack-eu/operator-kit/v3/handler\"\n",
 	}})
 	files, err := kitbinding.HandlerImportFiles(dir)
 	if err != nil {
@@ -213,7 +215,7 @@ func TestHandlerImportFiles_MissingDirectoryIsAnError(t *testing.T) {
 // A directory the scan cannot enter is an error even when another file imports the handler, since what it could not read is unknown.
 func TestHandlerImportFiles_UnreadableDirectoryIsAnError(t *testing.T) {
 	dir := materialise(t, fixtureCase{files: map[string]string{
-		"main.go":               "package main\n\nimport \"github.com/mitstack-eu/operator-kit/v2/handler\"\n\nfunc main() { _ = handler.New }\n",
+		"main.go":               "package main\n\nimport \"github.com/mitstack-eu/operator-kit/v3/handler\"\n\nfunc main() { _ = handler.New }\n",
 		"internal/wire/wire.go": "package wire\n",
 	}})
 	locked := filepath.Join(dir, "internal")

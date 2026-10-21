@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 // slug40 and slug41 sit one inside and one past the 40-character limit.

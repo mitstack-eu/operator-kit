@@ -10,9 +10,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/handler"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/handler"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 const containerOnlyManifest = `apiVersion: mitstack/v1beta

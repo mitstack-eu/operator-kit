@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/credrefresh"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/credrefresh"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 const leakSecret = "PROVIDER-CREDENTIAL-MATERIAL-THAT-MUST-NEVER-SURFACE"

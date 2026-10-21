@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 type wantRequirement struct {
@@ -134,8 +134,8 @@ func TestParseManifest_ReadsTheWorkedV1BetaManifests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseManifest(%s): %v", w.file, err)
 			}
-			if m.APIVersion != contract.ManifestAPIVersion || m.V1Alpha != nil || m.Block == nil {
-				t.Fatalf("APIVersion, V1Alpha, Block = %q, %v, %v; want %q, nil and a block", m.APIVersion, m.V1Alpha, m.Block, contract.ManifestAPIVersion)
+			if m.APIVersion != contract.ManifestAPIVersion || m.Block == nil {
+				t.Fatalf("APIVersion, Block = %q, %v; want %q and a block", m.APIVersion, m.Block, contract.ManifestAPIVersion)
 			}
 			if m.ID() != w.id || m.Version() != w.version || m.ReleaseClass() != w.releaseClass || m.ReleaseNote() != w.releaseNote {
 				t.Errorf("ID, Version, ReleaseClass, ReleaseNote = %q, %q, %q, %q; want %q, %q, %q, %q",
@@ -432,8 +432,6 @@ func TestParseManifest_SettleBudget(t *testing.T) {
 		{"-5m is refused", beta("    settleBudget: -5m\n"), 0, []string{"spec.lifecycle.settleBudget", "positive duration"}},
 		{"soon is refused", beta("    settleBudget: soon\n"), 0, []string{"spec.lifecycle.settleBudget", "positive duration"}},
 		{"30 is refused", beta("    settleBudget: 30\n"), 0, []string{"spec.lifecycle.settleBudget", "positive duration"}},
-		{"v1alpha refuses the key", []byte(alphaHead + "  lifecycle:\n    endpoint: https://fixture.example.test/hook\n" +
-			"    settleBudget: 75m\n"), 0, []string{"spec.lifecycle.settleBudget"}},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			if tc.refusal != nil {
@@ -517,7 +515,7 @@ spec:
         - region
 `
 
-func TestParseManifest_V1AlphaReadsOutputsAndRequiresReads(t *testing.T) {
+func TestParseManifest_RefusesAManifestInTheOldVersion(t *testing.T) {
 	for label, raw := range map[string]string{
 		"kind: Block": v1alphaManifest,
 		"type: block": string(edit(t, v1alphaManifest, "kind: Block\n", "type: block\n")),
@@ -525,29 +523,15 @@ func TestParseManifest_V1AlphaReadsOutputsAndRequiresReads(t *testing.T) {
 		t.Run(label, func(t *testing.T) {
 			m, err := contract.ParseManifest([]byte(raw))
 
-			if err != nil {
-				t.Fatalf("ParseManifest: %v", err)
+			want := `apiVersion "mitstack/v1alpha" is not a manifest version the kit knows; it must be mitstack/v1beta`
+			if err == nil || err.Error() != want {
+				t.Fatalf("ParseManifest = %+v, %v; want the error %q", m, err, want)
 			}
-			if m.APIVersion != contract.ManifestAPIVersionV1Alpha || m.Block != nil || m.V1Alpha == nil {
-				t.Fatalf("APIVersion, Block, V1Alpha = %q, %v, %v; want %q, nil and a manifest", m.APIVersion, m.Block, m.V1Alpha, contract.ManifestAPIVersionV1Alpha)
-			}
-			a := m.V1Alpha
-			wantField(t, "V1Alpha.ID, ID() untrimmed", []string{a.ID, m.ID()}, []string{" reads-consumer", " reads-consumer"})
-			wantField(t, "V1Alpha.Version, Version() trimmed", []string{a.Version, m.Version()}, []string{"1.2.0", "1.2.0"})
-			wantField(t, "V1Alpha.ReleaseClass, ReleaseClass()", []string{a.ReleaseClass, m.ReleaseClass()}, []string{"feature", "feature"})
-			wantField(t, "V1Alpha.ReleaseNote, ReleaseNote()", []string{strings.TrimSpace(a.ReleaseNote), strings.TrimSpace(m.ReleaseNote())},
-				[]string{"Adds the reads.", "Adds the reads."})
-			wantField(t, "V1Alpha.Outputs", a.Outputs, []string{"dbName", "host.type"})
-			wantField(t, "V1Alpha.Requires", a.Requires, []contract.V1AlphaRequirement{
-				{Capability: "database", Reads: []string{"host", "port"}},
-				{Capability: "github"},
-				{Capability: "app-host", Reads: []string{"region"}},
-			})
 		})
 	}
 }
 
-func TestParseManifest_RefusesAnUnknownOrMissingAPIVersionNamingBothKnownVersions(t *testing.T) {
+func TestParseManifest_RefusesAnUnknownOrMissingAPIVersionNamingTheKnownVersion(t *testing.T) {
 	body := "type: block\nmetadata:\n  id: fixture-block\nspec:\n  version: 1.0.0\n"
 	cases := []struct {
 		label, raw string
@@ -560,7 +544,7 @@ func TestParseManifest_RefusesAnUnknownOrMissingAPIVersionNamingBothKnownVersion
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
-			requireRefusedNaming(t, []byte(tc.raw), append([]string{contract.ManifestAPIVersionV1Alpha, contract.ManifestAPIVersion}, tc.wants...)...)
+			requireRefusedNaming(t, []byte(tc.raw), append([]string{contract.ManifestAPIVersion}, tc.wants...)...)
 		})
 	}
 }

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/delivery"
+	"github.com/mitstack-eu/operator-kit/v3/delivery"
 )
 
 const token = "sekrit-token-xyz-999"

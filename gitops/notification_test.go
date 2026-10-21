@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/events"
-	"github.com/mitstack-eu/operator-kit/v2/gitops"
-	"github.com/mitstack-eu/operator-kit/v2/gitops/gitopstest"
+	"github.com/mitstack-eu/operator-kit/v3/events"
+	"github.com/mitstack-eu/operator-kit/v3/gitops"
+	"github.com/mitstack-eu/operator-kit/v3/gitops/gitopstest"
 )
 
 // adrBody is the notification body ADR 0072 quotes, verbatim.

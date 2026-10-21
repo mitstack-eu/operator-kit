@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/gitops"
-	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/gitops"
+	"github.com/mitstack-eu/operator-kit/v3/handler"
 )
 
 var _ handler.Observer = (*gitops.Resource)(nil)

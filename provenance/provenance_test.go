@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/provenance"
+	"github.com/mitstack-eu/operator-kit/v3/provenance"
 )
 
 const goldenRepo = "mitstack-eu/postgres-db"

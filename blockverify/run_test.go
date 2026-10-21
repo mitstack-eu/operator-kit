@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 // exitNotJudged marks a case that pins a suite's verdict without the run's exit code.
@@ -62,82 +62,60 @@ func both(w suiteWant) map[string]suiteWant {
 }
 
 func TestRun(t *testing.T) {
-	legacy := legacyManifest(t)
-	unknownField := legacy + "  frobnicate: true\n"
+	full := fullManifest(t)
+	unknownField := full + "  frobnicate: true\n"
 	unknownFieldErr := refusal(t, unknownField, "spec.frobnicate")
 	everyReader := suiteWant{"fail", []string{"spec.frobnicate", unknownFieldErr}}
-	capability := func(t *testing.T, files map[string]string) {
-		const dir = "testdata/capability-without-issue-handler"
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, e := range entries {
-			raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			files[e.Name()] = string(raw)
-		}
+	// fullBlock fails only resources, so these cases read the suite they judge rather than the verdict.
+	manifestCase := func(name, manifest string, want suiteWant) runCase {
+		return runCase{name: name, dir: fullBlock(with(manifestFile, manifest)), args: jsonStandalone, exit: exitNotJudged, verdict: "fail",
+			suites: map[string]suiteWant{"manifest": want}}
 	}
 	cases := []runCase{
-		{name: "a block with no manifest.yaml fails trust-plumbing, exiting 1", dir: legacyBlock(without(manifestFile)), args: jsonStandalone, exit: 1, verdict: "fail",
+		{name: "a block with no manifest.yaml fails trust-plumbing, exiting 1", dir: fullBlock(without(manifestFile)), args: jsonStandalone, exit: 1, verdict: "fail",
 			suites: map[string]suiteWant{"trust-plumbing": {"fail", []string{"manifest.yaml"}}}},
-		{name: "a block with no Dockerfile fails deliverable, exiting 1", dir: legacyBlock(without("Dockerfile")), args: jsonStandalone, exit: 1, verdict: "fail",
+		{name: "a block with no Dockerfile fails deliverable, exiting 1", dir: passingBlock(without("Dockerfile")), args: jsonStandalone, exit: 1, verdict: "fail",
 			suites: map[string]suiteWant{"deliverable": {"fail", []string{"Dockerfile"}}}},
 		{name: "a block that redeclares a kit-owned symbol fails trust-plumbing even though it does not compile", args: jsonStandalone, exit: 1, verdict: "fail",
-			dir: legacyBlock(withSource("rogue.go", "redeclares-emit-progress.go")), suites: map[string]suiteWant{"trust-plumbing": {"fail", []string{"EmitProgress"}}}},
-		// go test -run with no matching test exits 0, so only the presence check catches a missing TestContract_ function.
-		{name: "a block with no TestContract_ decode tests fails contract", dir: legacyBlock(without("contract_conformance_test.go")), args: jsonStandalone, exit: 1, verdict: "fail",
-			suites: map[string]suiteWant{"contract": {"fail", []string{"TestContract_"}}}},
-		{name: "a block with no response contract test fails contract, naming it", dir: legacyBlock(without("contract_response_test.go")), args: jsonStandalone, exit: 1, verdict: "fail",
-			suites: map[string]suiteWant{"contract": {"fail", []string{"TestContract_EmitsConformingResponse"}}}},
-		{name: "a target with no --standalone flag is refused as repo mode with exit 2", dir: legacyBlock(), args: []string{"$DIR"}, exit: 2, stdout: []string{standaloneInvocation}},
+			dir: fullBlock(withSource("rogue.go", "redeclares-emit-progress.go")), suites: map[string]suiteWant{"trust-plumbing": {"fail", []string{"EmitProgress"}}}},
+		{name: "a target with no --standalone flag is refused as repo mode with exit 2", dir: fullBlock(), args: []string{"$DIR"}, exit: 2, stdout: []string{standaloneInvocation}},
 		{name: "no arguments at all are refused with exit 2", dir: emptyDir, args: []string{}, exit: 2, stdout: []string{standaloneInvocation}},
 		{name: "--standalone with no target is a usage error", dir: emptyDir, args: []string{"--json", "--standalone"}, exit: 2},
-		{name: "--base-manifest with no path is a usage error", dir: legacyBlock(), args: []string{"--json", "--standalone", "$DIR", "--base-manifest"}, exit: 2},
-		{name: "a capability that implements no issue handler passes", dir: kitV1Block(without("main.go"), capability), args: jsonStandalone, exit: 0, verdict: "pass"},
+		{name: "--base-manifest with no path is a usage error", dir: fullBlock(), args: []string{"--json", "--standalone", "$DIR", "--base-manifest"}, exit: 2},
+		{name: "a capability that implements no issue handler passes", dir: passingBlock(), args: jsonStandalone, exit: 0, verdict: "pass"},
 		{name: "a kit/v1 block that imports the handler names the kit/v1 rule in both suites", dir: kitV1Block(), args: jsonStandalone, exit: exitNotJudged, verdict: "fail",
 			suites: both(suiteWant{"pass", []string{"kit/v1"}})},
 		{name: "a kit/v1 block that does not import the handler names the kit/v1 rule in both suites", dir: kitV1Block(withSource("main.go", "main-without-handler.go")),
 			args: jsonStandalone, exit: exitNotJudged, verdict: "fail", suites: both(suiteWant{"fail", []string{"kit/v1"}})},
-		// Everything but the manifest passes the legacy rule, so a legacy verdict here would read as a pass.
-		{name: "a manifest.yaml that cannot be opened is a tooling failure naming the target", dir: then(legacyBlock(without(manifestFile)), mkdir(manifestFile)),
+		{name: "a manifest.yaml that cannot be opened is a tooling failure naming the target", dir: then(fullBlock(without(manifestFile)), mkdir(manifestFile)),
 			args: jsonStandalone, exit: 1, verdict: "fail", suites: both(suiteWant{"fail", []string{"$DIR", "manifest.yaml"}})},
 		{name: "a dangling manifest.yaml symlink is a tooling failure naming the target", args: jsonStandalone, exit: 1, verdict: "fail",
-			dir: then(legacyBlock(without(manifestFile)), func(t *testing.T, dir string) {
+			dir: then(fullBlock(without(manifestFile)), func(t *testing.T, dir string) {
 				if err := os.Symlink(filepath.Join(dir, "nowhere.yaml"), filepath.Join(dir, manifestFile)); err != nil {
 					t.Fatal(err)
 				}
 			}), suites: both(suiteWant{"fail", []string{"$DIR", "manifest.yaml"}})},
-		{name: "a manifest the parser refuses is a tooling failure naming the target", dir: legacyBlock(with(manifestFile, legacy+"  lifecycle:\n    contract: kit/v1\n    frobnicate: true\n")),
-			args: jsonStandalone, exit: 1, verdict: "fail", suites: both(suiteWant{"fail", []string{"$DIR", "manifest.yaml"}})},
-		{name: "a contract value with no rule fails both suites, naming it", dir: legacyBlock(with(manifestFile, legacy+"  lifecycle:\n    contract: kit/v2\n")),
+		{name: "a manifest the parser refuses is a tooling failure naming the target", args: jsonStandalone, exit: 1, verdict: "fail",
+			dir:    fullBlock(with(manifestFile, replaced(t, full, "    contract: kit/v1\n", "    contract: kit/v1\n    frobnicate: true\n"))),
+			suites: both(suiteWant{"fail", []string{"$DIR", "manifest.yaml"}})},
+		{name: "a manifest in the old version fails every suite that reads the manifest, naming the version the kit knows", args: jsonStandalone, exit: 1, verdict: "fail",
+			dir:    fullBlock(with(manifestFile, oldVersionManifest)),
+			suites: both(suiteWant{"fail", []string{`apiVersion "mitstack/v1alpha" is not a manifest version the kit knows; it must be mitstack/v1beta`}})},
+		{name: "a contract value with no rule fails both suites, naming it", dir: fullBlock(with(manifestFile, replaced(t, full, "contract: kit/v1", "contract: kit/v2"))),
 			args: jsonStandalone, exit: 1, verdict: "fail", suites: both(suiteWant{"fail", []string{"kit/v2"}})},
-		{name: "the type, format and store spelling passes", dir: legacyBlock(withSource(manifestFile, "type-block-spelling-manifest.yaml")), args: jsonStandalone, exit: 0, verdict: "pass",
-			suites: map[string]suiteWant{"manifest": {status: "pass"}}},
-		{name: "the kind-in-all-three spelling passes", dir: legacyBlock(withSource(manifestFile, "kind-spelling-manifest.yaml")), args: jsonStandalone, exit: 0, verdict: "pass",
-			suites: map[string]suiteWant{"manifest": {status: "pass"}}},
-		{name: "an unknown spec field fails every suite that reads the manifest, naming it", dir: legacyBlock(with(manifestFile, unknownField)), args: jsonStandalone, exit: 1, verdict: "fail",
-			suites: map[string]suiteWant{"trust-plumbing": everyReader, "contract": everyReader, "manifest": everyReader, "naming": everyReader}},
-		{name: "the human-readable report fails the manifest suite, naming an unknown spec field", dir: legacyBlock(with(manifestFile, unknownField)),
+		{name: "an unknown spec field fails every suite that reads the manifest, naming it", dir: fullBlock(with(manifestFile, unknownField)), args: jsonStandalone, exit: 1, verdict: "fail",
+			suites: map[string]suiteWant{"trust-plumbing": everyReader, "contract": everyReader, "manifest": everyReader}},
+		{name: "the human-readable report fails the manifest suite, naming an unknown spec field", dir: fullBlock(with(manifestFile, unknownField)),
 			args: []string{"--standalone", "$DIR"}, exit: 1, human: map[string]suiteWant{"manifest": {"fail", []string{"spec.frobnicate"}}}},
-		{name: "a private metadata.id passes the manifest suite", dir: legacyBlock(with(manifestFile, replaced(t, legacy, "  id: blockverify-fixture\n", "  id: \"@acme/billing-db\"\n"))),
-			args: jsonStandalone, exit: 0, verdict: "pass", suites: map[string]suiteWant{"manifest": {status: "pass"}}},
-		{name: "an uppercase metadata.id namespace fails the manifest suite", dir: legacyBlock(with(manifestFile, replaced(t, legacy, "  id: blockverify-fixture\n", "  id: \"@Acme/x\"\n"))),
-			args: jsonStandalone, exit: 1, verdict: "fail", suites: map[string]suiteWant{"manifest": {"fail", []string{"metadata.id"}}}},
-		{name: "--base-manifest after the target names the base and not the target", dir: legacyBlock(), base: baseManifest(replaced(t, legacy, "version: 1.0.0", "version: 0.9.0")),
+		manifestCase("a private metadata.id passes the manifest suite", replaced(t, full, "  id: blockverify-fixture\n", "  id: \"@acme/billing-db\"\n"), suiteWant{status: "pass"}),
+		manifestCase("an uppercase metadata.id namespace fails the manifest suite", replaced(t, full, "  id: blockverify-fixture\n", "  id: \"@Acme/x\"\n"),
+			suiteWant{"fail", []string{"metadata.id"}}),
+		{name: "--base-manifest after the target names the base and not the target", dir: fullBlock(), base: baseManifest(replaced(t, full, "version: 1.0.0", "version: 0.9.0")),
 			args: []string{"--json", "--standalone", "$DIR", "--base-manifest", "$BASE"}, exit: 1, verdict: "fail",
 			suites: map[string]suiteWant{"trust-plumbing": {status: "pass"}, "manifest": {"fail", []string{"spec.releaseClass"}}}},
-		{name: "--base-manifest before the target names the base and not the target", dir: legacyBlock(), base: baseManifest(replaced(t, legacy, "version: 1.0.0", "version: 0.9.0")),
+		{name: "--base-manifest before the target names the base and not the target", dir: fullBlock(), base: baseManifest(replaced(t, full, "version: 1.0.0", "version: 0.9.0")),
 			args: []string{"--base-manifest", "$BASE", "--json", "--standalone", "$DIR"}, exit: 1, verdict: "fail",
 			suites: map[string]suiteWant{"trust-plumbing": {status: "pass"}, "manifest": {"fail", []string{"spec.releaseClass"}}}},
-		{name: "a manifest with no spec.naming skips naming and passes", dir: legacyBlock(), args: jsonStandalone, exit: 0, verdict: "pass",
-			suites: map[string]suiteWant{"naming": {status: "skipped"}}},
-		{name: "aws-app-infra's naming declaration passes naming", dir: legacyBlock(with(manifestFile, legacy+awsAppInfraNamingSpec)), args: jsonStandalone, exit: 0, verdict: "pass",
-			suites: map[string]suiteWant{"naming": {status: "pass"}}},
-		{name: "a maxLength the derived names do not allow fails naming and the verdict", args: jsonStandalone, exit: 1, verdict: "fail",
-			dir: legacyBlock(with(manifestFile, legacy+namingSpec("40", derivedName(ecrPushTemplate, "64")))), suites: map[string]suiteWant{"naming": {status: "fail"}}},
 		{name: "a kubernetes.namespace block on a hetzner.k3s-cluster passes the manifest suite", dir: testdataDir("manifest-kubernetes-namespace-on-cluster"),
 			args: jsonStandalone, exit: exitNotJudged, verdict: "fail", suites: map[string]suiteWant{"manifest": {status: "pass"}}},
 		{name: "a block that needs credential refresh passes the manifest suite", dir: testdataDir("manifest-needs-credential-refresh"),
@@ -215,14 +193,14 @@ var update = flag.Bool("update", false, "update golden files")
 
 const goldenReportPath = "testdata/standalone-report.golden.json"
 
-// The golden pins every field of the legacy block's report: versions, mode, both digests, the run order and each suite's status and detail.
+// The golden pins every field of a passing block's report: versions, mode, both digests, the run order and each suite's status and detail.
 func TestGolden_StandaloneReport(t *testing.T) {
-	dir := legacyBlock()(t)
+	dir := passingBlock()(t)
 
 	stdout, exit := runBlockverify(t, "--json", "--standalone", dir)
 
 	if exit != 0 {
-		t.Fatalf("the legacy block must pass: exit %d\n%s", exit, stdout)
+		t.Fatalf("the passing block must pass: exit %d\n%s", exit, stdout)
 	}
 	got := decodeReport(t, stdout)
 	gotPretty, err := json.MarshalIndent(got, "", "  ")
@@ -254,10 +232,10 @@ func sha256Of(raw []byte) string {
 }
 
 func TestReportDigests(t *testing.T) {
-	dir := legacyBlock()(t)
+	dir := passingBlock()(t)
 	first, _ := runBlockverify(t, "--json", "--standalone", dir)
 	second, _ := runBlockverify(t, "--json", "--standalone", dir)
-	failing, _ := runBlockverify(t, "--json", "--standalone", legacyBlock(without("Dockerfile"))(t))
+	failing, _ := runBlockverify(t, "--json", "--standalone", passingBlock(without("Dockerfile"))(t))
 	manifest, err := os.ReadFile(filepath.Join(dir, manifestFile))
 	if err != nil {
 		t.Fatal(err)
@@ -284,11 +262,11 @@ func TestReportDigests(t *testing.T) {
 	}
 }
 
-// The legacy block fails suites the field never reaches, so comparing with the same manifest unset isolates the field.
+// The full block fails a suite the field never reaches, so comparing with the same manifest unset isolates the field.
 func TestNeedsCredentialRefreshChangesNoSuiteStatus(t *testing.T) {
 	set := readFixtureManifest(t, "manifest-needs-credential-refresh")
 	statuses := func(manifest string) (map[string]string, report) {
-		stdout, _ := runBlockverify(t, "--json", "--standalone", legacyBlock(with(manifestFile, manifest))(t))
+		stdout, _ := runBlockverify(t, "--json", "--standalone", fullBlock(with(manifestFile, manifest))(t))
 		r := decodeReport(t, stdout)
 		out := map[string]string{}
 		for _, s := range r.Suites {

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 func TestDecodeRequest_DecodesEveryValidGoldenViaKittest(t *testing.T) {

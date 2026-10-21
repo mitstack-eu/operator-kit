@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/provenance"
+	"github.com/mitstack-eu/operator-kit/v3/provenance"
 )
 
 func runBlockprov(t *testing.T, args ...string) (stdout string, exitCode int) {

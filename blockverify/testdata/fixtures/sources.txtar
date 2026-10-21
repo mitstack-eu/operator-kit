@@ -21,7 +21,7 @@ func repoOwner(c githubCreds) string { return c.Secrets["github"]["owner"] }
 -- github-raw-apibase-concatenated.go --
 package main
 
-import "github.com/mitstack-eu/operator-kit/v2/ghapi"
+import "github.com/mitstack-eu/operator-kit/v3/ghapi"
 
 func repoURL(c githubCreds, apiBase string) string {
 	_, _ = ghapi.Base(c.Secrets["github"]["endpoint"])
@@ -30,7 +30,7 @@ func repoURL(c githubCreds, apiBase string) string {
 -- github-raw-apibase-in-a-comment.go --
 package main
 
-import "github.com/mitstack-eu/operator-kit/v2/ghapi"
+import "github.com/mitstack-eu/operator-kit/v3/ghapi"
 
 func repoURL(c githubCreds) error {
 	// Never build a URL as apiBase + "/repos": the request would choose the host.
@@ -40,7 +40,7 @@ func repoURL(c githubCreds) error {
 -- github-through-ghapi-base-from-env.go --
 package main
 
-import "github.com/mitstack-eu/operator-kit/v2/ghapi"
+import "github.com/mitstack-eu/operator-kit/v3/ghapi"
 
 func githubBase(c githubCreds) error {
 	_, err := ghapi.BaseFromEnv(c.Secrets["github"]["endpoint"])
@@ -49,7 +49,7 @@ func githubBase(c githubCreds) error {
 -- github-through-ghapi-base.go --
 package main
 
-import "github.com/mitstack-eu/operator-kit/v2/ghapi"
+import "github.com/mitstack-eu/operator-kit/v3/ghapi"
 
 func githubBase(c githubCreds) error {
 	_, err := ghapi.Base(c.Secrets["github"]["endpoint"])
@@ -73,46 +73,19 @@ package main
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/handler"
+	"github.com/mitstack-eu/operator-kit/v3/handler"
 )
 
 func TestHandlerIsReachable(t *testing.T) {
 	_ = handler.New
 }
--- kind-spelling-manifest.yaml --
-apiVersion: mitstack/v1alpha
-kind: Block
-metadata:
-  id: blockverify-fixture
-  name: blockverify fixture block
-  owner: blockverify-tests
-spec:
-  layer: backend
-  version: 1.0.0
-  description: >
-    The blockverify fixture block, written with kind in all three places.
-  provides:
-    - blockverify-fixture-capability
-  providedContracts:
-    - capability: blockverify-fixture-capability
-      kind: config
-  continuity:
-    - name: fixture-state
-      kind: volume
-      stateful: false
-  requires:
-    - capability: database
-      reads: [host, port, dbName]
-  outputs:
-    - url
-    - region
 -- kit-fake-outside-a-mandatory-test.go --
 package main
 
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 func TestTheKitFakeBuilds(t *testing.T) {
@@ -124,7 +97,7 @@ package main
 import (
 	"testing"
 
-	kt "github.com/mitstack-eu/operator-kit/v2/kittest"
+	kt "github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 func TestNoSecretLeakThroughTheFake(t *testing.T) {
@@ -136,7 +109,7 @@ package main
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 func TestNoSecretLeakThroughTheFake(t *testing.T) {
@@ -146,30 +119,6 @@ func TestNoSecretLeakThroughTheFake(t *testing.T) {
 package main
 
 func main() {}
--- no-contract-manifest.yaml --
-apiVersion: mitstack/v1alpha
-kind: Block
-metadata:
-  id: blockverify-fixture
-  name: blockverify fixture block
-  owner: blockverify-tests
-spec:
-  layer: backend
-  version: 1.0.0
-  description: >
-    A legacy fixture block. This prose mentions
-    contract: kit/v1
-    only as text inside a folded scalar.
-  provides:
-    - blockverify-fixture-capability
-  requires: []
-  lifecycle:
-    endpoint: https://api.mitstack.dev/operators/blockverify-fixture/hook
-    operations: [subscribe, unsubscribe]
-    verbBudgets:
-      contract: kit/v1
-  params:
-    - name: mode
 -- redeclares-emit-progress.go --
 package main
 
@@ -204,10 +153,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/handler"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
-	"github.com/mitstack-eu/operator-kit/v2/observe"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/handler"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/observe"
 )
 
 type misbehave struct {
@@ -463,14 +412,6 @@ spec:
     endpoint: https://api.mitstack.dev/operators/blockverify-resources-fixture/hook
     operations: [subscribe, unsubscribe, upgrade, validate]
     contract: kit/v1
--- survived-unverified.go --
-package main
-
-import "context"
-
-func (h *Handler) survived(_ context.Context, id string) bool {
-	return h.Store.Exists(id)
-}
 -- teardown-deletes-test-empty.go --
 package main
 
@@ -483,46 +424,12 @@ package main
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 func TestUnsubscribeDeletesThroughTheFake(t *testing.T) {
 	_ = &kittest.FakeResource{}
 }
--- teardown-verify-test-fails.go --
-package main
-
-import "testing"
-
-func TestUnsubscribeVerifiesNothing(t *testing.T) {
-	t.Fatal("the verification test fails")
-}
--- type-block-spelling-manifest.yaml --
-apiVersion: mitstack/v1alpha
-type: block
-metadata:
-  id: blockverify-fixture
-  name: blockverify fixture block
-  owner: blockverify-tests
-spec:
-  version: 1.0.0
-  description: >
-    The blockverify fixture block, written with type, format and store.
-  provides:
-    - blockverify-fixture-capability
-  providedContracts:
-    - capability: blockverify-fixture-capability
-      format: config
-  continuity:
-    - name: fixture-state
-      store: volume
-      stateful: false
-  requires:
-    - capability: database
-      reads: [host, port, dbName]
-  outputs:
-    - url
-    - region
 -- urlguard-allowlist.go --
 package main
 
@@ -562,60 +469,4 @@ func trustedGitHubBase(c githubCreds) (string, error) {
 		return "", err
 	}
 	return "https://" + u.Host, nil
-}
--- verify-after-a-closed-comma-ok.go --
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/mitstack-eu/operator-kit/v2/teardown"
-)
-
-type existenceChecker interface{ Exists(string) bool }
-
-func (h *Handler) survived(ctx context.Context, id string) bool {
-	var store any = h.Store
-	if _, ok := store.(existenceChecker); ok {
-		log.Printf("store answers existence checks")
-	}
-	return teardown.Verify(ctx, teardown.Options{}, teardown.Check{
-		Kind:    "fixture resource",
-		Present: func(context.Context) (bool, error) { return h.Store.Exists(id), nil },
-	})
-}
--- verify-gated-by-comma-ok.go --
-package main
-
-import (
-	"context"
-
-	"github.com/mitstack-eu/operator-kit/v2/teardown"
-)
-
-type existenceChecker interface{ Exists(string) bool }
-
-func (h *Handler) survived(ctx context.Context, id string) bool {
-	var store any = h.Store
-	if checker, ok := store.(existenceChecker); ok {
-		return teardown.Verify(ctx, teardown.Options{}, teardown.Check{
-			Kind:    "fixture resource",
-			Present: func(context.Context) (bool, error) { return checker.Exists(id), nil },
-		})
-	}
-	return false
-}
--- verify-only-in-a-test.go --
-package main
-
-import (
-	"context"
-	"testing"
-
-	"github.com/mitstack-eu/operator-kit/v2/teardown"
-)
-
-func TestVerifyIsReachable(t *testing.T) {
-	_ = teardown.Verify(context.Background(), teardown.Options{})
 }

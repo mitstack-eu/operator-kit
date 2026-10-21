@@ -1,20 +1,20 @@
 {
-  "suiteVersion": "1.3.0",
+  "suiteVersion": "2.0.0",
   "kitVersion": "v0.1.0",
   "mode": "standalone",
-  "manifestDigest": "sha256:f99a1d28387ccc1af4b6e8f15d5689aedbcd45961ad9921842e8d063242f571c",
+  "manifestDigest": "sha256:436f01667f7c9869674b2caa4af4253dbb27d732378601d4c67144aeb41b0f5d",
   "verdict": "pass",
-  "resultsDigest": "sha256:95a145dcb8a996df725439c19a43450c88c1d40901ab18372b76c23d3a8ea42c",
+  "resultsDigest": "sha256:efe2824240337a3aa1a7c76c118918ce89d09c9e137cc218ed5b969eb5af97d4",
   "suites": [
     {
       "name": "trust-plumbing",
       "status": "pass",
-      "detail": "depends on github.com/mitstack-eu/operator-kit at or above the floor v0.1.0, kitshim.go matches the kit's canonical, no kit-owned symbol redeclared, manifest.yaml present"
+      "detail": "kit/v1 rule: depends on github.com/mitstack-eu/operator-kit at or above the floor v0.1.0, operator.go imports github.com/mitstack-eu/operator-kit/v3/handler, no kit-owned symbol redeclared, manifest.yaml present"
     },
     {
       "name": "contract",
       "status": "pass",
-      "detail": "TestContract_* accepts every valid golden and rejects the malformed ones"
+      "detail": "kit/v1 rule: the kit owns the webhook-contract goldens; operator.go imports github.com/mitstack-eu/operator-kit/v3/handler"
     },
     {
       "name": "secret-safety",
@@ -24,12 +24,12 @@
     {
       "name": "teardown",
       "status": "pass",
-      "detail": "TestUnsubscribeDeletes* proves unsubscribe deletes what subscribe created; verify.go asks the provider again through the kit's teardown rule, outside any comma-ok block, and TestUnsubscribeVerifies* passes"
+      "detail": "kit/v1 rule: TestUnsubscribeDeletes* proves unsubscribe deletes what subscribe created; the kit's handler asks the provider again after a delete"
     },
     {
       "name": "resources",
-      "status": "skipped",
-      "detail": "manifest.yaml is not a mitstack/v1beta manifest, so it declares no resources to drive"
+      "status": "pass",
+      "detail": "TestDeclaredResources proves the block's 8 declared resources hold the guards that ran: tagging, observe-asks-the-provider, replacement, absence-after-unsubscribe, required-outputs"
     },
     {
       "name": "deliverable",
@@ -39,12 +39,7 @@
     {
       "name": "manifest",
       "status": "pass",
-      "detail": "spec.outputs and spec.requires[].reads resolve through the resource registry; no --base-manifest given, so spec.version was not compared"
-    },
-    {
-      "name": "naming",
-      "status": "skipped",
-      "detail": "manifest.yaml declares no spec.naming.appName, so there is no app-name limit to check"
+      "detail": "the mitstack/v1beta manifest parses; no --base-manifest given, so spec.version was not compared"
     }
   ]
 }

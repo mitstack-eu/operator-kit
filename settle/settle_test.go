@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/settle"
+	"github.com/mitstack-eu/operator-kit/v3/settle"
 )
 
 func ready(context.Context) (bool, error)  { return true, nil }

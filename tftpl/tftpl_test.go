@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/tftpl"
+	"github.com/mitstack-eu/operator-kit/v3/tftpl"
 )
 
 type vars = map[string]string

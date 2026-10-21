@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/adopt"
-	"github.com/mitstack-eu/operator-kit/v2/teardown"
+	"github.com/mitstack-eu/operator-kit/v3/adopt"
+	"github.com/mitstack-eu/operator-kit/v3/teardown"
 )
 
 func probeIdentity() adopt.Identity {

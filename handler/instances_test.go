@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 // provisioned replays the bookkeeping a region-scoped block keeps: each Ensure adds the region its request names and each Delete removes it.

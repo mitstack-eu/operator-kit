@@ -9,19 +9,13 @@ import (
 	"testing"
 )
 
-const kitHandlerImport = "github.com/mitstack-eu/operator-kit/v2/handler"
+const kitHandlerImport = "github.com/mitstack-eu/operator-kit/v3/handler"
 
 // scanFailureMarker is the phrase a scan that could not run carries and an absent import does not.
 const scanFailureMarker = "could not scan"
 
-const kitV1PathGoMod = "module fixture\n\ngo 1.25\n\nrequire github.com/mitstack-eu/operator-kit v1.32.0\n"
-
 func appendTo(name, text string) option {
 	return func(_ *testing.T, files map[string]string) { files[name] += text }
-}
-
-func shimOnKitV1Path(_ *testing.T, files map[string]string) {
-	files["kitshim.go"] = strings.ReplaceAll(files["kitshim.go"], "operator-kit/v2/", "operator-kit/")
 }
 
 func githubBlock(file, src string) dirFunc {
@@ -29,25 +23,17 @@ func githubBlock(file, src string) dirFunc {
 	if file != "" {
 		opts = append(opts, withSource(file, src))
 	}
-	return legacyBlock(opts...)
+	return fullBlock(opts...)
 }
 
 func TestTrustPlumbingSuite(t *testing.T) {
 	runSuites(t, []string{"trust-plumbing"}, []suiteCase{
-		{name: "a legacy block whose kitshim.go is the canonical passes", dir: noContractBlock(),
-			status: "pass", detail: []string{"kitshim.go matches the kit's canonical"}},
-		{name: "a legacy block with no kitshim.go fails, naming it", dir: noContractBlock(without(kitShimFile)),
-			status: "fail", detail: []string{kitShimFile}},
-		{name: "a legacy block whose kitshim.go drifts from the canonical fails, naming the file",
-			dir: noContractBlock(appendTo(kitShimFile, "\nfunc localHelper() {}\n")), status: "fail", detail: []string{"kitshim.go differs from the kit's canonical"}},
-		{name: "a legacy block on the kit's v1 module path is judged against the canonical with that path",
-			dir: noContractBlock(with("go.mod", kitV1PathGoMod), shimOnKitV1Path), status: "pass", detail: []string{"kitshim.go matches the kit's canonical"}},
-		{name: "a legacy block on the kit's v1 module path that carries the v2 shim fails",
-			dir: noContractBlock(with("go.mod", kitV1PathGoMod)), status: "fail", detail: []string{"kitshim.go differs from the kit's canonical"}},
-		{name: "a kit/v1 block passes with no kitshim.go, naming the kit/v1 rule", dir: kitV1Block(),
+		{name: "a kit/v1 block passes, naming the kit/v1 rule", dir: kitV1Block(),
 			status: "pass", detail: []string{"kit/v1"}},
-		{name: "a kit/v1 block's kitshim.go is not judged, because the kit owns its binding",
-			dir: kitV1Block(with(kitShimFile, "package main\n\nfunc localHelper() {}\n")), status: "pass", detail: []string{"kit/v1"}},
+		{name: "a block whose manifest declares another contract fails, naming it",
+			dir: kitV1Block(with(manifestFile, replaced(t, fullManifest(t), "contract: kit/v1", "contract: kit/v2"))), status: "fail", detail: []string{"kit/v2"}},
+		{name: "a block with no manifest fails, naming manifest.yaml", dir: kitV1Block(without(manifestFile)),
+			status: "fail", detail: []string{"manifest.yaml"}},
 		{name: "a kit/v1 block that redeclares a kit-owned symbol still fails, naming it",
 			dir: kitV1Block(withSource("rogue.go", "redeclares-emit-progress.go")), status: "fail", detail: []string{"EmitProgress"}},
 		{name: "a module that reads no GitHub credential, instance or host is not judged", dir: githubBlock("", ""),
@@ -148,53 +134,41 @@ func TestKitV1HandlerImport(t *testing.T) {
 
 func TestContractSuite(t *testing.T) {
 	runSuites(t, []string{"contract"}, []suiteCase{
-		{name: "a kit/v1 block passes defining no TestContract_ function, naming the kit/v1 rule", dir: kitV1Block(),
+		{name: "a kit/v1 block passes, naming the kit/v1 rule", dir: kitV1Block(),
 			status: "pass", detail: []string{"kit/v1"}},
-		{name: "a conformant legacy block passes", dir: noContractBlock(), status: "pass"},
-		{name: "a legacy block missing a TestContract_ function fails, naming it", dir: noContractBlock(without("contract_response_test.go")),
-			status: "fail", detail: []string{"TestContract_EmitsConformingResponse"}},
+		{name: "a block whose manifest declares another contract fails, naming it",
+			dir: kitV1Block(with(manifestFile, replaced(t, fullManifest(t), "contract: kit/v1", "contract: kit/v2"))), status: "fail", detail: []string{"kit/v2"}},
 	})
 }
 
 func TestSecretSafetySuite(t *testing.T) {
 	runSuites(t, []string{"secret-safety"}, []suiteCase{
-		{name: "a conformant legacy block passes", dir: noContractBlock(), status: "pass"},
-		{name: "a legacy block with no TestNoSecretLeak fails, naming it", dir: noContractBlock(without("secrets_leak_test.go")),
+		{name: "a block with a passing leak test passes", dir: fullBlock(), status: "pass"},
+		{name: "a block with no TestNoSecretLeak fails, naming it", dir: fullBlock(without("secrets_leak_test.go")),
 			status: "fail", detail: []string{"TestNoSecretLeak"}},
 		{name: "a secret-leak test that builds kittest.FakeResource fails, naming its file",
-			dir: legacyBlock(withSource("secrets_fake_test.go", "leak-test-over-the-kit-fake.go")), status: "fail", detail: []string{"secrets_fake_test.go builds the kit's FakeResource"}},
+			dir: fullBlock(withSource("secrets_fake_test.go", "leak-test-over-the-kit-fake.go")), status: "fail", detail: []string{"secrets_fake_test.go builds the kit's FakeResource"}},
 		{name: "a secret-leak test that builds the fake through an aliased kittest import fails",
-			dir: legacyBlock(withSource("secrets_fake_test.go", "leak-test-over-an-aliased-kit-fake.go")), status: "fail", detail: []string{"secrets_fake_test.go builds the kit's FakeResource"}},
+			dir: fullBlock(withSource("secrets_fake_test.go", "leak-test-over-an-aliased-kit-fake.go")), status: "fail", detail: []string{"secrets_fake_test.go builds the kit's FakeResource"}},
 		{name: "a secret-leak test that names FakeResource only in a comment passes",
-			dir: legacyBlock(appendTo("secrets_leak_test.go", "\n// The leak test never builds kittest.FakeResource, so it judges this block.\n")), status: "pass", detail: []string{"TestNoSecretLeak"}},
+			dir: fullBlock(appendTo("secrets_leak_test.go", "\n// The leak test never builds kittest.FakeResource, so it judges this block.\n")), status: "pass", detail: []string{"TestNoSecretLeak"}},
 		{name: "a test file that declares no mandatory test may build the fake",
-			dir: legacyBlock(withSource("fake_test.go", "kit-fake-outside-a-mandatory-test.go")), status: "pass", detail: []string{"TestNoSecretLeak"}},
+			dir: fullBlock(withSource("fake_test.go", "kit-fake-outside-a-mandatory-test.go")), status: "pass", detail: []string{"TestNoSecretLeak"}},
 	})
 }
 
 func TestTeardownSuite(t *testing.T) {
 	runSuites(t, []string{"teardown"}, []suiteCase{
-		{name: "a teardown that asks the provider again through the kit, proven by a passing test, passes", dir: noContractBlock(),
-			status: "pass", detail: []string{"TestUnsubscribeVerifies"}},
-		{name: "a legacy block with no teardown test fails, naming TestUnsubscribeDeletes", dir: noContractBlock(without("teardown_test.go")),
+		{name: "a block whose teardown test passes passes, naming the kit/v1 rule", dir: fullBlock(),
+			status: "pass", detail: []string{"kit/v1", "TestUnsubscribeDeletes"}},
+		{name: "a block with no teardown test fails, naming TestUnsubscribeDeletes", dir: fullBlock(without("teardown_test.go")),
 			status: "fail", detail: []string{"TestUnsubscribeDeletes"}},
-		{name: "a teardown that reports success without calling Survivor, Verify or Absent fails",
-			dir: noContractBlock(withSource("verify.go", "survived-unverified.go")), status: "fail", detail: []string{"Survivor, Verify or Absent"}},
-		{name: "a verification call that lives only in a test file does not count",
-			dir:    noContractBlock(withSource("verify.go", "survived-unverified.go"), withSource("verify_reachable_test.go", "verify-only-in-a-test.go")),
-			status: "fail", detail: []string{"Survivor, Verify or Absent"}},
-		{name: "a verification call inside a comma-ok type assertion block fails, naming its file and line",
-			dir: noContractBlock(withSource("verify.go", "verify-gated-by-comma-ok.go")), status: "fail", detail: []string{"verify.go:14"}},
-		{name: "a comma-ok block that closes before the verification call does not gate it",
-			dir: noContractBlock(withSource("verify.go", "verify-after-a-closed-comma-ok.go")), status: "pass", detail: []string{"TestUnsubscribeVerifies"}},
-		{name: "a module with no TestUnsubscribeVerifies test fails, naming it",
-			dir: noContractBlock(without("teardown_verify_test.go")), status: "fail", detail: []string{"TestUnsubscribeVerifies"}},
-		{name: "a failing TestUnsubscribeVerifies test fails the suite",
-			dir: noContractBlock(withSource("teardown_verify_test.go", "teardown-verify-test-fails.go")), status: "fail", detail: []string{"FAIL"}},
-		{name: "a kit/v1 block is not held to the legacy rule, because the kit owns its teardown verification",
+		{name: "a kit/v1 block need not ask its provider again, because the kit's handler does",
 			dir: kitV1Block(withSource("teardown_test.go", "teardown-deletes-test-empty.go")), status: "pass", detail: []string{"kit/v1"}},
+		{name: "a block whose manifest declares another contract fails, naming it",
+			dir: fullBlock(with(manifestFile, replaced(t, fullManifest(t), "contract: kit/v1", "contract: kit/v2"))), status: "fail", detail: []string{"kit/v2"}},
 		{name: "a teardown test that builds kittest.FakeResource fails, naming its file",
-			dir: legacyBlock(withSource("teardown_fake_test.go", "teardown-test-over-the-kit-fake.go")), status: "fail", detail: []string{"teardown_fake_test.go builds the kit's FakeResource"}},
+			dir: fullBlock(withSource("teardown_fake_test.go", "teardown-test-over-the-kit-fake.go")), status: "fail", detail: []string{"teardown_fake_test.go builds the kit's FakeResource"}},
 		{name: "a kit/v1 block's teardown test is held to the kit-fake rule too",
 			dir: kitV1Block(withSource("teardown_test.go", "teardown-test-over-the-kit-fake.go")), status: "fail", detail: []string{"teardown_test.go builds the kit's FakeResource"}},
 	})
@@ -202,8 +176,8 @@ func TestTeardownSuite(t *testing.T) {
 
 func TestDeliverableSuite(t *testing.T) {
 	runSuites(t, []string{"deliverable"}, []suiteCase{
-		{name: "a conformant legacy block passes", dir: noContractBlock(), status: "pass"},
-		{name: "a legacy block with no Dockerfile fails, naming it", dir: noContractBlock(without("Dockerfile")),
+		{name: "a block with its own Dockerfile passes", dir: fullBlock(), status: "pass"},
+		{name: "a block with no Dockerfile fails, naming it", dir: fullBlock(without("Dockerfile")),
 			status: "fail", detail: []string{"Dockerfile"}},
 	})
 }
@@ -227,8 +201,8 @@ func resourcesBlock(manifestSource, misbehave, container string) dirFunc {
 func TestResourcesSuite(t *testing.T) {
 	twoResources := withSource(manifestFile, "resources-two-resources-manifest.yaml")
 	runSuites(t, []string{"resources"}, []suiteCase{
-		{name: "a manifest that is not mitstack/v1beta is skipped", dir: manifestOnly(manifestHead),
-			status: "skipped", detail: []string{"mitstack/v1beta"}},
+		{name: "a manifest in the old version fails, naming the version the kit knows", dir: manifestOnly(oldVersionManifest),
+			status: "fail", detail: []string{`apiVersion "mitstack/v1alpha" is not a manifest version the kit knows; it must be mitstack/v1beta`}},
 		{name: "a block that defines no TestDeclaredResources fails, naming it",
 			dir:    moduleBlock(twoResources, with("resources_test.go", "package main\n\nimport \"testing\"\n\nfunc TestSomethingElse(t *testing.T) {}\n")),
 			status: "fail", detail: []string{"TestDeclaredResources"}},

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 // Each case breaks exactly one property, so the harness's verdict is asserted rather than trusted.

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 // The 418 for an unmatched request must never echo a header value it received, since that could leak a bearer token.

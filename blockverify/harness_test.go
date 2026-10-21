@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 const fixturesDir = "testdata/fixtures"
@@ -32,17 +32,8 @@ func kitModuleDir(t *testing.T) string {
 
 func kitGoMod(t *testing.T) string {
 	t.Helper()
-	return "module fixture\n\ngo 1.25\n\nrequire github.com/mitstack-eu/operator-kit/v2 v2.0.0\n\n" +
-		"replace github.com/mitstack-eu/operator-kit/v2 => " + kitModuleDir(t) + "\n"
-}
-
-func kitShimCanonical(t *testing.T) string {
-	t.Helper()
-	raw, err := os.ReadFile(kitShimCanonicalFile)
-	if err != nil {
-		t.Fatalf("reading the canonical shim %s: %v", kitShimCanonicalFile, err)
-	}
-	return string(raw)
+	return "module fixture\n\ngo 1.25\n\nrequire github.com/mitstack-eu/operator-kit/v3 v3.0.0\n\n" +
+		"replace github.com/mitstack-eu/operator-kit/v3 => " + kitModuleDir(t) + "\n"
 }
 
 // readTxtar returns an archive's leading comment and its files by name.
@@ -94,8 +85,8 @@ func fixtureFile(t *testing.T, archive, name string) string {
 	return files[name]
 }
 
-func legacyManifest(t *testing.T) string {
-	return fixtureFile(t, "legacy-block.txtar", "manifest.yaml")
+func fullManifest(t *testing.T) string {
+	return fixtureFile(t, "full-block.txtar", "manifest.yaml")
 }
 
 // replaced fails the test when old is not in s, so a fixture edit can never silently change nothing.
@@ -140,18 +131,34 @@ func fixture(base func(t *testing.T) map[string]string, opts ...option) dirFunc 
 	}
 }
 
-// legacyBlock passes every suite as it stands.
-func legacyBlock(opts ...option) dirFunc {
+// fullBlock passes every suite as it stands but resources, which needs a block that drives its resources through kittest.AssertBlock.
+func fullBlock(opts ...option) dirFunc {
 	return fixture(func(t *testing.T) map[string]string {
-		_, files := readTxtar(t, filepath.Join(fixturesDir, "legacy-block.txtar"))
-		files["go.mod"], files["kitshim.go"] = kitGoMod(t), kitShimCanonical(t)
+		_, files := readTxtar(t, filepath.Join(fixturesDir, "full-block.txtar"))
+		files["go.mod"] = kitGoMod(t)
 		return files
 	}, opts...)
 }
 
-// noContractBlock is legacyBlock with a manifest that mentions kit/v1 only where it declares no contract.
-func noContractBlock(opts ...option) dirFunc {
-	return legacyBlock(append([]option{withSource("manifest.yaml", "no-contract-manifest.yaml")}, opts...)...)
+// passingBlock is a capability on the kit/v1 contract that passes every suite.
+func passingBlock(opts ...option) dirFunc {
+	return kitV1Block(append([]option{without("main.go"), withDir("testdata/capability-without-issue-handler")}, opts...)...)
+}
+
+func withDir(dir string) option {
+	return func(t *testing.T, files map[string]string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			files[e.Name()] = string(raw)
+		}
+	}
 }
 
 func kitV1Block(opts ...option) dirFunc {
@@ -254,7 +261,6 @@ var suitesByName = map[string]func(target, base string) SuiteResult{
 	"resources":      func(d, _ string) SuiteResult { return resourcesSuite(d) },
 	"deliverable":    func(d, _ string) SuiteResult { return deliverableSuite(d) },
 	"manifest":       manifestSuite,
-	"naming":         func(d, _ string) SuiteResult { return namingSuite(d) },
 }
 
 func runSuites(t *testing.T, suites []string, cases []suiteCase) {

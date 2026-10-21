@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/health"
+	"github.com/mitstack-eu/operator-kit/v3/health"
 )
 
 func TestStatus_ZeroValueIsConverging(t *testing.T) {

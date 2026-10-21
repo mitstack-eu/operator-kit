@@ -1,4 +1,4 @@
-A legacy block on no declared contract that passes every suite; go.mod and kitshim.go are written by the harness.
+A kit/v1 block carrying its own test for every suite but resources, which it fails for want of TestDeclaredResources; go.mod is written by the harness.
 -- Dockerfile --
 FROM golang:1.25-alpine AS build
 WORKDIR /src
@@ -8,79 +8,33 @@ RUN go build -o /out/fixture .
 FROM alpine:3.20
 COPY --from=build /out/fixture /usr/local/bin/fixture
 ENTRYPOINT ["/usr/local/bin/fixture"]
--- contract_conformance_test.go --
-package main
-
-import (
-	"encoding/json"
-	"testing"
-
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
-)
-
-func TestContract_DecodesEveryValidGolden(t *testing.T) {
-	t.Log(kittest.Describe(t))
-
-	kittest.AssertDecodesEveryValidGolden(t,
-		func(raw []byte) error {
-			var req request
-			return json.Unmarshal(raw, &req)
-		},
-		"operation", "appId",
-	)
-}
-
-func TestContract_RejectsMalformedGoldens(t *testing.T) {
-	kittest.AssertRejectsMalformed(t, contractAccepts)
-}
-
-func contractAccepts(raw []byte) bool {
-	var req request
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return false
-	}
-	var envelope struct {
-		Nonce string `json:"nonce"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.Nonce == "" {
-		return false
-	}
-	switch req.Operation {
-	case "subscribe", "unsubscribe", "upgrade", "validate":
-		return true
-	}
-	return false
-}
--- contract_response_test.go --
-package main
-
-import "testing"
-
-func TestContract_EmitsConformingResponse(t *testing.T) {
-	if 1+1 != 2 {
-		t.Fatal("fixture arithmetic broke")
-	}
-}
 -- handler.go --
 package main
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"net/http"
 	"sync"
+
+	"github.com/mitstack-eu/operator-kit/v3/webhook"
 )
 
 // request mirrors the subset of the mitstack lifecycle webhook payload this
 // minimal fixture operator cares about.
 type request struct {
-	Operation      string          `json:"operation"`
-	SubscriptionID string          `json:"subscriptionId"`
-	IdempotencyKey string          `json:"idempotencyKey"`
-	AppID          string          `json:"appId,omitempty"`
-	SecretToken    string          `json:"secretToken,omitempty"`
-	EventsCallback *EventsCallback `json:"eventsCallback,omitempty"`
+	Operation      string `json:"operation"`
+	SubscriptionID string `json:"subscriptionId"`
+	IdempotencyKey string `json:"idempotencyKey"`
+	AppID          string `json:"appId,omitempty"`
+	SecretToken    string `json:"secretToken,omitempty"`
 }
+
+var (
+	replay = webhook.NewReplay()
+	keys   = webhook.NewKeyCache()
+)
 
 // resourceStore is a trivial in-memory stand-in for whatever real resource a
 // production operator would provision — just enough to prove subscribe
@@ -128,7 +82,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := authenticate(h, w, r, body); !ok {
+	deps := webhook.Deps{
+		JWKSURL:    h.JWKSURL,
+		PublicKey:  func(kid string) (ed25519.PublicKey, error) { return keys.PublicKey(h.JWKSURL, h.Client, kid) },
+		Replay:     replay,
+		WriteError: writeError,
+	}
+	if _, ok := webhook.AuthenticateHook(deps, w, r, body); !ok {
 		return
 	}
 
@@ -137,7 +97,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "decode payload: "+err.Error())
 		return
 	}
-	r = r.WithContext(ContextWithEventsEnvelope(r.Context(), req))
 
 	switch req.Operation {
 	case "subscribe", "upgrade":
@@ -177,7 +136,11 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	kithandler "github.com/mitstack-eu/operator-kit/v3/handler"
 )
+
+var _ = kithandler.New
 
 func main() {
 	jwksURL := os.Getenv("MITSTACK_JWKS_URL")
@@ -196,28 +159,29 @@ func main() {
 	log.Fatal(srv.ListenAndServe())
 }
 -- manifest.yaml --
-apiVersion: mitstack/v1alpha
-kind: Block
+apiVersion: mitstack/v1beta
+type: block
 metadata:
   id: blockverify-fixture
   name: blockverify fixture block
   owner: blockverify-tests
 spec:
-  layer: backend
   version: 1.0.0
   description: >
     A minimal compiling fixture block, used only to prove blockverify's own
     conformance suite against a standalone external repo.
-  provides:
-    - blockverify-fixture-capability
-  requires: []
+  resources: [aws.s3-bucket]
+  lifecycle:
+    endpoint: https://api.mitstack.dev/operators/blockverify-fixture/hook
+    operations: [subscribe, unsubscribe, upgrade, validate]
+    contract: kit/v1
 -- secrets_leak_test.go --
 package main
 
 import (
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 // TestNoSecretLeak proves the fixture operator never echoes a received
@@ -264,27 +228,6 @@ func TestUnsubscribeDeletesTheResourceItCreated(t *testing.T) {
 		t.Error("unsubscribe must delete the resource subscribe created")
 	}
 }
--- teardown_verify_test.go --
-package main
-
-import (
-	"net/http"
-	"testing"
-)
-
-func TestUnsubscribeVerifiesASurvivingResourceFailsTheTeardown(t *testing.T) {
-	h, signer := newHandler(t)
-	h.Store.keepOnDelete = true
-	if rec := post(t, h, signer, request{Operation: "subscribe", SubscriptionID: "sub_verify_1"}); rec.Code != http.StatusOK {
-		t.Fatalf("subscribe: want 200, got %d: %s", rec.Code, rec.Body)
-	}
-
-	rec := post(t, h, signer, request{Operation: "unsubscribe", SubscriptionID: "sub_verify_1"})
-
-	if rec.Code == http.StatusOK {
-		t.Fatalf("unsubscribe of a resource that survived its delete: want a failure, got 200: %s", rec.Body)
-	}
-}
 -- testhelpers_test.go --
 package main
 
@@ -294,7 +237,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/kittest"
+	"github.com/mitstack-eu/operator-kit/v3/kittest"
 )
 
 func newHandler(t *testing.T) (*Handler, *kittest.Signer) {
@@ -337,7 +280,7 @@ package main
 import (
 	"context"
 
-	"github.com/mitstack-eu/operator-kit/v2/teardown"
+	"github.com/mitstack-eu/operator-kit/v3/teardown"
 )
 
 func (h *Handler) survived(ctx context.Context, id string) bool {

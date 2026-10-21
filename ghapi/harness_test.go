@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/ghapi"
+	"github.com/mitstack-eu/operator-kit/v3/ghapi"
 )
 
 const (

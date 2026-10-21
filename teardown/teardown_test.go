@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/adopt"
-	"github.com/mitstack-eu/operator-kit/v2/teardown"
+	"github.com/mitstack-eu/operator-kit/v3/adopt"
+	"github.com/mitstack-eu/operator-kit/v3/teardown"
 )
 
 func id() adopt.Identity { return adopt.Identity{AppID: "app-42"} }

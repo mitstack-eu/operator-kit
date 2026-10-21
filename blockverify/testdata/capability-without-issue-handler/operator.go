@@ -9,10 +9,10 @@ import (
 	"os"
 	"sync"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/handler"
-	"github.com/mitstack-eu/operator-kit/v2/observe"
-	"github.com/mitstack-eu/operator-kit/v2/webhook"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/handler"
+	"github.com/mitstack-eu/operator-kit/v3/observe"
+	"github.com/mitstack-eu/operator-kit/v3/webhook"
 )
 
 //go:embed manifest.yaml

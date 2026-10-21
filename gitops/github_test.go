@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/ghapi"
-	"github.com/mitstack-eu/operator-kit/v2/gitops"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/ghapi"
+	"github.com/mitstack-eu/operator-kit/v3/gitops"
 )
 
 var _ gitops.Repository = (*gitops.GitHubRepository)(nil)

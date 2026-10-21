@@ -7,48 +7,7 @@ import (
 	"testing"
 )
 
-func v1alphaUnknownFields(t *testing.T) map[string][]byte {
-	spec := func(lines string) []byte { return []byte(alphaHead + lines) }
-	return map[string][]byte{
-		"bogus":              edit(t, alphaHead, "spec:\n", "bogus: 1\nspec:\n"),
-		"metadata.bogus":     edit(t, alphaHead, "  owner: fixture-org\n", "  owner: fixture-org\n  bogus: 1\n"),
-		"spec.bogus":         spec("  bogus: 1\n"),
-		"spec.futureSection": spec("  futureSection:\n    outputs: not-the-outputs\n"),
-		"spec.requires[1].bogus": spec("  requires:\n    - capability: database\n" +
-			"    - capability: github\n      bogus: 1\n"),
-		"spec.requires[0].tokenSchema[0].bogus": spec("  requires:\n    - capability: github\n" +
-			"      tokenSchema:\n        - name: api_token\n          bogus: 1\n"),
-		"spec.requires[0].verify.bogus": spec("  requires:\n    - capability: github\n" +
-			"      verify:\n        urlTemplate: https://api.example.test/user\n        bogus: 1\n"),
-		"spec.resources[0].bogus": spec("  resources:\n    - name: Database\n      bogus: 1\n"),
-		"spec.providedContracts[0].bogus": spec("  provides: [app-host]\n  providedContracts:\n" +
-			"    - capability: app-host\n      bogus: 1\n"),
-		"spec.lifecycle.bogus":           spec("  lifecycle:\n    endpoint: https://fixture.example.test/hook\n    bogus: 1\n"),
-		"spec.lifecycle.extra":           spec("  lifecycle:\n    extra:\n      hooks:\n        - afterEnsure\n"),
-		"spec.params[0].bogus":           spec("  params:\n    - name: image\n      bogus: 1\n"),
-		"spec.observability.bogus":       spec("  observability:\n    bogus: 1\n"),
-		"spec.lifecycle.verbConnections": spec("  lifecycle:\n    verbConnections:\n      validate: [github]\n"),
-		"spec.observability.resources[0].priced.bogus": spec("  observability:\n    resources:\n" +
-			"      - id: app-instance\n        type: aws.ec2-instance\n        from: outputs.instanceId\n" +
-			"        priced:\n          service: AmazonEC2\n          bogus: 1\n"),
-		"spec.observability.metrics[0].series[0].bogus": spec("  observability:\n    metrics:\n" +
-			"      - resource: app-instance\n        namespace: AWS/EC2\n        series:\n" +
-			"          - name: cpu\n            metric: CPUUtilization\n            stat: Average\n            bogus: 1\n"),
-		"spec.observability.cost.bogus": spec("  observability:\n    cost:\n      groupBy: [app]\n      bogus: 1\n"),
-		"spec.docs.source.bogus": spec("  docs:\n    source:\n      git: https://example.test/fixture.git\n" +
-			"      ref: v1.0.0\n      bogus: 1\n"),
-		"spec.docs.pages[0].bogus":      spec("  docs:\n    pages:\n      - title: Start\n        path: start.md\n        bogus: 1\n"),
-		"spec.docs.links[0].bogus":      spec("  docs:\n    links:\n      - rel: source\n        url: https://example.test\n        bogus: 1\n"),
-		"spec.troubleshooting[0].bogus": spec("  troubleshooting:\n    - signature: quota-exceeded\n      bogus: 1\n"),
-		"spec.continuity[0].bogus":      spec("  continuity:\n    - name: app-data\n      stateful: false\n      bogus: 1\n"),
-		"spec.naming.bogus":             spec("  naming:\n    bogus:\n      maxLength: 10\n"),
-		"spec.naming.appName.bogus":     spec("  naming:\n    appName:\n      maxLength: 27\n      bogus: 1\n"),
-		"spec.naming.appName.derivedNames[0].bogus": spec("  naming:\n    appName:\n      maxLength: 27\n" +
-			"      derivedNames:\n        - template: \"{appName}-db\"\n          limit: 30\n          bogus: 1\n"),
-	}
-}
-
-// mitstack/v1beta has no lifecycle hooks, retainsOnUnsubscribe or spec.naming, and no entry key a requirement or resource of mitstack/v1alpha carried, so each is unknown there.
+// mitstack/v1beta has no lifecycle hooks, retainsOnUnsubscribe, spec.naming, spec.dependsOn or optional requirement, and no retired entry key, so each is unknown.
 func v1betaUnknownFields(t *testing.T) map[string][]byte {
 	beta := func(old, new string) []byte { return edit(t, betaManifest, old, new) }
 	const hostType, containerType = "      type: aws.ec2-instance\n", "      type: aws.ec2-container\n"
@@ -64,6 +23,7 @@ func v1betaUnknownFields(t *testing.T) map[string][]byte {
 		"spec.params[0].type":            beta("      label: Container image\n", "      label: Container image\n      type: string\n"),
 		"spec.requires[0].bogus":         beta("    - type: aws.ec2-instance\n", "    - type: aws.ec2-instance\n      bogus: 1\n"),
 		"spec.requires[0].capability":    beta("    - type: aws.ec2-instance\n", "    - type: aws.ec2-instance\n      capability: app-host\n"),
+		"spec.requires[0].optional":      beta("    - type: aws.ec2-instance\n", "    - type: aws.ec2-instance\n      optional: true\n"),
 		"spec.requires[0].reads":         beta("    - type: aws.ec2-instance\n", "    - type: aws.ec2-instance\n      reads: [region]\n"),
 		"spec.resources[1].bogus":        beta("      type: aws.security-group\n", "      type: aws.security-group\n      bogus: 1\n"),
 		"spec.resources[1].ownership":    beta("      type: aws.security-group\n", "      type: aws.security-group\n      ownership: created\n"),
@@ -109,19 +69,14 @@ func retiredListForms(t *testing.T) map[string][]byte {
 	}
 }
 
-func TestParseManifest_RefusesAnUnknownFieldNamingItsPathUnderBothVersions(t *testing.T) {
-	for version, cases := range map[string]map[string][]byte{
-		"mitstack/v1alpha": v1alphaUnknownFields(t),
-		"mitstack/v1beta":  v1betaUnknownFields(t),
-	} {
-		for path, raw := range cases {
-			t.Run(version+"/"+path, func(t *testing.T) {
-				requireRefusedNaming(t, raw, path+" is not a field of a "+version+" manifest")
-			})
-		}
+func TestParseManifest_RefusesAnUnknownFieldNamingItsPath(t *testing.T) {
+	for path, raw := range v1betaUnknownFields(t) {
+		t.Run(path, func(t *testing.T) {
+			requireRefusedNaming(t, raw, path+" is not a field of a mitstack/v1beta manifest")
+		})
 	}
 	for label, raw := range retiredListForms(t) {
-		t.Run("mitstack/v1beta/"+label, func(t *testing.T) {
+		t.Run(label, func(t *testing.T) {
 			path, _, _ := strings.Cut(label, " ")
 
 			requireRefusedNaming(t, raw, path+" is not a field of a mitstack/v1beta manifest")
