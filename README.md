@@ -77,7 +77,7 @@ Your CI runs `blockverify` on your block, as
 | `provenance` | Holds the signed record of where a block's image and manifest came from |
 | `attest` | Holds the signed attestation that a block passed its conformance checks |
 | `kitbinding` | Defines what counts as a block importing the handler, for `blockverify` and the platform alike |
-| `boardkeys` | Derives which board keys a commit delivers |
+| `boardkeys` | Derives which board keys a commit delivers, and which it only references |
 | `cmd/board-delivery` | Records the keys a push to main delivered on mitstack's board |
 | `cmd/pr-keys` | Fails a pull request whose commits and title carry no board key |
 | `cmd/commentcheck` | Judges the comments a pull request adds |
@@ -1016,7 +1016,9 @@ Every push to main also records which board issues it delivered, through
 delivers: a key counts only when it sits in a leading key list in the
 commit's subject, terminated by a colon, or in a whole-line `Jira:` trailer
 in the body. A key anywhere else in a subject, or in an ordinary body line,
-is prose and delivers nothing.
+is prose and delivers nothing. So is a reference, a key in a `(refs MIT-123)`
+group that closes the subject or on a `Jira-refs:` trailer line, which names
+a ticket without delivering it.
 
 `board-delivery` reads a local `board-synced` git tag as the anchor for its
 range: the commits since that tag, or since the push event's `before` sha
@@ -1032,14 +1034,20 @@ that reached it.
 ## Gating a pull request on a board key
 
 Every pull request also runs `cmd/pr-keys`, which fails the `pr-key-gate`
-check when neither its commits nor its own title carries a board key. Both
-halves are checked because either can be the one that reaches main: a merge
-commit or a rebase delivers the range's commits, while a squash delivers
-only the pull request's title, folding every commit into that one line. A
-key has to lead a commit subject's key list (`MIT-123: fix the thing`) or
-sit on its own `Jira:` trailer line, and the same leading-list rule applies
-to the title — a key that only appears inside a merge commit's default
-branch name is not delivery intent, and the gate does not count it.
+check when its commits or its own title carry no board key. Both halves are
+checked because either can be the one that reaches main: a merge commit or a
+rebase delivers the range's commits, while a squash delivers only the pull
+request's title, folding every commit into that one line.
+
+A key counts in two forms. A delivering key leads the subject or title in a
+key list closed by a colon (`MIT-123: fix the thing`), or sits on its own
+`Jira:` trailer line, and it moves the ticket to Done when the change reaches
+main. A reference closes the subject or title in a group
+(`fix the thing (refs MIT-123)`), or sits on a `Jira-refs:` trailer line, and
+it leaves the ticket's status alone. A ticket whose change also needs a
+platform or block release takes the reference here, so it closes only when
+that later delivery lands. A key anywhere else, such as inside a merge
+commit's default branch name, is not a key the gate counts.
 
 ## Judging the comments in a pull request
 

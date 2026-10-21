@@ -1,9 +1,5 @@
+// Command pr-keys, part of mitstack's own tooling, gates a pull request on whether its commit range and its own title both name a board key.
 package main
-
-// run.go is the CLI seam: Run(args, stdout) does the whole command's work
-// and returns its process exit code, so the command is testable without a
-// real process. main.go's only job is wiring Run to the real process
-// streams. Follows cmd/board-delivery/run.go's idiom.
 
 import (
 	"flag"
@@ -12,12 +8,7 @@ import (
 	"os"
 )
 
-// Run reads the commits in --base..--head and checks whether that range and
-// --title together deliver a board key. It returns 2 on a missing or bad
-// flag, 1 when the check fails (its error, and how to fix it, printed to
-// stdout), and 0 on pass. Every message goes to stdout — Run never writes to
-// the real process streams directly, so a caller can capture and assert on
-// it.
+// Run checks the commits in --base..--head and --title, writing every message to stdout and returning 2 on a bad flag, 1 on a failed check and 0 on a pass.
 func Run(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("pr-keys", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -50,7 +41,7 @@ func Run(args []string, stdout io.Writer) int {
 
 	if err := check(*title, commits); err != nil {
 		fmt.Fprintln(stdout, err)
-		fmt.Fprintln(stdout, "pr-keys: put the key in a leading \"MIT-###:\" list in a commit subject (or a Jira: trailer line) and in the pull request's title")
+		fmt.Fprintln(stdout, "pr-keys: name the key in a commit and in the pull request's title, as a leading \"MIT-###:\" list that delivers it or a closing \"(refs MIT-###)\" group that only references it; a commit may use a Jira: or Jira-refs: trailer line instead")
 		return 1
 	}
 

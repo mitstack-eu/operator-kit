@@ -1,6 +1,6 @@
 package main
 
-// A merge or rebase delivers the commits and a squash delivers the title, so a pull request must carry a key in both.
+// A merge or rebase delivers the commits and a squash delivers the title, so a pull request must name a key in both.
 
 import (
 	"fmt"
@@ -17,12 +17,12 @@ type commit struct {
 func check(title string, commits []commit) error {
 	hasCommitKey := false
 	for _, c := range commits {
-		if len(boardkeys.Message(c.Subject, c.Body)) > 0 {
+		if namesKey(c.Subject, c.Body) {
 			hasCommitKey = true
 			break
 		}
 	}
-	hasTitleKey := len(boardkeys.Subject(title)) > 0
+	hasTitleKey := namesKey(title, "")
 	if hasCommitKey && hasTitleKey {
 		return nil
 	}
@@ -35,4 +35,9 @@ func check(title string, commits []commit) error {
 		missing = append(missing, "title")
 	}
 	return fmt.Errorf("pr-keys: no board key in the pull request's %s", strings.Join(missing, " and "))
+}
+
+// A reference passes too, since a change whose ticket also needs a release elsewhere must leave the key open.
+func namesKey(subject, body string) bool {
+	return len(boardkeys.Message(subject, body)) > 0 || len(boardkeys.References(subject, body)) > 0
 }
