@@ -304,6 +304,11 @@ request secret scrubbed where it appears literally, and any other value is
 logged only as its type, because formatting it could print a secret in a
 form a literal scrub cannot find. A block cannot turn this recovery off.
 
+A block whose resource sits on a host that cannot run its workload, such as
+a box whose Docker does not answer, refuses with the class
+`handler.ClassHostCannotRun`. The class tells the platform that a fresh
+subscribe on the same host cannot repair the resource.
+
 The idempotency cache is keyed by subscription and by the request's
 `idempotencyKey`, which the engine sets once per call and keeps the same
 across every retry of that call. It stores only a settled answer, for an

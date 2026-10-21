@@ -7,6 +7,9 @@ import (
 
 const refusedPrefix = "refused:"
 
+// ClassHostCannotRun refuses a resource whose host cannot run its workload, which a fresh subscribe on the same host cannot repair.
+const ClassHostCannotRun = "host-cannot-run"
+
 // unclassifiedRefusal keeps a wire-level statusDetail from carrying an empty class segment.
 const unclassifiedRefusal = "unclassified"
 
