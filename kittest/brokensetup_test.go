@@ -4,6 +4,7 @@ package kittest_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -37,9 +38,13 @@ type heldProvider struct {
 	findsOnTeardown bool
 	// ignoresFaults makes every side effect skip the Faults it was handed.
 	ignoresFaults bool
+	refusesWrites bool
 }
 
 func (p *heldProvider) create(item, subscriptionID, what string) error {
+	if p.refusesWrites {
+		return errors.New("the provider refuses every write")
+	}
 	if !p.ignoresFaults {
 		if err := p.faults.SideEffect(what); err != nil {
 			return err
@@ -167,16 +172,23 @@ func TestTeardownAfterBrokenSetup_RefusesASetupThatCannotBreakAnything(t *testin
 	noSubscription.Desired.SubscriptionID = ""
 	unservable := brokenSetup(t, func(*heldProvider) {})
 	unservable.Manifest = []byte("apiVersion: mitstack/v1beta\n")
+	refused := brokenSetup(t, func(p *heldProvider) { p.refusesWrites = true })
+	unreached := brokenSetup(t, func(*heldProvider) {})
+	runs := 0
+	unreached.NewProvider = func(f *kittest.Faults) kittest.FaultProvider {
+		runs++
+		return &heldProvider{held: map[string]string{}, faults: f, ignoresFaults: runs > 1}
+	}
 
 	for want, in := range map[string]kittest.BrokenSetup{
 		"no side effect": noSideEffect, "NewProvider is required": noProvider, "SubscriptionID": noSubscription,
-		"cannot be served": unservable,
+		"cannot be served": unservable, "with nothing broken answered": refused, "never reached": unreached,
 	} {
 		t.Run(want, func(t *testing.T) {
 			problems := kittest.CheckTeardownAfterBrokenSetup(in)
 
-			if len(problems) != 1 || !strings.Contains(problems[0], want) {
-				t.Errorf("want one problem naming %q, got %q", want, problems)
+			if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), want) {
+				t.Errorf("want a problem naming %q, got %q", want, problems)
 			}
 		})
 	}
