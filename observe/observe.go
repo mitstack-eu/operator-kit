@@ -4,7 +4,7 @@ package observe
 import (
 	"fmt"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 func present(outputs map[string]string) contract.Observation {

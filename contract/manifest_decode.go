@@ -10,14 +10,10 @@ import (
 	"time"
 )
 
-// manifestDecoder reads a node tree by struct tags: a field whose tag has no omitempty is required, a fold tag names a second key whose value must agree, and a field named _ takes a key's value and keeps none of it.
+// manifestDecoder reads a node tree by struct tags, and a field whose tag has no omitempty is required.
 type manifestDecoder struct {
 	version string
 	tag     string
-	// coerce reads each scalar as the platform's yaml.v3 decoder does: a null is the zero value, a string takes any scalar's text, a bool also takes the YAML 1.1 words, and an int truncates a float toward zero.
-	coerce bool
-	// dropped collects the path of each key a field named _ reads with a non-null value.
-	dropped *[]string
 }
 
 var (
@@ -27,12 +23,6 @@ var (
 		`[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?|[-+]?\.(inf|Inf|INF)|\.(nan|NaN|NAN))$`)
 	yamlStyleFloat = regexp.MustCompile(`^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$`)
 )
-
-// yaml11Booleans are the words yaml.v3 reads into a Go bool, plain or quoted, for YAML 1.1.
-var yaml11Booleans = map[string]bool{
-	"y": true, "Y": true, "yes": true, "Yes": true, "YES": true, "on": true, "On": true, "ON": true,
-	"n": false, "N": false, "no": false, "No": false, "NO": false, "off": false, "Off": false, "OFF": false,
-}
 
 // durationType is read from a Go duration such as 75m, and a manifest takes only a positive one.
 var durationType = reflect.TypeOf(time.Duration(0))
@@ -45,8 +35,6 @@ type manifestField struct {
 	name     string
 	index    int
 	required bool
-	fold     string
-	dropped  bool
 }
 
 func manifestFields(t reflect.Type, tag string) []manifestField {
@@ -58,8 +46,6 @@ func manifestFields(t reflect.Type, tag string) []manifestField {
 			name:     name,
 			index:    i,
 			required: opts != "omitempty",
-			fold:     f.Tag.Get("fold"),
-			dropped:  f.Name == "_",
 		})
 	}
 	return fields
@@ -104,10 +90,6 @@ func (d manifestDecoder) decode(n *yamlNode, v reflect.Value, path string) error
 		return err
 	}
 	if isNull(n) {
-		if d.coerce {
-			v.Set(reflect.Zero(v.Type()))
-			return nil
-		}
 		return noValue(path)
 	}
 	switch v.Type() {
@@ -129,19 +111,15 @@ func (d manifestDecoder) decode(n *yamlNode, v reflect.Value, path string) error
 		if n.kind != yamlScalar {
 			return fmt.Errorf("%s must be one value, not a mapping or a list", path)
 		}
-		if !d.coerce && !n.str && (plainBoolean.MatchString(n.value) || plainNumber.MatchString(n.value)) {
+		if !n.str && (plainBoolean.MatchString(n.value) || plainNumber.MatchString(n.value)) {
 			return fmt.Errorf("%s is %s, which YAML reads as a number or a boolean, but it takes a string, so quote it", path, n.value)
 		}
 		v.SetString(n.value)
 	case reflect.Bool:
-		b, ok := d.boolean(n)
-		if !ok {
-			if d.coerce {
-				return fmt.Errorf("%s takes a boolean only: true or false, or yes, no, on or off", path)
-			}
+		if n.kind != yamlScalar || n.str || n.value != "true" && n.value != "false" {
 			return fmt.Errorf("%s takes true or false only", path)
 		}
-		v.SetBool(b)
+		v.SetBool(n.value == "true")
 	case reflect.Int:
 		i, ok := plainInteger(n)
 		if !ok || v.OverflowInt(i) {
@@ -164,20 +142,6 @@ func (d manifestDecoder) decode(n *yamlNode, v reflect.Value, path string) error
 		return fmt.Errorf("%s has a Go type, %s, the manifest decoder does not read", path, v.Type())
 	}
 	return nil
-}
-
-// boolean takes no quoted true or false under coerce, but takes a YAML 1.1 word plain or quoted, as yaml.v3 does.
-func (d manifestDecoder) boolean(n *yamlNode) (value, ok bool) {
-	if n.kind != yamlScalar {
-		return false, false
-	}
-	if !n.str && plainBoolean.MatchString(n.value) && (d.coerce || n.value == "true" || n.value == "false") {
-		return strings.EqualFold(n.value, "true"), true
-	}
-	if d.coerce {
-		value, ok = yaml11Booleans[n.value]
-	}
-	return value, ok
 }
 
 func positiveDuration(n *yamlNode, path string) (time.Duration, error) {
@@ -222,9 +186,6 @@ func (d manifestDecoder) list(n *yamlNode, v reflect.Value, path string) error {
 	}
 	list := reflect.MakeSlice(v.Type(), 0, len(n.items))
 	for i, item := range n.items {
-		if d.coerce && isNull(item) {
-			continue
-		}
 		elem := reflect.New(v.Type().Elem()).Elem()
 		if err := d.decode(item, elem, fmt.Sprintf("%s[%d]", path, i)); err != nil {
 			return err
@@ -268,11 +229,6 @@ func (d manifestDecoder) mapping(n *yamlNode, v reflect.Value, path string) erro
 	return nil
 }
 
-type foldedValue struct {
-	field manifestField
-	value string
-}
-
 func (d manifestDecoder) structure(n *yamlNode, v reflect.Value, path string) error {
 	if err := mapEntries(n, path); err != nil {
 		return err
@@ -281,46 +237,18 @@ func (d manifestDecoder) structure(n *yamlNode, v reflect.Value, path string) er
 	byKey := make(map[string]manifestField, len(fields))
 	for _, f := range fields {
 		byKey[f.name] = f
-		if f.fold != "" {
-			byKey[f.fold] = f
-		}
 	}
 	present := make(map[string]bool, len(n.keys))
-	var folded []foldedValue
 	for i, key := range n.keys {
 		keyPath := fieldPath(path, key)
 		f, ok := byKey[key]
 		if !ok {
 			return fmt.Errorf("%s is not a field of a %s manifest", keyPath, d.version)
 		}
-		val := n.vals[i]
-		target := v.Field(f.index)
-		underFold := key != f.name
-		if f.dropped || underFold {
-			target = reflect.New(target.Type()).Elem()
-		}
-		var err error
-		switch {
-		case isNull(val) && f.required:
-			err = noValue(keyPath)
-		default:
-			err = d.decode(val, target, keyPath)
-		}
-		if err != nil {
+		if err := d.decode(n.vals[i], v.Field(f.index), keyPath); err != nil {
 			return err
-		}
-		if f.dropped && d.dropped != nil && !isNull(val) {
-			*d.dropped = append(*d.dropped, keyPath)
-		}
-		if underFold {
-			folded = append(folded, foldedValue{f, target.String()})
 		}
 		present[key] = true
-	}
-	for _, fv := range folded {
-		if err := foldInto(v.Field(fv.field.index), fv, path); err != nil {
-			return err
-		}
 	}
 	for _, f := range fields {
 		if !f.required {
@@ -335,17 +263,4 @@ func (d manifestDecoder) structure(n *yamlNode, v reflect.Value, path string) er
 		}
 	}
 	return nil
-}
-
-func foldInto(field reflect.Value, fv foldedValue, path string) error {
-	switch current := field.String(); {
-	case fv.value == "":
-		return nil
-	case current == "" || current == fv.value:
-		field.SetString(fv.value)
-		return nil
-	default:
-		return fmt.Errorf("%s: %s %q and %s %q disagree; write one of them, or both with the same value",
-			describe(path), fv.field.fold, fv.value, fv.field.name, current)
-	}
 }

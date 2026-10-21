@@ -1,13 +1,12 @@
 package kittest
 
 import (
-	"fmt"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 // Manifest is a block manifest parsed by contract.ParseManifest and read by dotted key path.
@@ -30,13 +29,6 @@ func ReadManifest(tb testing.TB, path string) Manifest {
 	return Manifest{Manifest: m, tb: tb}
 }
 
-type v1alphaRoot struct {
-	APIVersion string                   `yaml:"apiVersion"`
-	Kind       string                   `yaml:"kind"`
-	Metadata   contract.V1AlphaMetadata `yaml:"metadata"`
-	Spec       contract.V1AlphaSpec     `yaml:"spec"`
-}
-
 // Section returns the value at a dotted key path such as "spec.lifecycle", and false when the manifest does not set it.
 func (m Manifest) Section(path string) (any, bool) {
 	m.tb.Helper()
@@ -56,10 +48,9 @@ func (m Manifest) SpecScalar(key string) (string, bool) {
 	switch v.Kind() {
 	case reflect.String:
 		text = strings.TrimSpace(v.String())
-	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if !v.IsZero() {
-			text = fmt.Sprint(v.Interface())
+	case reflect.Bool:
+		if v.Bool() {
+			text = "true"
 		}
 	default:
 		m.tb.Fatalf("manifest key %s is a section, not a scalar", path)
@@ -70,42 +61,21 @@ func (m Manifest) SpecScalar(key string) (string, bool) {
 
 func (m Manifest) lookup(path string) reflect.Value {
 	m.tb.Helper()
-	var v reflect.Value
-	var tag string
-	switch {
-	case m.Block != nil:
-		v, tag = reflect.ValueOf(*m.Block), "json"
-	case m.V1Alpha != nil:
-		v, tag = reflect.ValueOf(v1alphaRoot{
-			APIVersion: m.APIVersion,
-			Kind:       m.V1Alpha.Kind,
-			Metadata:   m.V1Alpha.Metadata,
-			Spec:       m.V1Alpha.Spec,
-		}), "yaml"
-	default:
+	if m.Block == nil {
 		m.tb.Fatalf("manifest key %s read from a manifest ReadManifest did not return", path)
 		return reflect.Value{}
 	}
+	v := reflect.ValueOf(*m.Block)
 	for _, seg := range strings.Split(path, ".") {
 		v = deref(v)
 		switch v.Kind() {
 		case reflect.Struct:
-			field, ok := fieldByKey(v.Type(), tag, seg)
+			field, ok := fieldByKey(v.Type(), seg)
 			if !ok {
 				m.tb.Fatalf("manifest key %s: %q is not a key of %s", path, seg, v.Type())
 				return reflect.Value{}
 			}
 			v = v.FieldByIndex(field.Index)
-		case reflect.Map:
-			if v.Type().Key().Kind() != reflect.String {
-				m.tb.Fatalf("manifest key %s: %s is not keyed by name", path, v.Type())
-				return reflect.Value{}
-			}
-			next := v.MapIndex(reflect.ValueOf(seg).Convert(v.Type().Key()))
-			if !next.IsValid() {
-				next = reflect.Zero(v.Type().Elem())
-			}
-			v = next
 		default:
 			m.tb.Fatalf("manifest key %s: %q is below a %s, which has no keys", path, seg, v.Type())
 			return reflect.Value{}
@@ -125,10 +95,10 @@ func deref(v reflect.Value) reflect.Value {
 	return v
 }
 
-func fieldByKey(t reflect.Type, tag, key string) (reflect.StructField, bool) {
+func fieldByKey(t reflect.Type, key string) (reflect.StructField, bool) {
 	for i := range t.NumField() {
 		f := t.Field(i)
-		name, _, _ := strings.Cut(f.Tag.Get(tag), ",")
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if f.IsExported() && name != "" && name != "-" && name == key {
 			return f, true
 		}

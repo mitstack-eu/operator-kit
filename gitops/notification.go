@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/events"
+	"github.com/mitstack-eu/operator-kit/v3/events"
 )
 
 // Only Phase and Health decide a deploy.

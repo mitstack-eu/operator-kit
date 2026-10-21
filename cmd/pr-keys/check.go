@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/v2/boardkeys"
+	"github.com/mitstack-eu/operator-kit/v3/boardkeys"
 )
 
 type commit struct {

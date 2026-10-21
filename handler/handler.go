@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/webhook"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/webhook"
 )
 
 // maxHookBodyBytes bounds the read so a hostile caller cannot exhaust memory before the trust boundary runs.
@@ -53,17 +53,6 @@ type CredentialIssuer interface {
 	IssueCredential(ctx context.Context, d contract.Desired, appID string) (contract.Credential, error)
 }
 
-// Hook is an extension point registered at one of the four HookXxx points.
-type Hook func(ctx context.Context, d contract.Desired) error
-
-// The closed set of hook points the Handler calls; New refuses a hook registered under any other name.
-const (
-	HookBeforeEnsure = "beforeEnsure"
-	HookAfterEnsure  = "afterEnsure"
-	HookBeforeDelete = "beforeDelete"
-	HookAfterDelete  = "afterDelete"
-)
-
 // Config wires a Handler; only Resource and JWKSURL are required, VerbBudget defaults to 20, PollInterval to 500ms, and a nil Logs answers GET /logs with 404.
 type Config struct {
 	Resource Resource
@@ -74,10 +63,7 @@ type Config struct {
 	// TypeObservers is keyed by resource-type id and serves a validate naming a resource the manifest no longer declares; refused without a mitstack/v1beta manifest.
 	TypeObservers map[string]Observer
 
-	// Manifest is required when Hooks is non-empty, since a hook is registered only if the manifest declares it.
 	Manifest []byte
-
-	Hooks map[string]Hook
 
 	// Types is the type snapshot the manifest names its types from, and a declared resource of a type it marks EndsWithSubscription is counted absent once the unsubscribe's delete succeeds, unobserved.
 	Types contract.TypeSnapshot
@@ -102,16 +88,14 @@ type Config struct {
 
 type Handler struct {
 	resource Resource
-	hooks    map[string]Hook
 
 	// declared is nil unless the manifest is mitstack/v1beta, whose block the handler serves at block level.
 	declared      []namedResource
 	typeObservers map[string]Observer
 	provided      map[string]bool
 
-	retainsOnUnsubscribe bool
-	types                contract.TypeSnapshot
-	capability           bool
+	types      contract.TypeSnapshot
+	capability bool
 
 	jwksURL   string
 	publicKey func(kid string) (ed25519.PublicKey, error)
@@ -149,36 +133,27 @@ func New(cfg Config) (*Handler, error) {
 		err = errObserversWithoutManifest
 	case len(cfg.TypeObservers) > 0:
 		err = errTypeObserversWithoutManifest
-	default:
-		err = validateHooks(cfg, declared.hooks)
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	hooks := cfg.Hooks
-	if hooks == nil {
-		hooks = map[string]Hook{}
-	}
-
 	h := &Handler{
-		resource:             cfg.Resource,
-		hooks:                hooks,
-		declared:             resources,
-		typeObservers:        cfg.TypeObservers,
-		provided:             declared.provided,
-		retainsOnUnsubscribe: declared.retainsOnUnsubscribe,
-		types:                cfg.Types,
-		capability:           declared.capability,
-		jwksURL:              cfg.JWKSURL,
-		publicKey:            cfg.PublicKey,
-		replay:               cfg.Replay,
-		logs:                 cfg.Logs,
-		verbBudget:           cfg.VerbBudget,
-		pollInterval:         cfg.PollInterval,
-		sleep:                cfg.Sleep,
-		now:                  cfg.Now,
-		idempotency:          newIdempotencyCache(),
+		resource:      cfg.Resource,
+		declared:      resources,
+		typeObservers: cfg.TypeObservers,
+		provided:      declared.provided,
+		types:         cfg.Types,
+		capability:    declared.capability,
+		jwksURL:       cfg.JWKSURL,
+		publicKey:     cfg.PublicKey,
+		replay:        cfg.Replay,
+		logs:          cfg.Logs,
+		verbBudget:    cfg.VerbBudget,
+		pollInterval:  cfg.PollInterval,
+		sleep:         cfg.Sleep,
+		now:           cfg.Now,
+		idempotency:   newIdempotencyCache(),
 	}
 
 	if h.verbBudget <= 0 {

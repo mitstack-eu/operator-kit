@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/v2/safe"
+	"github.com/mitstack-eu/operator-kit/v3/safe"
 )
 
 const APIGitHubHost = "api.github.com"

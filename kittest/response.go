@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 // respGoldenEntries fails the test rather than skipping, and reads the goldens embedded in the contract package so an external operator needs no working-directory path.

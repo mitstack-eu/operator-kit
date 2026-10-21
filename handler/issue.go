@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 const (

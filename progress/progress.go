@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/mitstack-eu/operator-kit/v2/events"
-	"github.com/mitstack-eu/operator-kit/v2/safe"
+	"github.com/mitstack-eu/operator-kit/v3/events"
+	"github.com/mitstack-eu/operator-kit/v3/safe"
 )
 
 type Event struct {

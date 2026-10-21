@@ -9,12 +9,11 @@ const teardownNeedle = "func TestUnsubscribeDeletes"
 
 const teardownDeletesDetail = "TestUnsubscribeDeletes* proves unsubscribe deletes what subscribe created"
 
-// teardownSuite runs TestUnsubscribeDeletes* as well as checking it exists, so a broken teardown test fails the gate; a legacy block must also verify its teardown, which the kit's handler does for a kit/v1 one.
+// teardownSuite runs TestUnsubscribeDeletes* as well as checking it exists, so a broken teardown test fails the gate.
 func teardownSuite(target string) SuiteResult {
 	const name = "teardown"
 
-	contract, detail, ok := contractRule(target)
-	if !ok {
+	if detail, ok := requireKitV1Contract(target); !ok {
 		return SuiteResult{name, "fail", detail}
 	}
 
@@ -31,15 +30,6 @@ func teardownSuite(target string) SuiteResult {
 		return SuiteResult{name, "fail", detailFromGoTestOutput(output)}
 	}
 
-	if contract == kitV1Contract {
-		return SuiteResult{name, "pass", fmt.Sprintf(
-			"%s rule: %s; the kit's handler asks the provider again after a delete, so the TestUnsubscribeVerifies rule is waived",
-			kitV1Contract, teardownDeletesDetail)}
-	}
-
-	verified, ok := checkVerifiedTeardown(target)
-	if !ok {
-		return SuiteResult{name, "fail", verified}
-	}
-	return SuiteResult{name, "pass", teardownDeletesDetail + "; " + verified}
+	return SuiteResult{name, "pass", fmt.Sprintf(
+		"%s rule: %s; the kit's handler asks the provider again after a delete", kitV1Contract, teardownDeletesDetail)}
 }

@@ -15,8 +15,6 @@ const kitModulePath = "github.com/mitstack-eu/operator-kit"
 // kitVersionFloor is held textually equal to scaffold.KitVersionFloor by a test, because this module cannot import that package; bump it only on a deliberate floor raise.
 const kitVersionFloor = "v0.1.0"
 
-const kitShimFile = "kitshim.go"
-
 // kitOwnedFuncs are the trust-boundary functions only the kit may declare, so a block's local copy cannot diverge from the contract.
 var kitOwnedFuncs = []string{
 	"verifyReplay",
@@ -35,34 +33,25 @@ var kitOwnedFuncs = []string{
 	"scrubEventDetail",
 }
 
-// trustPlumbingSuite is textual and static so it still fails meaningfully on a module that does not compile, and it alone fails a missing manifest.yaml.
+// trustPlumbingSuite is textual and static so it still fails meaningfully on a module that does not compile.
 func trustPlumbingSuite(target string) SuiteResult {
 	const name = "trust-plumbing"
 
-	contract, detail, ok := contractRule(target)
-	if !ok {
+	if _, err := os.Stat(filepath.Join(target, manifestFile)); err != nil {
+		return SuiteResult{name, "fail", fmt.Sprintf("%s is missing manifest.yaml", target)}
+	}
+	if detail, ok := requireKitV1Contract(target); !ok {
 		return SuiteResult{name, "fail", detail}
 	}
 	if detail, ok := checkKitDependency(target); !ok {
 		return SuiteResult{name, "fail", detail}
 	}
-	var binding string
-	if contract == kitV1Contract {
-		file, ok := checkKitHandlerImport(target)
-		if !ok {
-			return SuiteResult{name, "fail", file}
-		}
-		binding = fmt.Sprintf("%s imports %s (%s waived)", file, kitHandlerPackage, kitShimFile)
-	} else if _, err := os.Stat(filepath.Join(target, kitShimFile)); err != nil {
-		return SuiteResult{name, "fail", fmt.Sprintf("%s has no %s binding it to the kit", target, kitShimFile)}
-	} else if binding, ok = checkKitShimParity(target); !ok {
-		return SuiteResult{name, "fail", binding}
+	file, ok := checkKitHandlerImport(target)
+	if !ok {
+		return SuiteResult{name, "fail", file}
 	}
 	if detail, ok := checkNoOwnedSymbolRedeclared(target); !ok {
 		return SuiteResult{name, "fail", detail}
-	}
-	if _, err := os.Stat(filepath.Join(target, manifestFile)); err != nil {
-		return SuiteResult{name, "fail", fmt.Sprintf("%s is missing manifest.yaml", target)}
 	}
 	githubBase, ok := checkGitHubBaseAllowlist(target)
 	if !ok {
@@ -70,13 +59,10 @@ func trustPlumbingSuite(target string) SuiteResult {
 	}
 
 	pass := fmt.Sprintf(
-		"depends on %s at or above the floor %s, %s, no kit-owned symbol redeclared, manifest.yaml present",
-		kitModulePath, kitVersionFloor, binding)
+		"%s rule: depends on %s at or above the floor %s, %s imports %s, no kit-owned symbol redeclared, manifest.yaml present",
+		kitV1Contract, kitModulePath, kitVersionFloor, file, kitHandlerPackage)
 	if githubBase != "" {
 		pass += ", " + githubBase
-	}
-	if contract == kitV1Contract {
-		pass = kitV1Contract + " rule: " + pass
 	}
 	return SuiteResult{name, "pass", pass}
 }
@@ -133,7 +119,7 @@ func checkNoOwnedSymbolRedeclared(target string) (detail string, ok bool) {
 			return nil
 		}
 		name := d.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == kitShimFile {
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			return nil
 		}
 		raw, rerr := os.ReadFile(path)

@@ -8,9 +8,9 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/events"
-	"github.com/mitstack-eu/operator-kit/v2/safe"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/events"
+	"github.com/mitstack-eu/operator-kit/v3/safe"
 )
 
 // dispatchRequest runs the verb through the idempotency cache, storing only a settled answer.
@@ -162,55 +162,17 @@ func refuseSecretOutputs(outputs map[string]string, secrets map[string]map[strin
 }
 
 func (h *Handler) ensureAndSettle(ctx context.Context, d contract.Desired, secrets []string) (int, contract.Response) {
-	if hook, ok := h.hooks[HookBeforeEnsure]; ok {
-		if err := hook(ctx, d); err != nil {
-			return h.errorResponse(err, secrets)
-		}
-	}
 	if err := h.resource.Ensure(ctx, d); err != nil {
 		return h.errorResponse(err, secrets)
-	}
-	if hook, ok := h.hooks[HookAfterEnsure]; ok {
-		if err := hook(ctx, d); err != nil {
-			return h.errorResponse(err, secrets)
-		}
 	}
 	return h.settlePresent(ctx, d, secrets)
 }
 
-// deleteAndSettle answers a manifest declaring retainsOnUnsubscribe absent:true without polling Observe, since the block keeps the resource by design and Observe would keep reporting Present.
 func (h *Handler) deleteAndSettle(ctx context.Context, desired contract.Desired, secrets []string) (int, contract.Response) {
-	if hook, ok := h.hooks[HookBeforeDelete]; ok {
-		if err := hook(ctx, desired); err != nil {
-			return h.errorResponse(err, secrets)
-		}
-	}
-
 	handoverOutputs, err := h.resource.Delete(ctx, desired)
 	if err != nil {
 		return h.errorResponse(err, secrets)
 	}
-
-	if hook, ok := h.hooks[HookAfterDelete]; ok {
-		if err := hook(ctx, desired); err != nil {
-			return h.errorResponse(err, secrets)
-		}
-	}
-
-	if h.retainsOnUnsubscribe {
-		if err := refuseSecretOutputs(handoverOutputs, desired.Secrets); err != nil {
-			return h.errorResponse(err, secrets)
-		}
-		absent := true
-		return http.StatusOK, contract.Response{
-			Absent:  &absent,
-			Outputs: handoverOutputs,
-			StatusDetail: safe.Scrub(
-				"the block declares it retains its resource on unsubscribe, so absence was not observed",
-				secrets...),
-		}
-	}
-
 	return h.settleAbsent(ctx, desired, secrets, handoverOutputs)
 }
 

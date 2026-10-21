@@ -11,7 +11,7 @@ import (
 )
 
 // suiteVersion must change with the report shape, suite set, run order or digest algorithms.
-const suiteVersion = "1.3.0"
+const suiteVersion = "2.0.0"
 
 // Report is the standalone-mode conformance report blockverify emits.
 type Report struct {
@@ -113,7 +113,6 @@ func runStandalone(target, baseManifest string) Report {
 		resourcesSuite(target),
 		deliverableSuite(target),
 		manifestSuite(target, baseManifest),
-		namingSuite(target),
 	}
 
 	verdict := "pass"

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mitstack-eu/operator-kit/v2/adopt"
+	"github.com/mitstack-eu/operator-kit/v3/adopt"
 )
 
 type Presence struct {

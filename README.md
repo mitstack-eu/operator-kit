@@ -6,9 +6,7 @@ the events a block emits as it works, and `kittest`, the conformance harness
 a block's own tests run against the same fixtures the engine is tested
 against. The `contract` package owns the wire contract itself: the envelope
 and response JSON schemas, the golden request and response fixtures both
-sides are checked against, and the resource registry. The registry is the one
-list of output names a block may declare in `spec.outputs` and read under
-`spec.requires[].reads`, and the engine reads it from this package.
+sides are checked against, and the block manifest parser.
 
 ## Which packages a block needs
 
@@ -27,7 +25,7 @@ blocks also import `observe` and `safe`. Every block's tests import
 
 | Package | What a block uses it for |
 |---|---|
-| `contract` | The wire contract, the manifest parser and the resource registry |
+| `contract` | The wire contract and the manifest parser |
 | `handler` | Serving the four lifecycle verbs over the block's `Resource` |
 | `webhook` | Verifying mitstack's signature on every lifecycle call |
 | `observe` | Asking the provider what stands now |
@@ -109,13 +107,13 @@ the start of an unquoted value.
 [Running the block checks on your block](docs/block-checks.md) lists every
 suite blockverify runs and the one command you run it with.
 
-`contract.ParseManifest` is the kit's one block manifest parser for both
-manifest versions, and blockverify and the handler read every manifest
-through it. Under `mitstack/v1alpha` it reads the whole manifest strictly
-into `contract.V1AlphaManifest`, every field the platform's decoder reads
-and `spec.naming.appName`. Under `mitstack/v1beta` it reads the whole
-manifest strictly into `contract.BlockManifest`. Under either version it
-refuses any key those types do not name, naming the key's path. The kit ships the JSON Schema for `mitstack/v1beta` as
+`contract.ParseManifest` is the kit's one block manifest parser, and
+blockverify and the handler read every manifest through it. It reads the
+whole `mitstack/v1beta` manifest strictly into `contract.BlockManifest` and
+refuses any key that type does not name, naming the key's path. It refuses
+any other `apiVersion`, `mitstack/v1alpha` included, naming the one version
+it reads, so a requirement's `optional` and `spec.dependsOn` are refused as
+keys no field names. The kit ships the JSON Schema for `mitstack/v1beta` as
 `contract/manifest.schema.json`, generated from the same types, and a contract
 test fails when the committed file differs from what the types generate.
 Regenerate it with
@@ -213,17 +211,18 @@ and stay empty after a parse.
 
 ## Importing it
 
-The module path is `github.com/mitstack-eu/operator-kit/v2`, since Go puts
+The module path is `github.com/mitstack-eu/operator-kit/v3`, since Go puts
 the major version of a v2 or later release in the path. A block adds it the
 usual way and imports its packages under that path, as in
-`github.com/mitstack-eu/operator-kit/v2/handler`:
+`github.com/mitstack-eu/operator-kit/v3/handler`:
 
 ```
-go get github.com/mitstack-eu/operator-kit/v2@vX.Y.Z
+go get github.com/mitstack-eu/operator-kit/v3@vX.Y.Z
 ```
 
-A block on a v1 release keeps working, because v2 changes the Go API and
-leaves the wire contract alone. It moves to v2 on its next change.
+A block on a v1 or v2 release keeps working, because v3 changes the Go API
+and the manifest version the parser reads and leaves the wire contract alone.
+It moves to v3 once its manifest is `mitstack/v1beta` with `contract: kit/v1`.
 
 The repository is public, so `go get` fetches it through the Go module proxy
 with no credential and no `GOPRIVATE` setting.
@@ -267,20 +266,7 @@ fails open exactly as an operator that never implements the marker does.
 A block implements `handler.Resource` — `Ensure`, `Observe`, `Delete` — and
 `handler.New` wires it behind the trust boundary, the settle loop (a bounded
 poll of `Observe` until the resource actually serves) and the
-idempotency cache described below, calling whatever `Hooks` the block's
-`Config` registers at `HookBeforeEnsure`, `HookAfterEnsure`, `HookBeforeDelete`
-or `HookAfterDelete`.
-
-A block declares its hooks in the manifest under `spec.lifecycle.hooks`, the
-path held in the constant `contract.LifecycleHooksField`.
-`contract.LifecycleHookPoints` is the closed set of names a block may declare
-there. The handler and the platform's manifest validation both refuse a
-name outside that set, and both refuse a name listed twice. Both sides test against
-the same manifest golden, `contract.HooksManifestGolden`, so a change on
-either side turns the other side's tests red. Its twin,
-`contract.TypeBlockHooksManifestGolden`, is the same block written with
-`type: block`, `format` and `store` and without a layer, and the handler
-reads it exactly as it reads the first.
+idempotency cache described below.
 
 A request that carries no OBO token is refused with 401 on every verb —
 subscribe, upgrade, validate, unsubscribe — before the Resource is ever
@@ -288,12 +274,12 @@ consulted. The token is the platform's own signed assertion of the
 consuming org, app and subscription, and nothing in `Config` or the
 manifest turns the check off.
 
-An error the Resource or a hook returns is answered by its type. A
+An error the Resource returns is answered by its type. A
 `*handler.Refused` answers 400 with a `refused:<class>` status detail,
 which the engine treats as permanent. Any other error answers 500, which
 the engine retries under the same idempotency key, and the idempotency
 cache never stores a 500, so the retry reaches the Resource again. A panic
-in the Resource or a hook is answered the same way as that second case: the
+in the Resource is answered the same way as that second case: the
 Handler recovers it and answers 500 with a fixed error naming the verb,
 such as `handler: the block panicked during subscribe`. The response never
 carries the panic value. The Handler recovers inside the idempotency cache's
@@ -364,27 +350,6 @@ earlier call already destroyed the resource; a second call must find the
 snapshot (or other handover artifact) it already made, or report the
 resource gone, rather than fail. Its outputs also reach the wire unscrubbed,
 the same way Observe's do, so they must never carry secret material.
-
-### Retaining a resource on unsubscribe
-
-A block whose manifest declares `spec.lifecycle.retainsOnUnsubscribe: true`
-is one that by design keeps the resource it created — a consumer's own app
-repository, say — so a normal teardown's `Observe` poll would just keep
-reporting `Present` forever, since nothing ever destroys the resource to
-make it go absent. Such a block declares `retainsOnUnsubscribe` so the
-Handler settles its unsubscribe without ever probing for absence: as soon as
-the `beforeDelete` hook, `Delete` and the `afterDelete` hook have all
-succeeded, it answers `absent:true` at once, carrying any outputs `Delete`
-returned, with a `statusDetail` explaining that the block declares it
-retains its resource so absence was not observed. `Observe` is never called
-for that unsubscribe.
-
-A failed `Delete` or delete-side hook is unaffected by
-the declaration: it still answers the ordinary error response, never
-`absent:true`. A block that does not declare `retainsOnUnsubscribe` — the
-field defaults to `false` — keeps the ordinary behaviour: the Handler polls
-`Observe` up to `VerbBudget` times and answers `absent:false` if the budget
-runs out still non-absent.
 
 ### The output-secret gate
 
@@ -888,20 +853,19 @@ needed, and none is added.
 `kittest.ReadManifest` parses a block manifest file through
 `contract.ParseManifest` and fails the test, naming the path, when the file
 cannot be read or the parser refuses it. The `kittest.Manifest` it returns
-embeds the parsed `contract.Manifest`, so `ID()`, `Version()`, `Block` and
-`V1Alpha` stay reachable.
+embeds the parsed `contract.Manifest`, so `ID()`, `Version()` and `Block`
+stay reachable.
 
 `Section` reads a value by dotted key path, such as `spec.lifecycle` or
-`spec.lifecycle.verbBudgets.subscribe`. Each segment is a manifest key: the
-json tag on the `mitstack/v1beta` types or the yaml tag on the
-`mitstack/v1alpha` types. It returns the field's typed Go value, so
-`spec.resources` under v1beta is a `[]contract.ManifestResource`, and it
+`spec.lifecycle.contract`. Each segment is a manifest key, the json tag on
+the `mitstack/v1beta` types. It returns the field's typed Go value, so
+`spec.resources` is a `[]contract.ManifestResource`, and it
 returns false for a key the manifest leaves unset. A key the types do not
 name, or a key below a scalar, fails the test rather than reading as unset.
 
 `SpecScalar` reads `spec.<key>` as text, trimmed, so a folded `>` description
-reads as one line. It renders a boolean or an integer with `fmt.Sprint`,
-reads a blank string as unset, and fails the test when the key is a section.
+reads as one line. It renders a true boolean as `true`, reads a false one
+and a blank string as unset, and fails the test when the key is a section.
 
 ```go
 m := kittest.ReadManifest(t, "manifest.yaml")
@@ -1081,7 +1045,7 @@ release the earlier push owed.
 
 A change that breaks the Go API takes `kit-release: major`. Go requires the
 module path to end in the major version from v2 on, so the same change moves
-the module path, now `/v2`, to the next major and every import with it.
+the module path, now `/v3`, to the next major and every import with it.
 
 ## Recording a delivery on the board
 

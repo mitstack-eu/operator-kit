@@ -7,53 +7,10 @@ import (
 	"strings"
 )
 
-// LifecycleHooksField is the one block manifest field that carries lifecycle hook declarations, read by both the kit handler and the platform's parser.
-const LifecycleHooksField = "spec.lifecycle.hooks"
-
-const AppNameNamingField = "spec.naming.appName"
-
-// AppNameNaming is a block's AppNameNamingField declaration, whose yaml tags without omitempty are keys the parser requires.
-type AppNameNaming struct {
-	MaxLength    int           `yaml:"maxLength"`
-	DerivedNames []DerivedName `yaml:"derivedNames,omitempty"`
-}
-
-type DerivedName struct {
-	// Template is the name with the app name written as {appName}.
-	Template string `yaml:"template"`
-	Limit    int    `yaml:"limit"`
-}
-
-func LifecycleHookPoints() []string {
-	return []string{"beforeEnsure", "afterEnsure", "beforeDelete", "afterDelete"}
-}
-
 const ManifestGoldensDir = "manifest-goldens"
 
 //go:embed manifest-goldens/*.yaml
 var ManifestGoldens embed.FS
-
-// HooksManifestGolden returns the manifest golden that declares lifecycle hooks, panicking on a missing embedded file as a packaging bug.
-func HooksManifestGolden() []byte {
-	raw, err := ManifestGoldens.ReadFile(ManifestGoldensDir + "/lifecycle-hooks.yaml")
-	if err != nil {
-		panic("contract: embedded manifest golden missing: " + err.Error())
-	}
-	return raw
-}
-
-// TypeBlockHooksManifestGolden returns the HooksManifestGolden block written with `type: block`, `format:` and `store:` spellings, panicking on a missing embedded file as a packaging bug.
-func TypeBlockHooksManifestGolden() []byte {
-	raw, err := ManifestGoldens.ReadFile(ManifestGoldensDir + "/lifecycle-hooks-type-block.yaml")
-	if err != nil {
-		panic("contract: embedded manifest golden missing: " + err.Error())
-	}
-	return raw
-}
-
-func HooksManifestGoldenDeclares() []string {
-	return []string{"beforeEnsure", "afterDelete"}
-}
 
 // slugPattern is the platform's slug; Go's $ matches only at the end of the text, so a trailing newline is refused.
 var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)

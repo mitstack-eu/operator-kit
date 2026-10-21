@@ -8,18 +8,22 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 )
 
 // HandlerPackage is the import path of the kit's handler package.
-const HandlerPackage = "github.com/mitstack-eu/operator-kit/v2/handler"
+const HandlerPackage = "github.com/mitstack-eu/operator-kit/v3/handler"
 
-// v1HandlerPackage is still bound, since a block on a v1 release keeps working until its next change moves it.
-const v1HandlerPackage = "github.com/mitstack-eu/operator-kit/handler"
+// earlierHandlerPackages are still bound, since a block on an earlier major release keeps working until its next change moves it.
+var earlierHandlerPackages = []string{
+	"github.com/mitstack-eu/operator-kit/handler",
+	"github.com/mitstack-eu/operator-kit/v2/handler",
+}
 
-// HandlerImportFiles returns the sorted, slash-separated paths under dir of non-test files a default build compiles that import HandlerPackage or its v1 path, and fails the scan on any file it cannot judge.
+// HandlerImportFiles returns the sorted, slash-separated paths under dir of non-test files a default build compiles that import HandlerPackage or its path in an earlier major release, and fails the scan on any file it cannot judge.
 func HandlerImportFiles(dir string) ([]string, error) {
 	fset := token.NewFileSet()
 	var found []string
@@ -50,7 +54,7 @@ func HandlerImportFiles(dir string) ([]string, error) {
 		}
 		for _, spec := range f.Imports {
 			p, err := strconv.Unquote(spec.Path.Value)
-			if err == nil && (p == HandlerPackage || p == v1HandlerPackage) {
+			if err == nil && (p == HandlerPackage || slices.Contains(earlierHandlerPackages, p)) {
 				rel, err := filepath.Rel(dir, path)
 				if err != nil {
 					return fmt.Errorf("%s: %w", path, err)

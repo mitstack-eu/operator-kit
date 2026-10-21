@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-const ManifestAPIVersionV1Alpha = "mitstack/v1alpha"
-
 const ManifestAPIVersion = "mitstack/v1beta"
 
 // ParseManifest reads raw strictly by its apiVersion, refusing an unknown key or an alias or merge key, which bring in text from elsewhere, and naming the path in each error.
@@ -31,21 +29,14 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	switch apiVersion {
-	case ManifestAPIVersion:
-		b, err := decodeBlockManifest(root)
-		if err != nil {
-			return Manifest{}, err
-		}
-		return Manifest{APIVersion: apiVersion, Block: b}, nil
-	case ManifestAPIVersionV1Alpha:
-		a, warnings, err := readV1Alpha(root)
-		if err != nil {
-			return Manifest{}, err
-		}
-		return Manifest{APIVersion: apiVersion, V1Alpha: a, Warnings: warnings}, nil
+	if apiVersion != ManifestAPIVersion {
+		return Manifest{}, apiVersionError(apiVersion)
 	}
-	return Manifest{}, apiVersionError(apiVersion)
+	b, err := decodeBlockManifest(root)
+	if err != nil {
+		return Manifest{}, err
+	}
+	return Manifest{APIVersion: apiVersion, Block: b}, nil
 }
 
 func apiVersionOf(root *yamlNode) (string, error) {
@@ -64,66 +55,44 @@ func apiVersionOf(root *yamlNode) (string, error) {
 
 func apiVersionError(got string) error {
 	if got == "" {
-		return fmt.Errorf("apiVersion is missing, so the manifest's shape is unknown; it must be %s or %s",
-			ManifestAPIVersion, ManifestAPIVersionV1Alpha)
+		return fmt.Errorf("apiVersion is missing, so the manifest's shape is unknown; it must be %s", ManifestAPIVersion)
 	}
-	return fmt.Errorf("apiVersion %q is not a manifest version the kit knows; it must be %s or %s",
-		got, ManifestAPIVersion, ManifestAPIVersionV1Alpha)
+	return fmt.Errorf("apiVersion %q is not a manifest version the kit knows; it must be %s", got, ManifestAPIVersion)
 }
 
-// Manifest is a parsed block manifest; exactly one of Block and V1Alpha is non-nil, chosen by APIVersion.
+// Manifest is a parsed block manifest, whose Block ParseManifest always sets.
 type Manifest struct {
 	APIVersion string
 	Block      *BlockManifest
-	V1Alpha    *V1AlphaManifest
-	// Warnings is in the platform's order: a spec.dependsOn given a list first, then each requirement whose optional is true. It is empty under ManifestAPIVersion.
-	Warnings []ManifestWarning
 }
 
-type ManifestWarning struct {
-	Path    string
-	Message string
-}
-
-// ID returns metadata.id under either version, untrimmed, since every character of an id is judged.
+// ID returns metadata.id untrimmed, since every character of an id is judged.
 func (m Manifest) ID() string {
-	switch {
-	case m.Block != nil:
-		return m.Block.Metadata.ID
-	case m.V1Alpha != nil:
-		return m.V1Alpha.ID
+	if m.Block == nil {
+		return ""
 	}
-	return ""
+	return m.Block.Metadata.ID
 }
 
 func (m Manifest) Version() string {
-	switch {
-	case m.Block != nil:
-		return strings.TrimSpace(m.Block.Spec.Version)
-	case m.V1Alpha != nil:
-		return strings.TrimSpace(m.V1Alpha.Version)
+	if m.Block == nil {
+		return ""
 	}
-	return ""
+	return strings.TrimSpace(m.Block.Spec.Version)
 }
 
 func (m Manifest) ReleaseClass() string {
-	switch {
-	case m.Block != nil:
-		return strings.TrimSpace(m.Block.Spec.ReleaseClass)
-	case m.V1Alpha != nil:
-		return strings.TrimSpace(m.V1Alpha.ReleaseClass)
+	if m.Block == nil {
+		return ""
 	}
-	return ""
+	return strings.TrimSpace(m.Block.Spec.ReleaseClass)
 }
 
 func (m Manifest) ReleaseNote() string {
-	switch {
-	case m.Block != nil:
-		return strings.TrimSpace(m.Block.Spec.ReleaseNote)
-	case m.V1Alpha != nil:
-		return strings.TrimSpace(m.V1Alpha.ReleaseNote)
+	if m.Block == nil {
+		return ""
 	}
-	return ""
+	return strings.TrimSpace(m.Block.Spec.ReleaseNote)
 }
 
 // The two types a ManifestAPIVersion manifest may declare: a capability serves more than one app and may issue each a credential, and a block serves one.

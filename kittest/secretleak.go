@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/webhook"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/webhook"
 )
 
 // SecretLeak is one operator's secret-leak fixture: its handler and the webhook requests that carry the seeded secrets.

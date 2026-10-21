@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 // FakeResource is a Resource whose behaviour a test dictates, where the zero value conforms and each other field turns on one misbehaviour.

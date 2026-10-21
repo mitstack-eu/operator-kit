@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/mitstack-eu/operator-kit/v2/contract"
 )
 
 const (
@@ -17,7 +15,6 @@ const (
 	guardsRanMarker           = "kittest.AssertBlock guards ran:"
 )
 
-// resourcesSuite is skipped for a manifest that is not mitstack/v1beta, since only that version declares resources.
 func resourcesSuite(target string) SuiteResult {
 	const name = "resources"
 
@@ -29,10 +26,6 @@ func resourcesSuite(target string) SuiteResult {
 	m, err := readManifest(path)
 	if err != nil {
 		return SuiteResult{name, "fail", err.Error()}
-	}
-	if m.Block == nil {
-		return SuiteResult{name, "skipped", fmt.Sprintf(
-			"%s is not a %s manifest, so it declares no resources to drive", manifestFile, contract.ManifestAPIVersion)}
 	}
 
 	tests := concatGoTestFiles(target)

@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/v2/provenance"
+	"github.com/mitstack-eu/operator-kit/v3/provenance"
 )
 
 var emptyOCIConfig = []byte("{}")

@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
-	"github.com/mitstack-eu/operator-kit/v2/kitbinding"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
+	"github.com/mitstack-eu/operator-kit/v3/kitbinding"
 )
 
 const kitV1Contract = "kit/v1"
@@ -17,26 +17,24 @@ const kitHandlerPackage = kitbinding.HandlerPackage
 
 const manifestFile = "manifest.yaml"
 
-// contractRule never falls through to the legacy rule on an unreadable manifest or unknown value, which would judge the block by a contract it never declared.
-func contractRule(target string) (rule, detail string, ok bool) {
+// requireKitV1Contract fails a block whose manifest is absent, unreadable or declares a lifecycle contract other than kit/v1, the one contract blockverify judges.
+func requireKitV1Contract(target string) (detail string, ok bool) {
 	c, err := declaredContract(target)
 	if err != nil {
-		return "", err.Error(), false
+		return err.Error(), false
 	}
-	switch c {
-	case "", kitV1Contract:
-		return c, "", true
+	if c != kitV1Contract {
+		return fmt.Sprintf("%s declares lifecycle contract %q, which blockverify has no rule for (it knows %s)",
+			filepath.Join(target, manifestFile), c, kitV1Contract), false
 	}
-	return "", fmt.Sprintf(
-		"%s declares lifecycle contract %q, which blockverify has no rule for (it knows %s, and no declared contract for the legacy rule)",
-		filepath.Join(target, manifestFile), c, kitV1Contract), false
+	return "", true
 }
 
-// declaredContract treats a present manifest that cannot be read or parsed as an error, because a read that could not run is never an absence.
+// declaredContract treats a manifest that is absent, unreadable or refused as an error, because the contract that judges the block is then unknown.
 func declaredContract(target string) (string, error) {
 	path := filepath.Join(target, manifestFile)
 	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
-		return "", nil
+		return "", fmt.Errorf("%s has no %s, so the lifecycle contract that judges it is unknown", target, manifestFile)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -46,13 +44,7 @@ func declaredContract(target string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: %v, so the lifecycle contract that judges %s is unknown", path, err, target)
 	}
-	switch {
-	case m.Block != nil:
-		return m.Block.Spec.Lifecycle.Contract, nil
-	case m.V1Alpha != nil && m.V1Alpha.Spec.Lifecycle != nil:
-		return m.V1Alpha.Spec.Lifecycle.Contract, nil
-	}
-	return "", nil
+	return m.Block.Spec.Lifecycle.Contract, nil
 }
 
 // checkKitHandlerImport fails a scan that could not run rather than reading it as an absent import.

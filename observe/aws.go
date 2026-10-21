@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 type EC2InstanceDescription struct {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/contract"
+	"github.com/mitstack-eu/operator-kit/v3/contract"
 )
 
 // NodeReport is one report as GET /v1/subscriptions/{id}/node-reports serves it.

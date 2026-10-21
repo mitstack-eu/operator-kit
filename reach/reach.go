@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mitstack-eu/operator-kit/v2/settle"
+	"github.com/mitstack-eu/operator-kit/v3/settle"
 )
 
 const ProbeTimeout = 5 * time.Second
