@@ -156,17 +156,28 @@ func TestTeardownAfterBrokenSetup_FailsATeardownThatLeavesTheFirstSideEffect(t *
 }
 
 func TestTeardownAfterBrokenSetup_PassesATeardownThatFindsEverything(t *testing.T) {
-	problems := kittest.CheckTeardownAfterBrokenSetup(brokenSetup(t, func(p *heldProvider) { p.findsOnTeardown = true }))
-
-	if len(problems) != 0 {
-		t.Errorf("want no problem from a teardown that removes all the subscription holds, got %q", problems)
-	}
+	kittest.AssertTeardownAfterBrokenSetup(t, brokenSetup(t, func(p *heldProvider) { p.findsOnTeardown = true }))
 }
 
-func TestTeardownAfterBrokenSetup_RefusesFakesThatReportNoSideEffect(t *testing.T) {
-	problems := kittest.CheckTeardownAfterBrokenSetup(brokenSetup(t, func(p *heldProvider) { p.ignoresFaults = true }))
+func TestTeardownAfterBrokenSetup_RefusesASetupThatCannotBreakAnything(t *testing.T) {
+	noSideEffect := brokenSetup(t, func(p *heldProvider) { p.ignoresFaults = true })
+	noProvider := brokenSetup(t, func(*heldProvider) {})
+	noProvider.NewProvider = nil
+	noSubscription := brokenSetup(t, func(*heldProvider) {})
+	noSubscription.Desired.SubscriptionID = ""
+	unservable := brokenSetup(t, func(*heldProvider) {})
+	unservable.Manifest = []byte("apiVersion: mitstack/v1beta\n")
 
-	if len(problems) != 1 || !strings.Contains(problems[0], "no side effect") {
-		t.Errorf("want one problem saying the fakes reported no side effect, got %q", problems)
+	for want, in := range map[string]kittest.BrokenSetup{
+		"no side effect": noSideEffect, "NewProvider is required": noProvider, "SubscriptionID": noSubscription,
+		"cannot be served": unservable,
+	} {
+		t.Run(want, func(t *testing.T) {
+			problems := kittest.CheckTeardownAfterBrokenSetup(in)
+
+			if len(problems) != 1 || !strings.Contains(problems[0], want) {
+				t.Errorf("want one problem naming %q, got %q", want, problems)
+			}
+		})
 	}
 }
