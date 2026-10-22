@@ -253,6 +253,13 @@ bindings that describe what an operator should converge its resource to, so
 every verb. `Ensure`, `Observe` and `Delete` are each handed the verb's own
 `Desired`, secrets included.
 
+A request carries `"neverActive": true` only when the engine has proved the
+subscription never reached active, and `Desired.NeverActive` carries it to
+your block. A block may then replace a resource that holds data, since no
+app has written to it. A request without the field reads as `false`, so a
+block that has not caught up with the field, or an engine that cannot prove
+it, keeps every such resource guarded.
+
 `contract.Observation` is what a validate or unsubscribe check found: a
 `contract.State` (`Present`, `Absent`, or `Unknown`) plus whatever outputs
 and status detail it gathered along the way. `Observation.Response()` turns
