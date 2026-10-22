@@ -200,6 +200,7 @@ func TestDecodeRequest_RefusesAMalformedFieldNamingIt(t *testing.T) {
 		{"createdAt not RFC 3339", func(m map[string]any) { m["createdAt"] = "not-a-timestamp" }, []string{"createdAt"}},
 		{"settlesAt not a time", func(m map[string]any) { m["settlesAt"] = "yesterday" }, []string{`"settlesAt"`}},
 		{"settlesAt a number", func(m map[string]any) { m["settlesAt"] = 1752613200 }, []string{`"settlesAt"`}},
+		{"neverActive a string", func(m map[string]any) { m["neverActive"] = "true" }, []string{`"neverActive"`}},
 		{"cloudIdentity without provider", without("provider"), []string{"cloudIdentity.provider"}},
 		{"cloudIdentity without roleArn", without("roleArn"), []string{"cloudIdentity.roleArn"}},
 		{"cloudIdentity without webIdentityToken", without("webIdentityToken"), []string{"cloudIdentity.webIdentityToken"}},
@@ -281,6 +282,10 @@ func TestDecodeRequest_CarriesWhatTheRequestNamesOntoDesired(t *testing.T) {
 					t.Errorf("Desired().VerbAt = %v, want createdAt %v", d.VerbAt, req.CreatedAt)
 				}
 			}},
+		{"a subscription the engine proved never active reaches Desired as never active", func(m map[string]any) { m["neverActive"] = true },
+			func(t *testing.T, req contract.Request, d contract.Desired) {
+				wantField(t, "NeverActive, Desired().NeverActive", []bool{req.NeverActive, d.NeverActive}, []bool{true, true})
+			}},
 		{"a validate settles at its settlesAt", func(m map[string]any) { m["operation"], m["settlesAt"] = "validate", settles },
 			func(t *testing.T, req contract.Request, d contract.Desired) {
 				if !d.VerbAt.Equal(settlesAt) {
@@ -323,6 +328,9 @@ var requestGoldenBehaviours = []struct {
 		if req.ResourceType != "" || req.RecordedResources != nil || req.RequirementTypes != nil {
 			t.Errorf("resourceType %q, recordedResources %v, requirementTypes %v; want none", req.ResourceType, req.RecordedResources, req.RequirementTypes)
 		}
+	}},
+	{"reads as a subscription that may have been active, on the request and Desired", func(t *testing.T, req contract.Request) {
+		wantField(t, "NeverActive, Desired().NeverActive", []bool{req.NeverActive, req.Desired().NeverActive}, []bool{false, false})
 	}},
 	{"hands Identity the request's identity fields", func(t *testing.T, req contract.Request) {
 		wantField(t, "Identity()", req.Identity(), identityOf(req))
@@ -425,7 +433,9 @@ func TestRequestMarshal_EncodesEachResourceFieldUnderItsWireNameOnlyWhenSet(t *t
 		{"a recorded resource's state, when the engine recorded it absent", contract.Request{RecordedResources: map[string]contract.RecordedResource{
 			"database": {Type: "aws.ec2-postgres-database", State: contract.Absent}}}, "recordedResources",
 			map[string]any{"database": map[string]any{"type": "aws.ec2-postgres-database", "state": "absent"}}},
+		{"never active, when the engine proved it", contract.Request{NeverActive: true}, "neverActive", true},
 		{"no resource type when unset", contract.Request{}, "resourceType", nil},
+		{"no never-active key when it may have been active", contract.Request{}, "neverActive", nil},
 		{"no recorded resources when unset", contract.Request{}, "recordedResources", nil},
 		{"no requirement types when unset", contract.Request{}, "requirementTypes", nil},
 		{"no resource key at all for a validate naming no resource", contract.Request{Operation: "validate"}, "resource", nil},
@@ -509,6 +519,11 @@ func TestEnvelopeSchema_DeclaresEachOptionalRequestFieldByItsShape(t *testing.T)
 				t.Errorf("properties.settlesAt = %v, want a string of format date-time", prop)
 			}
 		}},
+		{"neverActive", func(t *testing.T, prop map[string]any) {
+			if !hasType(prop, "boolean") {
+				t.Errorf("properties.neverActive type = %v, want boolean", schemaTypes(prop))
+			}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.field, func(t *testing.T) {
@@ -522,10 +537,10 @@ func TestEnvelopeSchema_DeclaresEachOptionalRequestFieldByItsShape(t *testing.T)
 	}
 }
 
-func TestEnvelopeSchema_IsVersion1_6_0(t *testing.T) {
+func TestEnvelopeSchema_IsVersion1_7_0(t *testing.T) {
 	doc := jsonObject(t, contract.EnvelopeSchema)
 
-	if doc["version"] != "1.6.0" {
-		t.Errorf("envelope.schema.json version = %v, want 1.6.0: it adds a recorded resource's state, a minor change from 1.5.0", doc["version"])
+	if doc["version"] != "1.7.0" {
+		t.Errorf("envelope.schema.json version = %v, want 1.7.0: it adds neverActive, a minor change from 1.6.0", doc["version"])
 	}
 }
