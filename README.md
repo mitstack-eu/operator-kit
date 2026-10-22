@@ -254,11 +254,13 @@ every verb. `Ensure`, `Observe` and `Delete` are each handed the verb's own
 `Desired`, secrets included.
 
 A request carries `"neverActive": true` only when the engine has proved the
-subscription never reached active, and `Desired.NeverActive` carries it to
-your block. A block may then replace a resource that holds data, since no
-app has written to it. A request without the field reads as `false`, so a
-block that has not caught up with the field, or an engine that cannot prove
-it, keeps every such resource guarded.
+subscription holds no user data yet, and `Desired.NeverActive` carries it to
+your block. The proof has two parts. The subscription never reached active,
+and it was not created from a data handover, such as the restored snapshot a
+stack switch hands its replacement subscription. A block may then replace a
+stateful resource, one that can hold data. Anything else reads as `false`,
+including a request without the field, so a block keeps every stateful
+resource guarded unless the engine has proved it empty.
 
 `contract.Observation` is what a validate or unsubscribe check found: a
 `contract.State` (`Present`, `Absent`, or `Unknown`) plus whatever outputs

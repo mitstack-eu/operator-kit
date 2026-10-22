@@ -66,7 +66,7 @@
     },
     "neverActive": {
       "type": "boolean",
-      "description": "True only when the engine has proved the subscription never reached active, so a block may replace a resource that holds data. Omitted, the subscription may have been active."
+      "description": "True only when the engine has proved the subscription holds no user data yet: it never reached active, and it was not created from a data handover such as a stack switch's restored snapshot. A block may then replace a stateful resource. False or omitted, every stateful resource stays guarded."
     },
     "requirementTypes": {
       "type": "object",
