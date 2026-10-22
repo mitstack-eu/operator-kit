@@ -75,9 +75,8 @@ type Request struct {
 	RecordedResources map[string]RecordedResource `json:"recordedResources,omitempty"`
 	RequirementTypes  map[string]string           `json:"requirementTypes,omitempty"`
 	// SettlesAt is the time of the state-changing verb a validate settles.
-	SettlesAt *time.Time `json:"settlesAt,omitempty"`
-	// NeverActive is true only when the engine has proved the subscription never reached active, so its absence must read as may have been active.
-	NeverActive bool `json:"neverActive,omitempty"`
+	SettlesAt   *time.Time `json:"settlesAt,omitempty"`
+	NeverActive bool       `json:"neverActive,omitempty"`
 
 	IssueAppID string `json:"issueAppId,omitempty"`
 }
