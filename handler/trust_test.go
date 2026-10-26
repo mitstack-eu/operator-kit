@@ -59,6 +59,11 @@ func TestServe_AnswersBeforeTheResourceIsConsulted(t *testing.T) {
 			r.Body = io.NopCloser(strings.NewReader(strings.Replace(string(original), "subscribe", "unsubscrib", 1)))
 			return r
 		}, status: http.StatusUnauthorized},
+		{name: "a kid the fetched JWKS lacks is a 401", request: func(x *harness) *http.Request {
+			r := x.request(nil)
+			r.Header.Set("X-Mitstack-Key-Id", "kid-unknown")
+			return r
+		}, status: http.StatusUnauthorized},
 		{name: "a JWKS that cannot be fetched is a 503", config: []func(*handler.Config){func(c *handler.Config) { c.JWKSURL = jwksDown.URL }},
 			request: func(x *harness) *http.Request { return x.request(nil) }, status: http.StatusServiceUnavailable},
 		{name: "a stale createdAt is a 401", request: signed(bare, time.Now().Add(-webhook.ReplaySkew-time.Minute)), status: http.StatusUnauthorized},
