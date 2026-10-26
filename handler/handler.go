@@ -84,7 +84,7 @@ type Config struct {
 
 	JWKSURL string
 
-	// PublicKey defaults to a kit KeyCache over JWKSURL and is no alternative to it, since webhook.AuthenticateHook rejects every request when JWKSURL is empty.
+	// PublicKey defaults to a kit KeyCache over JWKSURL and is no alternative to it, since webhook.AuthenticateHook rejects every request when JWKSURL is empty; an error wrapping webhook.ErrKeysUnavailable answers 503.
 	PublicKey func(kid string) (ed25519.PublicKey, error)
 
 	Replay *webhook.Replay
@@ -220,18 +220,18 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/hook":
 		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			h.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		h.serveHook(w, r)
 	case "/logs":
 		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			h.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		h.serveLogs(w, r)
 	default:
-		http.NotFound(w, r)
+		h.writeError(w, http.StatusNotFound, "no such path")
 	}
 }
 
@@ -239,16 +239,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.Serve(w,
 
 func (h *Handler) webhookDeps() webhook.Deps {
 	return webhook.Deps{
-		JWKSURL:   h.jwksURL,
-		PublicKey: h.publicKey,
-		Replay:    h.replay,
-		Now:       h.now,
+		JWKSURL:    h.jwksURL,
+		PublicKey:  h.publicKey,
+		Replay:     h.replay,
+		WriteError: h.writeError,
+		Now:        h.now,
 	}
 }
 
 func (h *Handler) serveLogs(w http.ResponseWriter, r *http.Request) {
 	if h.logs == nil {
-		http.NotFound(w, r)
+		h.writeError(w, http.StatusNotFound, "this block keeps no logs")
 		return
 	}
 	webhook.ServeLogs(h.webhookDeps(), h.logs, w, r)
@@ -289,7 +290,20 @@ func (h *Handler) serveHook(w http.ResponseWriter, r *http.Request) {
 	h.dispatchRequest(w, r, req)
 }
 
+// requestRefusals classes each 4xx the handler answers before a block is consulted, so the engine reads every 4xx as a refusal.
+var requestRefusals = map[int]string{
+	http.StatusBadRequest:       "malformed-request",
+	http.StatusUnauthorized:     "untrusted-request",
+	http.StatusNotFound:         "unknown-path",
+	http.StatusMethodNotAllowed: "method-not-allowed",
+}
+
 func (h *Handler) writeError(w http.ResponseWriter, status int, msg string) {
+	if class, ok := requestRefusals[status]; ok {
+		msg = (&Refused{Class: class, Detail: msg}).Error()
+		writeResponse(w, status, contract.Response{Error: msg, StatusDetail: msg})
+		return
+	}
 	writeResponse(w, status, contract.Response{Error: msg})
 }
 
