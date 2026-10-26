@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -99,6 +100,9 @@ func VerifyTimestampSkew(ts string, now time.Time) error {
 	return nil
 }
 
+// ErrKeysUnavailable wraps a failed fetch of the JWKS, which says nothing about the request, so an authenticator answers it 503 instead of refusing.
+var ErrKeysUnavailable = errors.New("mitstack signing keys unavailable")
+
 // KeyCache memoises Ed25519 public keys fetched from a JWKS endpoint by kid, and is safe for concurrent use.
 type KeyCache struct {
 	mu sync.Mutex
@@ -144,6 +148,17 @@ func (kc *KeyCache) PublicKey(jwksURL string, client *http.Client, kid string) (
 }
 
 func fetchJWKSKey(jwksURL string, client *http.Client, kid string) (ed25519.PublicKey, error) {
+	raw, err := fetchJWKS(jwksURL, client)
+	if err == nil && !json.Valid(raw) {
+		err = errors.New("jwks is not JSON")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrKeysUnavailable, err)
+	}
+	return PublicKeyFromJWKS(raw, kid)
+}
+
+func fetchJWKS(jwksURL string, client *http.Client) ([]byte, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
@@ -152,14 +167,12 @@ func fetchJWKSKey(jwksURL string, client *http.Client, kid string) (ed25519.Publ
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if err != nil {
-		return nil, err
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("jwks answered HTTP " + strconv.Itoa(resp.StatusCode))
 	}
-	return PublicKeyFromJWKS(raw, kid)
+	return io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 }
 
-// VerifyEd25519Sig strips the "ed25519=" prefix, base64-decodes, and verifies.
 func VerifyEd25519Sig(pub ed25519.PublicKey, body []byte, sigHeader string) bool {
 	sigHeader = strings.TrimPrefix(sigHeader, "ed25519=")
 	sig, err := base64.StdEncoding.DecodeString(sigHeader)
