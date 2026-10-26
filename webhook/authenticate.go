@@ -3,6 +3,7 @@ package webhook
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 )
@@ -40,16 +41,28 @@ func (d Deps) now() time.Time {
 	return time.Now()
 }
 
-// AuthenticateHook verifies mitstack's Ed25519 signature on the webhook body and returns the platform key, or false once a 401 has been written.
-func AuthenticateHook(d Deps, w http.ResponseWriter, r *http.Request, body []byte) (ed25519.PublicKey, bool) {
+func (d Deps) signingKey(w http.ResponseWriter, r *http.Request) (ed25519.PublicKey, bool) {
 	kid := r.Header.Get("X-Mitstack-Key-Id")
 	if kid == "" || d.JWKSURL == "" {
 		d.writeError(w, http.StatusUnauthorized, "missing X-Mitstack-Key-Id or JWKS not configured")
 		return nil, false
 	}
 	pub, err := d.PublicKey(kid)
+	if errors.Is(err, ErrKeysUnavailable) {
+		d.writeError(w, http.StatusServiceUnavailable, "cannot fetch mitstack signing keys: "+err.Error())
+		return nil, false
+	}
 	if err != nil {
 		d.writeError(w, http.StatusUnauthorized, "cannot resolve mitstack signing key: "+err.Error())
+		return nil, false
+	}
+	return pub, true
+}
+
+// AuthenticateHook verifies mitstack's Ed25519 signature on the webhook body and returns the platform key, or false once a 401, or a 503 for unavailable keys, has been written.
+func AuthenticateHook(d Deps, w http.ResponseWriter, r *http.Request, body []byte) (ed25519.PublicKey, bool) {
+	pub, ok := d.signingKey(w, r)
+	if !ok {
 		return nil, false
 	}
 	if !VerifyEd25519Sig(pub, body, r.Header.Get("X-Mitstack-Signature-Ed25519")) {
@@ -63,16 +76,10 @@ func AuthenticateHook(d Deps, w http.ResponseWriter, r *http.Request, body []byt
 	return pub, true
 }
 
-// AuthenticateLogsGET verifies the signature of a bodyless GET over "GET\n<path-with-query>\n<timestamp>" and bounds the X-Mitstack-Timestamp header by ReplaySkew, returning false once a 401 has been written.
+// AuthenticateLogsGET verifies the signature of a bodyless GET over "GET\n<path-with-query>\n<timestamp>" and bounds the X-Mitstack-Timestamp header by ReplaySkew, returning false once a 401, or a 503 for unavailable keys, has been written.
 func AuthenticateLogsGET(d Deps, w http.ResponseWriter, r *http.Request) (ed25519.PublicKey, bool) {
-	kid := r.Header.Get("X-Mitstack-Key-Id")
-	if kid == "" || d.JWKSURL == "" {
-		d.writeError(w, http.StatusUnauthorized, "missing X-Mitstack-Key-Id or JWKS not configured")
-		return nil, false
-	}
-	pub, err := d.PublicKey(kid)
-	if err != nil {
-		d.writeError(w, http.StatusUnauthorized, "cannot resolve mitstack signing key: "+err.Error())
+	pub, ok := d.signingKey(w, r)
+	if !ok {
 		return nil, false
 	}
 	ts := r.Header.Get("X-Mitstack-Timestamp")
