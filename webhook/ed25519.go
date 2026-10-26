@@ -149,8 +149,11 @@ func (kc *KeyCache) PublicKey(jwksURL string, client *http.Client, kid string) (
 
 func fetchJWKSKey(jwksURL string, client *http.Client, kid string) (ed25519.PublicKey, error) {
 	raw, err := fetchJWKS(jwksURL, client)
-	if err == nil && !json.Valid(raw) {
-		err = errors.New("jwks is not JSON")
+	var set struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err == nil {
+		err = json.Unmarshal(raw, &set)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrKeysUnavailable, err)

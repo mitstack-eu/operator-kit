@@ -84,7 +84,7 @@ type Config struct {
 
 	JWKSURL string
 
-	// PublicKey defaults to a kit KeyCache over JWKSURL and is no alternative to it, since webhook.AuthenticateHook rejects every request when JWKSURL is empty.
+	// PublicKey defaults to a kit KeyCache over JWKSURL and is no alternative to it, since webhook.AuthenticateHook rejects every request when JWKSURL is empty; an error wrapping webhook.ErrKeysUnavailable answers 503.
 	PublicKey func(kid string) (ed25519.PublicKey, error)
 
 	Replay *webhook.Replay
