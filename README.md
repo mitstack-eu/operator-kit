@@ -285,6 +285,15 @@ consulted. The token is the platform's own signed assertion of the
 consuming org, app and subscription, and nothing in `Config` or the
 manifest turns the check off.
 
+Every 4xx the Handler answers before the Resource runs carries a refusal
+class in both `error` and `statusDetail`, so the engine never retries it. A
+call it cannot verify reads `refused:untrusted-request: <reason>`, a
+malformed body `malformed-request`, a wrong path `unknown-path` and a wrong
+method `method-not-allowed`. When the Handler holds no key for the call's kid
+and cannot fetch the platform's JWKS, it answers 503 instead, which the
+engine retries, and a kid it already holds keeps verifying through the
+outage.
+
 An error the Resource returns is answered by its type. A
 `*handler.Refused` answers 400 with a `refused:<class>` status detail,
 which the engine treats as permanent. Any other error answers 500, which
