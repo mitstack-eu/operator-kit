@@ -3,6 +3,7 @@ package webhook_test
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -237,11 +238,14 @@ func TestPublicKeyFromJWKS_RejectsWrongLengthKey(t *testing.T) {
 	}
 }
 
-func TestKeyCache_FetchesOncePerKid(t *testing.T) {
+func TestKeyCache_FetchesOncePerKidAndAnOutageAnswersOnlyAnUnheldKidUnavailable(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits++
+		if hits++; hits > 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
 		_, _ = w.Write(s.JWKS())
 	}))
 	defer srv.Close()
@@ -249,11 +253,17 @@ func TestKeyCache_FetchesOncePerKid(t *testing.T) {
 	cache := webhook.NewKeyCache()
 	for range 3 {
 		if _, err := cache.PublicKey(srv.URL, nil, "kid-1"); err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Fatalf("held kid during the outage: %v", err)
 		}
 	}
-	if hits != 1 {
-		t.Errorf("JWKS fetched %d times, want 1 (memoised per kid)", hits)
+	if _, err := cache.PublicKey(srv.URL, nil, "kid-2"); !errors.Is(err, webhook.ErrKeysUnavailable) {
+		t.Errorf("unheld kid during the outage = %v, want ErrKeysUnavailable", err)
+	}
+	if _, err := webhook.PublicKeyFromJWKS(s.JWKS(), "kid-2"); err == nil || errors.Is(err, webhook.ErrKeysUnavailable) {
+		t.Errorf("a kid missing from a fetched JWKS = %v, want an error that is not ErrKeysUnavailable", err)
+	}
+	if hits != 2 {
+		t.Errorf("JWKS fetched %d times, want 2 (memoised per kid)", hits)
 	}
 }
 
