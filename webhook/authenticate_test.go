@@ -241,29 +241,31 @@ func TestPublicKeyFromJWKS_RejectsWrongLengthKey(t *testing.T) {
 func TestKeyCache_FetchesOncePerKidAndAnOutageAnswersOnlyAnUnheldKidUnavailable(t *testing.T) {
 	s := kittest.NewSigner(t, "kid-1", 7)
 	var hits int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if hits++; hits > 1 {
-			w.WriteHeader(http.StatusBadGateway)
-			return
-		}
-		_, _ = w.Write(s.JWKS())
-	}))
+	answer := func(w http.ResponseWriter) { _, _ = w.Write(s.JWKS()) }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits++; answer(w) }))
 	defer srv.Close()
 
 	cache := webhook.NewKeyCache()
-	for range 3 {
-		if _, err := cache.PublicKey(srv.URL, nil, "kid-1"); err != nil {
-			t.Fatalf("held kid during the outage: %v", err)
-		}
-	}
-	if _, err := cache.PublicKey(srv.URL, nil, "kid-2"); !errors.Is(err, webhook.ErrKeysUnavailable) {
-		t.Errorf("unheld kid during the outage = %v, want ErrKeysUnavailable", err)
-	}
-	if _, err := webhook.PublicKeyFromJWKS(s.JWKS(), "kid-2"); err == nil || errors.Is(err, webhook.ErrKeysUnavailable) {
+	if _, err := cache.PublicKey(srv.URL, nil, "kid-2"); err == nil || errors.Is(err, webhook.ErrKeysUnavailable) {
 		t.Errorf("a kid missing from a fetched JWKS = %v, want an error that is not ErrKeysUnavailable", err)
 	}
-	if hits != 2 {
-		t.Errorf("JWKS fetched %d times, want 2 (memoised per kid)", hits)
+	if _, err := cache.PublicKey(srv.URL, nil, "kid-1"); err != nil {
+		t.Fatalf("first fetch of kid-1: %v", err)
+	}
+	for name, outage := range map[string]func(http.ResponseWriter){
+		"a 502":                  func(w http.ResponseWriter) { w.WriteHeader(http.StatusBadGateway) },
+		"JSON that is not a set": func(w http.ResponseWriter) { _, _ = w.Write([]byte(`[]`)) },
+	} {
+		answer = outage
+		if _, err := cache.PublicKey(srv.URL, nil, "kid-1"); err != nil {
+			t.Errorf("held kid during %s: %v", name, err)
+		}
+		if _, err := cache.PublicKey(srv.URL, nil, "kid-3"); !errors.Is(err, webhook.ErrKeysUnavailable) {
+			t.Errorf("unheld kid during %s = %v, want ErrKeysUnavailable", name, err)
+		}
+	}
+	if hits != 4 {
+		t.Errorf("JWKS fetched %d times, want 4 (memoised per kid)", hits)
 	}
 }
 
