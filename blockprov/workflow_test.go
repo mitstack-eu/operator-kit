@@ -269,9 +269,9 @@ func TestWorkflow_Structure(t *testing.T) {
 		return "<absent>"
 	}
 	cases := []struct{ name, got, want string }{
-		{"it is a reusable workflow whose caller names the runner, since runs-on is required and has no default", field("on.workflow_call.inputs.runs-on.required") + " " + field("on.workflow_call.inputs.runs-on.default"), "true <absent>"},
-		{"it has a conformance job", field("jobs.conformance"), ""},
-		{"it has a publish job", field("jobs.publish"), ""},
+		{"it is a reusable workflow whose caller names the runner, since runs-on is required and has no default, and credential-runs-on is optional with no default, so a caller passing runs-on alone calls it as before", field("on.workflow_call.inputs.runs-on.required") + " " + field("on.workflow_call.inputs.runs-on.default") + " " + field("on.workflow_call.inputs.credential-runs-on.required") + " " + field("on.workflow_call.inputs.credential-runs-on.default"), "true <absent> false <absent>"},
+		{"conformance reads no secret and is granted no write, so it runs on runs-on for every caller", field("jobs.conformance.runs-on"), "${{ fromJSON(inputs.runs-on) }}"},
+		{"publish is granted the id-token write, so it runs on credential-runs-on where a caller passes it and on runs-on where a caller passes runs-on alone", field("jobs.publish.runs-on"), "${{ fromJSON(inputs.credential-runs-on || inputs.runs-on) }}"},
 		{"publish needs conformance, so a red conformance run never starts it", field("jobs.publish.needs"), "conformance"},
 		{"publish runs only on a push to the default branch, so a pull request gets conformance alone", ifOf(field("jobs.publish.if")),
 			"github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"},
