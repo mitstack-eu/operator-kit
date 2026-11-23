@@ -46,10 +46,11 @@ on:
         required: false
         type: string
         default: "1.26.8"
+      # Every job's runner, as a JSON list of labels such as '["ubuntu-latest"]',
+      # with no default, so no caller lands on a paid runner it never chose.
       runs-on:
-        required: false
+        required: true
         type: string
-        default: '["ubicloud-standard-2"]'
 
 # A workflow-level default is a ceiling rather than a floor: each job below
 # re-grants what it actually needs.

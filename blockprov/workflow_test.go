@@ -269,7 +269,7 @@ func TestWorkflow_Structure(t *testing.T) {
 		return "<absent>"
 	}
 	cases := []struct{ name, got, want string }{
-		{"it is a reusable workflow", field("on.workflow_call"), ""},
+		{"it is a reusable workflow whose caller names the runner, since runs-on is required and has no default", field("on.workflow_call.inputs.runs-on.required") + " " + field("on.workflow_call.inputs.runs-on.default"), "true <absent>"},
 		{"it has a conformance job", field("jobs.conformance"), ""},
 		{"it has a publish job", field("jobs.publish"), ""},
 		{"publish needs conformance, so a red conformance run never starts it", field("jobs.publish.needs"), "conformance"},
