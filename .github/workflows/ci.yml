@@ -9,6 +9,7 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Every job runs on GitHub's hosted ubuntu-latest, which is free for a public repository.
 jobs:
   test:
     name: test
