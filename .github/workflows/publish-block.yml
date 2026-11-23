@@ -11,6 +11,12 @@
 # caller's default branch, so a pull-request run of a caller gets
 # conformance with the publish job skipped.
 #
+# `conformance` runs on the caller's `runs-on`. `publish` is granted the
+# id-token write that assumes the publish role, so it runs on
+# `credential-runs-on` where the caller passes it. A caller can then send
+# conformance to a shared runner pool while publish stays off it. A caller
+# that passes `runs-on` alone runs both jobs there.
+#
 # A version tag already in the registry is never pushed over. The probe asks
 # two questions, whether the tag is published and whether its provenance
 # record sits beside it. A rerun that finds the tag published but no
@@ -46,10 +52,16 @@ on:
         required: false
         type: string
         default: "1.26.8"
-      # Every job's runner, as a JSON list of labels such as '["ubuntu-latest"]',
-      # with no default, so no caller lands on a paid runner it never chose.
+      # The runner of every job, as a JSON list of labels such as
+      # '["ubuntu-latest"]', with no default, so no caller lands on a paid
+      # runner it never chose.
       runs-on:
         required: true
+        type: string
+      # The runner of publish, the one job granted a write, in the form
+      # runs-on takes. A caller that passes none runs it on runs-on.
+      credential-runs-on:
+        required: false
         type: string
 
 # A workflow-level default is a ceiling rather than a floor: each job below
@@ -155,7 +167,7 @@ jobs:
   publish:
     needs: conformance
     if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    runs-on: ${{ fromJSON(inputs.credential-runs-on || inputs.runs-on) }}
     permissions:
       contents: read
       id-token: write
