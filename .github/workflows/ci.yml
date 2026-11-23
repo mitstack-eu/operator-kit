@@ -12,7 +12,7 @@ on:
 jobs:
   test:
     name: test
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubicloud-standard-2"]') }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -29,7 +29,7 @@ jobs:
   pr-key-gate:
     name: pr key gate
     if: github.event_name == 'pull_request'
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubicloud-standard-2"]') }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,7 +53,7 @@ jobs:
   comment-check:
     name: comment check
     if: github.event_name == 'pull_request'
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubicloud-standard-2"]') }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,7 +75,7 @@ jobs:
     needs: test
     # The ref check keeps a dispatch on another branch from tagging an unmerged commit.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubicloud-standard-2"]') }}
+    runs-on: ubuntu-latest
     # The job's own grant. A workflow-level default is a ceiling rather than a
     # floor, so a job that never re-grants runs with metadata read alone and
     # cannot push the tag it computed.
@@ -108,7 +108,7 @@ jobs:
     needs: [test, release]
     # The ref check keeps a dispatch on another branch from recording its commits.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubicloud-standard-2"]') }}
+    runs-on: ubuntu-latest
     # The job's own grant. A workflow-level default is a ceiling rather than a
     # floor, so a job that never re-grants runs with metadata read alone and
     # cannot push the anchor tag it advances.

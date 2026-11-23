@@ -47,9 +47,8 @@ on:
         type: string
         default: "1.26.8"
       runs-on:
-        required: false
+        required: true
         type: string
-        default: '["ubicloud-standard-2"]'
 
 # A workflow-level default is a ceiling rather than a floor: each job below
 # re-grants what it actually needs.
