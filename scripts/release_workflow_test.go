@@ -96,7 +96,7 @@ func TestCIWorkflow_TestsTheKitAndCutsItsReleaseOnlyFromMain(t *testing.T) {
 		{"it runs on a pull request", field("on.pull_request"), ""},
 		{"it runs on a push to main", field("on.push.branches"), "[main]"},
 		{"it runs on a dispatch", field("on.workflow_dispatch"), ""},
-		{"the test job runs on vars.CI_RUNS_ON with the ubicloud-standard-2 fallback", field("jobs.test.runs-on"), `${{ fromJSON(vars.CI_RUNS_ON || '["ubicloud-standard-2"]') }}`},
+		{"every job runs on GitHub's hosted ubuntu-latest, which is free for a public repository", field("jobs.test.runs-on") + " " + field("jobs.pr-key-gate.runs-on") + " " + field("jobs.comment-check.runs-on") + " " + field("jobs.release.runs-on") + " " + field("jobs.record-delivery.runs-on"), "ubuntu-latest ubuntu-latest ubuntu-latest ubuntu-latest ubuntu-latest"},
 		{"the test job pins checkout to the platform's sha", strconv.FormatBool(stepWith(all, "test", "uses", checkout)), "true"},
 		{"the test job pins setup-go to the platform's sha", strconv.FormatBool(stepWith(all, "test", "uses", setupGo)), "true"},
 		{"the test job pins go-version to 1.26.8", strconv.FormatBool(stepWith(all, "test", "with.go-version", "'1.26.8'")), "true"},
